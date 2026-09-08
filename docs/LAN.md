@@ -60,6 +60,27 @@ Sign99RTS Electron                    Sign99RTS Electron
   Lobby* ever starts a local server or advertises; a joining client only
   ever opens an outbound WebSocket to the address it discovered or typed,
   and never starts or connects to a server of its own.
+- **Host identity is deterministic, not order-dependent.** When Electron
+  starts a hosted lobby it generates a fresh, cryptographically random
+  `hostToken` (`src/lan/hostToken.ts`) and returns it *only* in that IPC
+  response, to the local renderer. The renderer's own WebSocket connection
+  presents that token; the relay only ever promotes the connection
+  presenting the matching token to host (slot 0) — a remote machine that
+  happens to reach the relay before the local renderer finishes connecting
+  can never be mistaken for the host, and a connection presenting a wrong
+  token is rejected outright. The token is never included in discovery
+  advertisements and never logged. (The standalone dev/browser CLI,
+  `server/lanServer.ts`, has no IPC channel to hand a token to a plain
+  browser tab, so it falls back to the original first-connection-is-host
+  behavior — acceptable for local development only.)
+- **Hosting has one authoritative shutdown path.** Whether the host clicks
+  Back/Disconnect, quits an active match to the menu, the local host's
+  WebSocket connection drops unexpectedly (crash/reload), or the app
+  quits, the same teardown runs: the WebSocket server stops accepting
+  connections and releases its port, UDP advertising stops, and remaining
+  clients receive a clean `match_end`/disconnect reason. A fresh *Host LAN
+  Lobby* afterward always starts a brand-new lobby and can immediately
+  rebind the same port.
 
 ### Production build
 

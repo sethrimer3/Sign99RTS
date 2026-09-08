@@ -48,8 +48,12 @@ export interface LobbyState {
 export interface MsgJoinRequest {
   type: 'join_request';
   playerName: string;
-  /** Client's LAN protocol version, so the host can reject incompatible builds with a clear reason. */
-  protocolVersion?: number;
+  /**
+   * Client's LAN protocol version. Required — a join_request missing this
+   * field (e.g. from a client older than this field's introduction) is
+   * rejected exactly like a mismatched version, never silently accepted.
+   */
+  protocolVersion: number;
   /** Human-readable build label (e.g. "Build 055"), surfaced in mismatch errors. */
   build?: string;
 }

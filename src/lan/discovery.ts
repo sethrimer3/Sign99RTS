@@ -128,9 +128,18 @@ function normalizeAdvertisedWsUrl(claimedUrl: string, sourceAddress: string, fal
   return `ws://${sourceAddress}:${claimedPort}`;
 }
 
-/** Stable de-duplication key for a discovered lobby: same lobby id + same reachable address. */
-export function advertisementKey(adv: Pick<LanDiscoveredLobby, 'lobbyId' | 'wsUrl'>): string {
-  return `${adv.lobbyId}@${adv.wsUrl}`;
+/**
+ * Stable de-duplication key for a discovered lobby: the lobby id alone.
+ *
+ * A host with multiple usable adapters (Wi-Fi + Ethernet + a VPN, say)
+ * broadcasts one advertisement per interface, each with a different
+ * (verified) source address. Keying by lobbyId collapses those into a
+ * single discovered entry instead of listing the same lobby several times;
+ * whichever advertisement arrives most recently wins, which is harmless
+ * since the lobby metadata itself (slots, match state) is identical.
+ */
+export function advertisementKey(adv: Pick<LanDiscoveredLobby, 'lobbyId'>): string {
+  return adv.lobbyId;
 }
 
 /** Remove entries whose `expiresAt` has passed. Returns the removed keys. */

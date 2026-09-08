@@ -54,7 +54,7 @@ import { normalizeLanTarget } from './lan/lanAddress.js';
 
 /** Narrow LAN networking API exposed by electron/preload.cjs. Undefined in a plain browser. */
 interface Sign99LanBridge {
-  startHost(opts: { hostName?: string; port?: number }): Promise<{ ok: boolean; port?: number; lobbyId?: string; wsUrl?: string; error?: string }>;
+  startHost(opts: { hostName?: string; port?: number }): Promise<{ ok: boolean; port?: number; lobbyId?: string; wsUrl?: string; hostToken?: string; error?: string }>;
   stopHost(): Promise<{ ok: boolean }>;
   startDiscovery(): Promise<{ ok: boolean; error?: string }>;
   stopDiscovery(): Promise<{ ok: boolean }>;
@@ -1689,11 +1689,17 @@ export class MainMenu {
         : 'Could not start LAN hosting. Close any other Sign99RTS host and check your firewall settings.';
       return;
     }
-    this.beginLanConnection(result.wsUrl ?? 'ws://127.0.0.1:8787', true);
+    this.beginLanConnection(result.wsUrl ?? 'ws://127.0.0.1:8787', true, result.hostToken);
   }
 
-  /** Shared setup for both hosting (connecting to our own freshly-started local server) and joining. */
-  private beginLanConnection(url: string, isHostConnection: boolean): void {
+  /**
+   * Shared setup for both hosting (connecting to our own freshly-started
+   * local server) and joining. `hostToken`, when set, is presented on the
+   * WebSocket handshake so the relay deterministically recognizes this as
+   * the designated host connection regardless of what else has connected
+   * to it — see server/lanHost.ts and src/lan/hostToken.ts.
+   */
+  private beginLanConnection(url: string, isHostConnection: boolean, hostToken?: string): void {
     this.lanClient.disconnect();
     this.lanClient = new LanClient(url);
     this._lanLobby = null;
@@ -1742,7 +1748,7 @@ export class MainMenu {
       };
     }
 
-    this.lanClient.connect();
+    this.lanClient.connect(hostToken);
   }
 
   private connectToJoinUrl(): void {
@@ -1838,7 +1844,14 @@ export class MainMenu {
     void this.startLanDiscoveryListening();
   }
 
-  /** Start (or resume) discovery listening. Safe to call repeatedly. */
+  /**
+   * Start (or resume) discovery listening. Safe to call repeatedly —
+   * `bridge.startDiscovery()` (which bumps Electron's listener ref-count)
+   * is only issued once per "listening session" (guarded by
+   * `_lanDiscoveryListening`); repeat calls (e.g. the Refresh button) just
+   * re-fetch the current snapshot. This keeps the start/stop ref-count
+   * balanced with the single matching `stopLanDiscoveryListening()` call.
+   */
   private async startLanDiscoveryListening(): Promise<void> {
     const bridge = this.lanBridge;
     if (!bridge) {
@@ -1851,13 +1864,15 @@ export class MainMenu {
         this._discoveredLobbies = lobbies;
       });
     }
-    const result = await bridge.startDiscovery();
-    this._lanDiscoveryListening = !!result?.ok;
-    if (!result?.ok) {
-      this._lanDiscoveryError = result?.error
-        ? `LAN discovery failed to start: ${result.error}`
-        : 'LAN discovery failed to start. You can still enter the host URL manually.';
-      return;
+    if (!this._lanDiscoveryListening) {
+      const result = await bridge.startDiscovery();
+      this._lanDiscoveryListening = !!result?.ok;
+      if (!result?.ok) {
+        this._lanDiscoveryError = result?.error
+          ? `LAN discovery failed to start: ${result.error}`
+          : 'LAN discovery failed to start. You can still enter the host URL manually.';
+        return;
+      }
     }
     const initial = await bridge.getDiscoveredGames();
     this._discoveredLobbies = initial?.lobbies ?? [];
@@ -2368,6 +2383,17 @@ export class MainMenu {
    */
   getLanClient(): LanClient {
     return this.lanClient;
+  }
+
+  /**
+   * Stop the local Electron-hosted LAN relay if this machine is hosting.
+   * Safe to call unconditionally (no-op outside Electron, or when not
+   * hosting) — game.ts calls this whenever a LAN session ends (quitting an
+   * active match to the menu), so hosting never keeps running in the
+   * background after the host walks away from it.
+   */
+  stopLanHostIfHosting(): void {
+    void this.lanBridge?.stopHost();
   }
 
   // -------------------------------------------------------------------

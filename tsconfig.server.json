@@ -19,6 +19,7 @@
     "src/lan/discovery.ts",
     "src/lan/lanLobby.ts",
     "src/lan/lanAddress.ts",
+    "src/lan/hostToken.ts",
     "src/version.ts"
   ],
   "exclude": ["server/**/*.test.ts"]

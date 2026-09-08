@@ -36,23 +36,19 @@ async function main(): Promise<void> {
   const discovery = createLanDiscovery();
   await discovery.startListening();
 
-  const host = await startLanHostServer({ build: buildLabel() });
-  discovery.advertise({
-    lobbyId: host.lobbyId,
-    hostName: os.hostname() || 'Sign99 Host',
-    lanPort: host.port,
-    maxSlots: 8,
-    openSlots: 8,
-    occupiedHumanSlots: 0,
-    aiSlots: 0,
-    matchStarted: false,
+  // No hostToken here: this dev-only CLI has no IPC channel to hand one to
+  // a plain browser tab, so it falls back to "first connection is host" —
+  // acceptable for local development only (see LanHostOptions.hostToken).
+  const host = await startLanHostServer({
     build: buildLabel(),
+    onLobbyChanged: () => syncAdvertisement(),
+    onMatchStarted: () => syncAdvertisement(),
   });
 
-  // Refresh the advertised lobby counts whenever the lobby changes. Since
-  // this dev helper always hosts (it never stops), re-advertise on a timer
-  // reading the live snapshot rather than wiring a callback through.
-  setInterval(() => {
+  // Event-driven, not polled: re-advertise once now, then again whenever
+  // the lobby actually changes (join/leave/AI slot/match start) via the
+  // hooks above.
+  function syncAdvertisement(): void {
     const lobby = host.getLobbySnapshot();
     const occupiedHumanSlots = lobby.slots.filter(s => s.type === 'human').length;
     const aiSlots = lobby.slots.filter(s => s.type === 'ai').length;
@@ -68,7 +64,8 @@ async function main(): Promise<void> {
       matchStarted: lobby.matchStarted,
       build: buildLabel(),
     });
-  }, 2000);
+  }
+  syncAdvertisement();
 
   // Read-only, loopback-only bridge for the browser dev page.
   const httpServer = http.createServer((req, res) => {

@@ -525,6 +525,13 @@ export class Game {
           this.lanClient.disconnect();
           this.lanClient = null;
         }
+        // Quitting a LAN match we were hosting must stop the local relay
+        // too — otherwise it keeps listening/advertising in the
+        // background even though nothing is using it anymore.
+        if (this.state.gameMode === 'lan_host') {
+          this.mainMenu.stopLanHostIfHosting();
+        }
+        this.lanAiDirectors = [];
         break;
       default:
         break;

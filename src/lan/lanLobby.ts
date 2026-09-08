@@ -67,9 +67,23 @@ export function snapshotLobby(slots: LobbySlot[], hostClientId: string | null, m
 export interface JoinRequestInput {
   matchStarted: boolean;
   slots: LobbySlot[];
-  clientProtocolVersion?: number;
+  /**
+   * Required. A join_request without a protocol version, or with a
+   * mismatched one, is rejected — there is no "legacy client" leniency.
+   * Typed as `number` for callers, but validated defensively at runtime
+   * since the value ultimately comes from parsed network JSON.
+   */
+  clientProtocolVersion: number;
   clientBuild?: string;
   hostBuild: string;
+  /**
+   * Whether the designated local host connection has been established yet.
+   * Until it has, slot 0 is reserved and no ordinary join can be accepted —
+   * this is what prevents a remote client that connects before the local
+   * renderer from ever being treated as a real player of a not-yet-owned
+   * lobby.
+   */
+  hostConnected: boolean;
 }
 
 export type JoinDecision =
@@ -83,11 +97,14 @@ export type JoinDecision =
  * "lobby full" one, even if both happen to be true.
  */
 export function evaluateJoinRequest(input: JoinRequestInput): JoinDecision {
-  if (input.clientProtocolVersion !== undefined && input.clientProtocolVersion !== LAN_PROTOCOL_VERSION) {
+  if (typeof input.clientProtocolVersion !== 'number' || input.clientProtocolVersion !== LAN_PROTOCOL_VERSION) {
     return {
       accept: false,
       reason: 'This LAN game is running a different Sign99RTS network version.',
     };
+  }
+  if (!input.hostConnected) {
+    return { accept: false, reason: 'Waiting for the host to finish connecting. Try again in a moment.' };
   }
   if (input.matchStarted) {
     return { accept: false, reason: 'Match already in progress.' };

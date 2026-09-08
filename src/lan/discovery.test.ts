@@ -104,10 +104,22 @@ describe('parseAdvertisement', () => {
 });
 
 describe('advertisementKey / pruneStaleLobbies', () => {
-  it('de-duplicates by lobbyId + wsUrl', () => {
+  it('de-duplicates by lobby id alone', () => {
     const a = parseAdvertisement(makeAd(), '192.168.1.50', 0)!;
     const b = parseAdvertisement(makeAd(), '192.168.1.50', 0)!;
     expect(advertisementKey(a)).toBe(advertisementKey(b));
+  });
+
+  it('collapses the same lobby advertised from multiple interfaces into one entry', () => {
+    // A host with Wi-Fi + Ethernet (or a VPN) broadcasts the same lobbyId
+    // from several source addresses. That must not show up as several
+    // "different" discovered hosts.
+    const map = new Map<string, LanDiscoveredLobby>();
+    const viaWifi = parseAdvertisement(makeAd({ lobbyId: 'lobby_multi' }), '192.168.1.50', 1000)!;
+    const viaEthernet = parseAdvertisement(makeAd({ lobbyId: 'lobby_multi' }), '10.0.0.20', 1000)!;
+    map.set(advertisementKey(viaWifi), viaWifi);
+    map.set(advertisementKey(viaEthernet), viaEthernet);
+    expect(map.size).toBe(1);
   });
 
   it('prunes only expired entries', () => {

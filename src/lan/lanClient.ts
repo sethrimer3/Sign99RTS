@@ -27,6 +27,7 @@ import type {
   RaceSelection,
 } from './protocol.js';
 import { LAN_PROTOCOL_VERSION } from './protocol.js';
+import { appendHostTokenToUrl } from './hostToken.js';
 
 export type LanClientState =
   | 'disconnected'
@@ -35,10 +36,26 @@ export type LanClientState =
   | 'in_match'
   | 'error';
 
+/**
+ * Internal handshake phase, tracked in addition to the public `state` so
+ * the connection flow has bounded waiting at every step:
+ *   socket_connecting -> server_ready -> join_pending -> lobby/in_match
+ * (a host connection skips straight from socket_connecting to lobby, since
+ * the server sends `welcome` immediately without a join_request round trip).
+ */
+type ConnectionPhase = 'socket_connecting' | 'server_ready' | 'join_pending' | 'settled';
+
 /** Heartbeat ping interval in ms. Matches the server-side CLIENT_TIMEOUT_MS / 4. */
 const HEARTBEAT_INTERVAL_MS = 15_000;
 /** If the socket hasn't opened (or the server hasn't greeted us) within this long, give up. */
 const CONNECT_TIMEOUT_MS = 8_000;
+/**
+ * Once server_connected arrives and join_request has been sent, the server
+ * must respond with welcome/join_rejected within this long. Without a
+ * bound here, a server that accepts the connection but never answers the
+ * join_request would leave the client hanging in 'connecting' forever.
+ */
+const JOIN_TIMEOUT_MS = 8_000;
 
 export class LanClient {
   private ws: WebSocket | null = null;
@@ -48,6 +65,9 @@ export class LanClient {
   /** Time the last ping was sent (ms) */
   private lastPingSentAt: number = 0;
   private connectTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private joinTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  /** Internal handshake phase — see ConnectionPhase. */
+  private phase: ConnectionPhase = 'settled';
   /**
    * Bumped on every connect() call. Async callbacks (timeouts, and the
    * WebSocket's own event handlers) capture the token at creation time and
@@ -101,8 +121,19 @@ export class LanClient {
   /** Fires on a connect() that never completed (timeout / immediate error). */
   onError: ((message: string) => void) | null = null;
 
-  constructor(url: string) {
+  private readonly connectTimeoutMs: number;
+  private readonly joinTimeoutMs: number;
+
+  /**
+   * `timeouts` is test-only plumbing — production callers always use the
+   * defaults (CONNECT_TIMEOUT_MS / JOIN_TIMEOUT_MS) and never pass it —
+   * letting tests exercise the timeout paths in milliseconds instead of
+   * real seconds.
+   */
+  constructor(url: string, timeouts?: { connectTimeoutMs?: number; joinTimeoutMs?: number }) {
     this._url = url;
+    this.connectTimeoutMs = timeouts?.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
+    this.joinTimeoutMs = timeouts?.joinTimeoutMs ?? JOIN_TIMEOUT_MS;
   }
 
   /** The WebSocket URL this client connects (or last connected) to. */
@@ -120,21 +151,28 @@ export class LanClient {
    * ensures callbacks from the old attempt can never affect the new one.
    * Event handlers are attached synchronously before any I/O can complete,
    * so there is no window in which a message could arrive unhandled.
+   *
+   * `hostToken`, when provided, is appended to the connection URL as a
+   * query parameter so the relay can deterministically recognize this as
+   * the designated local host connection (see server/lanHost.ts) — it is
+   * never stored on `this.url`/displayed anywhere.
    */
-  connect(): void {
+  connect(hostToken?: string): void {
     this.teardownSocket();
     const myGeneration = ++this.generation;
 
     this.state = 'connecting';
+    this.phase = 'socket_connecting';
     this.lastError = '';
     this.pingMs = 0;
     this.lastSnapshotAt = 0;
     this.hostProtocolVersion = 0;
     this.hostBuild = '';
 
+    const connectUrl = hostToken ? appendHostTokenToUrl(this._url, hostToken) : this._url;
     let socket: WebSocket;
     try {
-      socket = new WebSocket(this._url);
+      socket = new WebSocket(connectUrl);
     } catch (e) {
       this.state = 'error';
       this.lastError = String(e);
@@ -151,7 +189,7 @@ export class LanClient {
         this.onError?.(this.lastError);
         this.teardownSocket();
       }
-    }, CONNECT_TIMEOUT_MS);
+    }, this.connectTimeoutMs);
 
     // Handlers are installed here, before connect() returns and before any
     // event can fire — 'open'/'message'/'close'/'error' are always
@@ -198,10 +236,12 @@ export class LanClient {
     this.generation++;
     this.teardownSocket();
     this.state = 'disconnected';
+    this.phase = 'settled';
   }
 
   private teardownSocket(): void {
     this.clearConnectTimeout();
+    this.clearJoinTimeout();
     this.stopHeartbeat();
     if (this.ws) {
       // Detach handlers first so a close triggered by us doesn't fire a
@@ -219,6 +259,13 @@ export class LanClient {
     if (this.connectTimeoutHandle !== null) {
       clearTimeout(this.connectTimeoutHandle);
       this.connectTimeoutHandle = null;
+    }
+  }
+
+  private clearJoinTimeout(): void {
+    if (this.joinTimeoutHandle !== null) {
+      clearTimeout(this.joinTimeoutHandle);
+      this.joinTimeoutHandle = null;
     }
   }
 
@@ -268,6 +315,7 @@ export class LanClient {
         this.hostProtocolVersion = msg.protocolVersion;
         this.hostBuild = msg.build;
         this.state = 'connecting'; // still waiting to join
+        this.phase = 'server_ready';
         this.clearConnectTimeout();
         this.onServerReady?.();
         break;
@@ -281,7 +329,9 @@ export class LanClient {
         this.hostProtocolVersion = m.protocolVersion;
         this.hostBuild = m.build;
         this.state = 'lobby';
+        this.phase = 'settled';
         this.clearConnectTimeout();
+        this.clearJoinTimeout();
         this.onLobbyUpdate?.(m.lobby);
         break;
       }
@@ -291,6 +341,8 @@ export class LanClient {
         break;
       }
       case 'join_rejected': {
+        this.phase = 'settled';
+        this.clearJoinTimeout();
         this.lastError = msg.reason;
         this.state = 'error';
         this.onJoinRejected?.(msg.reason);
@@ -346,7 +398,25 @@ export class LanClient {
     }
   }
 
+  /**
+   * Send join_request and start the bounded join-response timeout — the
+   * server must answer with `welcome` or `join_rejected` within
+   * JOIN_TIMEOUT_MS, or the connection is treated as failed with a clear
+   * message rather than hanging in 'connecting' forever.
+   */
   sendJoinRequest(playerName: string, protocolVersion: number = LAN_PROTOCOL_VERSION, build?: string): void {
+    this.phase = 'join_pending';
+    this.clearJoinTimeout();
+    const myGeneration = this.generation;
+    this.joinTimeoutHandle = setTimeout(() => {
+      if (this.generation !== myGeneration) return;
+      if (this.phase !== 'join_pending') return; // already settled (welcome/join_rejected) or superseded
+      this.phase = 'settled';
+      this.lastError = 'The host did not complete the join request.';
+      this.state = 'error';
+      this.onError?.(this.lastError);
+      this.teardownSocket();
+    }, this.joinTimeoutMs);
     this.send({ type: 'join_request', playerName, protocolVersion, build });
   }
 

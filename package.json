@@ -16,6 +16,7 @@
     "typecheck:server": "npx tsc --project tsconfig.server.json --noEmit",
     "lan:server": "tsx server/lanServer.ts",
     "dev:lan": "concurrently \"npm run dev:host\" \"npm run lan:server\"",
+    "pretest": "npm run build:server",
     "test": "vitest run",
     "test:watch": "vitest"
   },
