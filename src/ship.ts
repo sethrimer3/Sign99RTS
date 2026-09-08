@@ -19,8 +19,15 @@ const BATTERY_FIRE_COST = 5;
 export const GATLING_BATTERY_FIRE_COST = BATTERY_FIRE_COST / 3;
 export const GUIDED_MISSILE_INITIAL_BATTERY_COST = 14;
 export const GUIDED_MISSILE_CONTROL_BATTERY_DRAIN = 8;
-const SHIELD_REGEN_RATE = 7;
-const SHIELD_REGEN_DELAY = 2.5;
+/** Fraction of max shield regenerated per second once regen kicks in (20%/s → full in 5s). */
+const SHIELD_REGEN_FRACTION_PER_SEC = 0.2;
+/** Seconds of no damage taken before shield regen begins. */
+const SHIELD_REGEN_DELAY = 5;
+/** Each ship-upgrade level adds this fraction of the *base* stat (non-cumulative/non-compounding). */
+const SHIP_UPGRADE_STEP = 0.25;
+export const SHIP_HP_MAX_LEVEL = 4;
+export const SHIP_SPEED_ENERGY_MAX_LEVEL = 4;
+export const SHIP_SHIELD_MAX_LEVEL = 2;
 const PASSIVE_HEALTH_REGEN_DELAY = 5;
 const PASSIVE_HEALTH_REGEN_RATE = 1;
 const TRAIL_LIFETIME = 0.42;
@@ -92,8 +99,15 @@ export class PlayerShip extends Entity {
   dashUnlocked = false;
   shield: number = 0;
   maxShield: number = 0;
-  shieldRegenRate: number = SHIELD_REGEN_RATE;
   private shieldRegenDelay = 0;
+  /** Research levels for the standardized, non-cumulative ship upgrades. */
+  hpLevel = 0;
+  speedEnergyLevel = 0;
+  shieldLevel = 0;
+  private readonly baseMaxHealth: number;
+  private readonly baseMaxSpeed: number;
+  private readonly baseThrustPower: number;
+  private readonly baseEnergyRegenRate: number;
   private healthRegenDelay = 0;
   /** Countdown timer for the brief shield-hit flash ring (set when shield absorbs damage). */
   private shieldHitFlashTimer = 0;
@@ -179,7 +193,10 @@ export class PlayerShip extends Entity {
     this.turnRate = SHIP_STATS.mainguy.turnRate;
     this.thrustPower = SHIP_STATS.mainguy.speed;
     this.maxSpeed = SHIP_STATS.mainguy.speed;
-    this.maxShield = this.maxHealth * 0.5;
+    this.baseMaxHealth = this.maxHealth;
+    this.baseMaxSpeed = this.maxSpeed;
+    this.baseThrustPower = this.thrustPower;
+    this.baseEnergyRegenRate = this.baseBatteryRegenRate;
     this.friction = 1.0;
     this.aimWorld = new Vec2(position.x + 100, position.y);
   }
@@ -427,33 +444,55 @@ export class PlayerShip extends Entity {
       this.applySynonymousResearchUpgrade(item);
       return;
     }
-    switch (item) {
-      case 'shipHp':
-        this.maxHealth = Math.round(this.maxHealth * 1.35);
-        this.health = this.maxHealth;
-        this.maxShield = this.maxHealth * 0.5;
-        if (this.shieldUnlocked) this.shield = Math.min(this.maxShield, this.shield);
-        break;
-      case 'shipSpeedEnergy':
-        this.maxSpeed *= 1.14;
-        this.thrustPower *= 1.12;
-        this.baseBatteryRegenRate *= 1.35;
-        break;
-      case 'shipFireSpeed':
-        this.fireCooldownMultiplier = 0.78;
-        break;
-      case 'shipShield':
+    const match = /^(shipHp|shipSpeedEnergy|shipShield)(\d)$/.exec(item);
+    if (match) {
+      const [, kind, levelStr] = match;
+      const level = parseInt(levelStr, 10);
+      if (kind === 'shipHp') {
+        this.hpLevel = Math.min(SHIP_HP_MAX_LEVEL, Math.max(this.hpLevel, level));
+        this.recomputeHpStats();
+      } else if (kind === 'shipSpeedEnergy') {
+        this.speedEnergyLevel = Math.min(SHIP_SPEED_ENERGY_MAX_LEVEL, Math.max(this.speedEnergyLevel, level));
+        this.recomputeSpeedEnergyStats();
+      } else if (kind === 'shipShield') {
         this.shieldUnlocked = true;
-        this.maxShield = this.maxHealth * 0.5;
+        this.shieldLevel = Math.min(SHIP_SHIELD_MAX_LEVEL, Math.max(this.shieldLevel, level));
+        this.recomputeShieldStats();
         this.shield = this.maxShield;
         this.shieldRegenDelay = 0;
-        break;
+      }
+      return;
+    }
+    switch (item) {
       case 'shipDash':
         this.dashUnlocked = true;
         break;
       default:
         break;
     }
+  }
+
+  /** HP upgrade: each level adds +25% of *base* max HP (non-cumulative — level 4 = +100%, not compounded). */
+  private recomputeHpStats(): void {
+    const healthFraction = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+    this.maxHealth = Math.round(this.baseMaxHealth * (1 + this.hpLevel * SHIP_UPGRADE_STEP));
+    this.health = Math.round(this.maxHealth * healthFraction);
+    this.recomputeShieldStats();
+  }
+
+  /** Speed/Energy/Fire-Speed upgrade: each level adds +25% of the base stat. */
+  private recomputeSpeedEnergyStats(): void {
+    const multiplier = 1 + this.speedEnergyLevel * SHIP_UPGRADE_STEP;
+    this.maxSpeed = this.baseMaxSpeed * multiplier;
+    this.thrustPower = this.baseThrustPower * multiplier;
+    this.baseBatteryRegenRate = this.baseEnergyRegenRate * multiplier;
+    this.fireCooldownMultiplier = 1 / multiplier;
+  }
+
+  /** Shield upgrade: each level converts +25% of current max HP into shield capacity (max 50% at level 2). */
+  private recomputeShieldStats(): void {
+    this.maxShield = this.shieldUnlocked ? this.maxHealth * this.shieldLevel * SHIP_UPGRADE_STEP : 0;
+    this.shield = Math.min(this.shield, this.maxShield);
   }
 
   private applySynonymousResearchUpgrade(item: string): void {
@@ -504,12 +543,14 @@ export class PlayerShip extends Entity {
     }
     // Spawn invincibility blocks all incoming damage during the grace period
     if (this.spawnInvincibilityTimer > 0) return;
-    if (this.shieldUnlocked && this.shield > 0) {
-      const blocked = Math.min(this.shield, amount);
-      this.shield -= blocked;
-      amount -= blocked;
+    if (this.shieldUnlocked) {
       this.shieldRegenDelay = SHIELD_REGEN_DELAY;
-      if (blocked > 0) this.shieldHitFlashTimer = 0.22;
+      if (this.shield > 0) {
+        const blocked = Math.min(this.shield, amount);
+        this.shield -= blocked;
+        amount -= blocked;
+        if (blocked > 0) this.shieldHitFlashTimer = 0.22;
+      }
     }
     this.healthRegenDelay = PASSIVE_HEALTH_REGEN_DELAY;
     if (amount > 0) super.takeDamage(amount, source);
@@ -521,7 +562,7 @@ export class PlayerShip extends Entity {
       this.shieldRegenDelay -= dt;
       return;
     }
-    this.shield = Math.min(this.maxShield, this.shield + this.shieldRegenRate * dt);
+    this.shield = Math.min(this.maxShield, this.shield + this.maxShield * SHIELD_REGEN_FRACTION_PER_SEC * dt);
   }
 
   private updatePassiveHealthRegen(dt: number): void {

@@ -285,7 +285,7 @@ export class VsAIDirector {
   update(state: GameState, dt: number): void {
     if (!this.ship.alive) return;
     if (!this.zenithShieldInitialized && this.config.difficulty === 'Zenith') {
-      this.ship.applyResearchUpgrade('shipShield');
+      this.ship.applyResearchUpgrade('shipShield2');
       this.zenithShieldInitialized = true;
     }
 

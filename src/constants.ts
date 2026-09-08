@@ -61,10 +61,16 @@ export const BUILD_TIME = {
 
 // Research costs
 export const RESEARCH_COST = {
-  shipHp: 220,
-  shipSpeedEnergy: 260,
-  shipFireSpeed: 240,
-  shipShield: 300,
+  shipHp1: 220,
+  shipHp2: 260,
+  shipHp3: 300,
+  shipHp4: 340,
+  shipSpeedEnergy1: 240,
+  shipSpeedEnergy2: 280,
+  shipSpeedEnergy3: 320,
+  shipSpeedEnergy4: 360,
+  shipShield1: 280,
+  shipShield2: 340,
   shipDash: 280,
   synonymousPierce: 260,
   synonymousSpeed: 260,
@@ -93,10 +99,16 @@ export const RESEARCH_COST = {
 
 // Research times (in ticks)
 export const RESEARCH_TIME = {
-  shipHp: 540,
-  shipSpeedEnergy: 600,
-  shipFireSpeed: 560,
-  shipShield: 720,
+  shipHp1: 540,
+  shipHp2: 600,
+  shipHp3: 660,
+  shipHp4: 720,
+  shipSpeedEnergy1: 560,
+  shipSpeedEnergy2: 620,
+  shipSpeedEnergy3: 680,
+  shipSpeedEnergy4: 740,
+  shipShield1: 660,
+  shipShield2: 780,
   shipDash: 660,
   synonymousPierce: 620,
   synonymousSpeed: 600,
@@ -148,10 +160,16 @@ export const HP_VALUES = {
 } as const;
 
 export const ACTIVE_RESEARCH_ITEMS = [
-  'shipHp',
-  'shipSpeedEnergy',
-  'shipFireSpeed',
-  'shipShield',
+  'shipHp1',
+  'shipHp2',
+  'shipHp3',
+  'shipHp4',
+  'shipSpeedEnergy1',
+  'shipSpeedEnergy2',
+  'shipSpeedEnergy3',
+  'shipSpeedEnergy4',
+  'shipShield1',
+  'shipShield2',
   'shipDash',
   'synonymousPierce',
   'synonymousSpeed',

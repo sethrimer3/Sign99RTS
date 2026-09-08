@@ -227,6 +227,10 @@ export class HUD {
     const frac = Math.max(0, Math.min(1, battery / maxBattery));
     const hpFrac = Math.max(0, Math.min(1, health / maxHealth));
     const shieldFrac = maxShield > 0 ? Math.max(0, Math.min(1, shield / maxShield)) : 0;
+    // The shield capacity extends the health bar past its normal end rather
+    // than occupying its own row — e.g. a 50%-of-max-HP shield adds 50% more
+    // bar length beyond the HP portion.
+    const shieldExtensionFrac = maxHealth > 0 && maxShield > 0 ? maxShield / maxHealth : 0;
     const elapsed = Math.max(0, Math.min(0.05, this.animTime - this.lastPlayerBarsAnimTime));
     this.lastPlayerBarsAnimTime = this.animTime;
     const targetCompact = compact ? 1 : 0;
@@ -235,16 +239,17 @@ export class HUD {
     const t = this.playerBarsCompact;
     const lerp = (a: number, b: number) => a + (b - a) * t;
     const barW = 220;
+    const shieldExtW = barW * shieldExtensionFrac;
     const barH = lerp(14, 8);
     const x = 10;
     const y = lerp(screenH - 24, screenH - 18);
-    const compactBlockH = (maxShield > 0 ? 3 : 2) * 8;
-    const expandedPanelY = maxShield > 0 ? screenH - 24 - 112 : screenH - 24 - 86;
+    const compactBlockH = 2 * 8;
+    const expandedPanelY = screenH - 24 - 86;
     const compactPanelY = screenH - 18 - compactBlockH - 7;
     const panelY = lerp(expandedPanelY, compactPanelY);
     const expandedPanelH = screenH - 24 - expandedPanelY + 8;
     const compactPanelH = compactBlockH + 16;
-    this.drawGlassPanel(ctx, x - 8, panelY, barW + 18, lerp(expandedPanelH, compactPanelH), 0.68);
+    this.drawGlassPanel(ctx, x - 8, panelY, barW + shieldExtW + 18, lerp(expandedPanelH, compactPanelH), 0.68);
 
     let barColor: string;
     let labelColor: string;
@@ -263,14 +268,10 @@ export class HUD {
     const expandedEnergyY = screenH - 24 - 14;
     const expandedHpY = screenH - 24 - 14 - 30;
     const expandedHpBarY = expandedHpY - 14;
-    const expandedShieldY = expandedHpY - 14 - 22;
-    const expandedShieldBarY = expandedShieldY - 14;
     const compactEnergyY = screenH - 18 - 8;
     const compactHpBarY = compactEnergyY - 8;
-    const compactShieldBarY = compactHpBarY - 8;
     const energyY = lerp(expandedEnergyY, compactEnergyY);
     const hpBarY = lerp(expandedHpBarY, compactHpBarY);
-    const shieldBarY = lerp(expandedShieldBarY, compactShieldBarY);
     const labelAlpha = 1 - t;
 
     if (labelAlpha > 0.04) {
@@ -284,8 +285,10 @@ export class HUD {
       ctx.fillStyle = colorToCSS(Colors.healthbar, 0.9);
       ctx.fillText(tr('hud.hp'), x, hpBarY - 6);
       if (maxShield > 0) {
+        ctx.textAlign = 'right';
         ctx.fillStyle = colorToCSS(Colors.radar_allied_status, 0.86);
-        ctx.fillText(tr('hud.shield'), x, shieldBarY - 6);
+        ctx.fillText(tr('hud.shield'), x + barW + shieldExtW, hpBarY - 6);
+        ctx.textAlign = 'left';
       }
       ctx.restore();
     }
@@ -311,8 +314,9 @@ export class HUD {
       ctx.strokeRect(x - 1, hpBarY - 1, barW + 2, barH + 2);
       ctx.restore();
     }
-    if (maxShield > 0) {
-      this.drawStatusBar(ctx, x, shieldBarY, barW, barH, shieldFrac, colorToCSS(Colors.radar_allied_status, 0.78), 'rgba(120,178,255,0.92)');
+    if (shieldExtW > 0.5) {
+      // Shield fills the bar's extension past the HP portion, in blue.
+      this.drawStatusBar(ctx, x + barW, hpBarY, shieldExtW, barH, shieldFrac, colorToCSS(Colors.radar_allied_status, 0.85), 'rgba(120,178,255,0.95)');
     }
 
     this.drawStatusBar(ctx, x, energyY, barW, barH, frac, barColor, colorToCSS(Colors.powergenerator_detail, 0.85));

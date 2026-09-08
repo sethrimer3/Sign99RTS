@@ -1468,7 +1468,7 @@ export class GameState {
         for (const f of this.fighters) {
           if (f.alive && f.team === Team.Player) f.upgradeToAdvanced();
         }
-      } else if (completed === 'shipShield') {
+      } else if (completed === 'shipShield1') {
         for (const f of this.fighters) {
           if (f.alive && f.team === Team.Player && !f.docked && f.position.distanceTo(this.player.position) <= 90) {
             f.enableShield();

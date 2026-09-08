@@ -18,7 +18,7 @@ import { Audio } from './audio.js';
 import { GameState } from './gamestate.js';
 import { ShipGroup, TacticalOrder, Team } from './entities.js';
 import { RESEARCH_COST, CONDUIT_COST, ACTIVE_RESEARCH_ITEMS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
-import { SHIP_WEAPON_OPTIONS, type ShipWeaponId } from './ship.js';
+import { SHIP_WEAPON_OPTIONS, type ShipWeaponId, SHIP_HP_MAX_LEVEL, SHIP_SPEED_ENERGY_MAX_LEVEL, SHIP_SHIELD_MAX_LEVEL } from './ship.js';
 import { worldToCell, cellKey, cellCenter, footprintCenter, footprintOrigin, GRID_CELL_SIZE } from './grid.js';
 import { defsByTier, BuildDef, getBuildDef } from './builddefs.js';
 import { drawDecodedText } from './decodeText.js';
@@ -51,10 +51,16 @@ const DESC_BOX_FONT = '13px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto
  * Building-unlock research items fall back to the BuildDef description.
  */
 const RESEARCH_DESCRIPTIONS: Record<string, string> = {
-  shipHp:               'Increases player ship maximum HP.',
-  shipSpeedEnergy:      'Boosts max movement speed and energy regeneration rate.',
-  shipFireSpeed:        'Reduces weapon fire cooldown for a faster rate of fire.',
-  shipShield:           'Unlocks a rechargeable shield aura that absorbs incoming damage.',
+  shipHp1:              'Increases max HP by 25% (of base). Level 1 of 4.',
+  shipHp2:              'Increases max HP by 25% (of base). Level 2 of 4.',
+  shipHp3:              'Increases max HP by 25% (of base). Level 3 of 4.',
+  shipHp4:              'Increases max HP by 25% (of base). Level 4 of 4 — maximum, +100% total.',
+  shipSpeedEnergy1:     'Boosts speed, energy regen, and fire rate by 25% (of base). Level 1 of 4.',
+  shipSpeedEnergy2:     'Boosts speed, energy regen, and fire rate by 25% (of base). Level 2 of 4.',
+  shipSpeedEnergy3:     'Boosts speed, energy regen, and fire rate by 25% (of base). Level 3 of 4.',
+  shipSpeedEnergy4:     'Boosts speed, energy regen, and fire rate by 25% (of base). Level 4 of 4 — maximum, +100% total.',
+  shipShield1:          'Unlocks a rechargeable shield equal to 25% of max HP. Regenerates 5s after taking no damage. Level 1 of 2.',
+  shipShield2:          'Increases shield capacity to 50% of max HP. Level 2 of 2 — maximum.',
   shipDash:             'Shift tap burns 25% energy to dash forward with a bright trail.',
   synonymousPierce:     'Harmonic tunneling lets shots phase through multiple targets.',
   synonymousSpeed:      'Enhances drone cohesion and overall movement speed.',
@@ -288,10 +294,16 @@ interface RadialItem {
 }
 
 const RESEARCH_LABELS: Record<string, string> = {
-  shipHp: 'HP',
-  shipSpeedEnergy: 'Speed +\nEnergy Regen',
-  shipFireSpeed: 'Fire\nSpeed',
-  shipShield: 'Shield',
+  shipHp1: 'HP I',
+  shipHp2: 'HP II',
+  shipHp3: 'HP III',
+  shipHp4: 'HP IV',
+  shipSpeedEnergy1: 'Speed +\nEnergy I',
+  shipSpeedEnergy2: 'Speed +\nEnergy II',
+  shipSpeedEnergy3: 'Speed +\nEnergy III',
+  shipSpeedEnergy4: 'Speed +\nEnergy IV',
+  shipShield1: 'Shield I',
+  shipShield2: 'Shield II',
   shipDash: 'Dash',
   synonymousPierce: 'Harmonic\nTunneling',
   synonymousSpeed: 'Cohesion\nDrive',
@@ -529,9 +541,12 @@ function buildResearchRoot(state: GameState): RadialItem[] {
       category('Defensive Turrets', ['synonymousminelayer', 'exciterturret', 'massdriverturret', 'regenturret']),
     ]);
   }
+  const nextHp = `shipHp${Math.min(SHIP_HP_MAX_LEVEL, state.player.hpLevel + 1)}`;
+  const nextSpeedEnergy = `shipSpeedEnergy${Math.min(SHIP_SPEED_ENERGY_MAX_LEVEL, state.player.speedEnergyLevel + 1)}`;
+  const nextShield = `shipShield${Math.min(SHIP_SHIELD_MAX_LEVEL, state.player.shieldLevel + 1)}`;
   return visibleCategories([
     category('Defensive Turrets', ['missileturret', 'exciterturret', 'massdriverturret', 'regenturret', 'advancedRegenTurrets']),
-    category('Main Ship', ['shipHp', 'shipSpeedEnergy', 'shipFireSpeed', 'shipShield', 'shipDash']),
+    category('Main Ship', [nextHp, nextSpeedEnergy, nextShield, 'shipDash']),
     category('Fighters', ['advancedFighters', 'bomberyard', 'swarmyard']),
     category('Weapons', ['weaponCannon', 'weaponGatling', 'weaponLaser', 'weaponGuidedMissile'], [
       { label: 'Cannon', sublabel: 'Ready', disabled: true, infoOnly: true },
@@ -1315,10 +1330,9 @@ class ShipMenu {
             ['Distributed Vitality', 'synonymousVitality'],
           ]
         : [
-            ['HP', 'shipHp'],
-            ['Speed + Energy Regen', 'shipSpeedEnergy'],
-            ['Fire Speed', 'shipFireSpeed'],
-            ['Shield Aura', 'shipShield'],
+            [`HP ${ship.hpLevel}/${SHIP_HP_MAX_LEVEL}`, 'shipHp1'],
+            [`Speed + Energy + Fire Speed ${ship.speedEnergyLevel}/${SHIP_SPEED_ENERGY_MAX_LEVEL}`, 'shipSpeedEnergy1'],
+            [`Shield Aura ${ship.shieldLevel}/${SHIP_SHIELD_MAX_LEVEL}`, 'shipShield1'],
             ['Dash', 'shipDash'],
           ]),
     ] as Array<[string, string]>;
