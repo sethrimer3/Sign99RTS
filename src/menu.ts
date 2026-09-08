@@ -331,6 +331,7 @@ export class MainMenu {
 
   private setState(s: MenuState): void {
     if (s !== 'lan_browser') this.stopLanDiscoveryListening();
+    if (s !== 'lan_host_lobby' && this.state === 'lan_host_lobby') this.cancelPendingHostStart();
     this.state = s;
     this.selectedIndex = 0;
     this.rankedSliderDragging = false;
@@ -1668,7 +1669,22 @@ export class MainMenu {
     return (window as Window & { sign99Lan?: Sign99LanBridge }).sign99Lan;
   }
 
+  /**
+   * Bumped on every openHostLobby() call and on leaving the host-lobby
+   * screen — the async startHost() continuation below checks it after
+   * each await and bails out (tearing down any relay it just started) if
+   * the user has since backed out or retried, instead of reviving hosting
+   * or connecting from a stale continuation. Mirrors LanClient.generation.
+   */
+  private _lanHostStartGeneration = 0;
+
+  /** Invalidate any in-flight openHostLobby() attempt. Safe to call repeatedly. */
+  private cancelPendingHostStart(): void {
+    this._lanHostStartGeneration++;
+  }
+
   private async openHostLobby(): Promise<void> {
+    const generation = ++this._lanHostStartGeneration;
     this.setState('lan_host_lobby');
     this._lanLobby = null;
 
@@ -1683,6 +1699,13 @@ export class MainMenu {
     this.lanClient.disconnect();
     this.lanClient.lastError = '';
     const result = await bridge.startHost({ hostName: this._joinName || 'Host' });
+    if (generation !== this._lanHostStartGeneration) {
+      // The user backed out (or retried) while startHost() was in flight.
+      // If it actually succeeded, the relay must not be left running in
+      // the background for a screen nobody is looking at anymore.
+      if (result?.ok) void bridge.stopHost();
+      return;
+    }
     if (!result?.ok) {
       this.lanClient.lastError = result?.error
         ? `Could not start LAN hosting: ${result.error}`
@@ -1815,6 +1838,7 @@ export class MainMenu {
 
     this.drawButtonRow(ctx, [
       { label: 'Back / Disconnect', action: () => {
+        this.cancelPendingHostStart();
         this.lanClient.disconnect();
         void this.lanBridge?.stopHost();
         this._lanLobby = null;
@@ -1836,6 +1860,15 @@ export class MainMenu {
   private _lanDiscoveryUnsub: (() => void) | null = null;
   /** True while this menu has asked the Electron main process to keep listening for LAN hosts. */
   private _lanDiscoveryListening: boolean = false;
+  /**
+   * Bumped on every startLanDiscoveryListening() call and on
+   * stopLanDiscoveryListening() — the async continuations below check it
+   * after each await and bail out (balancing Electron's ref-count if their
+   * own startDiscovery() call actually succeeded) if the player has since
+   * left or re-opened the Find LAN Games screen, instead of resurrecting
+   * listening state or repopulating the list for a screen that moved on.
+   */
+  private _lanDiscoveryGeneration = 0;
 
   private openLanBrowser(): void {
     this._discoveredLobbies = [];
@@ -1853,6 +1886,7 @@ export class MainMenu {
    * balanced with the single matching `stopLanDiscoveryListening()` call.
    */
   private async startLanDiscoveryListening(): Promise<void> {
+    const generation = ++this._lanDiscoveryGeneration;
     const bridge = this.lanBridge;
     if (!bridge) {
       this._lanDiscoveryError = 'Automatic LAN discovery requires the desktop app. In a browser, use Join Manually with the host’s IP address.';
@@ -1861,11 +1895,19 @@ export class MainMenu {
     this._lanDiscoveryError = '';
     if (!this._lanDiscoveryUnsub) {
       this._lanDiscoveryUnsub = bridge.onDiscoveredGamesChanged((lobbies) => {
+        if (generation !== this._lanDiscoveryGeneration) return; // stale subscription, screen has moved on
         this._discoveredLobbies = lobbies;
       });
     }
     if (!this._lanDiscoveryListening) {
       const result = await bridge.startDiscovery();
+      if (generation !== this._lanDiscoveryGeneration) {
+        // The player left (or re-opened) Find LAN Games while this was in
+        // flight. If it actually succeeded, balance Electron's listener
+        // ref-count instead of leaving it permanently bumped.
+        if (result?.ok) void bridge.stopDiscovery();
+        return;
+      }
       this._lanDiscoveryListening = !!result?.ok;
       if (!result?.ok) {
         this._lanDiscoveryError = result?.error
@@ -1875,6 +1917,7 @@ export class MainMenu {
       }
     }
     const initial = await bridge.getDiscoveredGames();
+    if (generation !== this._lanDiscoveryGeneration) return; // stale — don't repopulate a screen we've left
     this._discoveredLobbies = initial?.lobbies ?? [];
   }
 
@@ -1886,6 +1929,7 @@ export class MainMenu {
    * to a screen the player already left. Safe to call repeatedly.
    */
   private stopLanDiscoveryListening(): void {
+    this._lanDiscoveryGeneration++; // cancel any in-flight startLanDiscoveryListening()
     this._lanDiscoveryUnsub?.();
     this._lanDiscoveryUnsub = null;
     if (!this._lanDiscoveryListening) return;

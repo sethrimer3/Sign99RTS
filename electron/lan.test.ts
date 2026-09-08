@@ -327,3 +327,136 @@ describe('electron/lan.cjs — discovery listener ref-counting', () => {
     owner.disposeAll();
   });
 });
+
+describe('electron/lan.cjs — startHost/stopHost cancellation races (fake modules)', () => {
+  /**
+   * Each call to the fake startLanHostServer() produces a distinct handle
+   * (so tests can tell which one ended up active/stopped) and, optionally,
+   * defers resolution until the test explicitly releases it — modeling
+   * "startLanHostServer() is still pending" for deterministic race tests
+   * without real timers or real sockets.
+   */
+  function makeGatedFakeModules() {
+    const createdHandles: Array<{ id: number; port: number; lobbyId: string; getLobbySnapshot: () => unknown; isHostConnected: () => boolean; stop: ReturnType<typeof vi.fn> }> = [];
+    const advertiseCalls: unknown[] = [];
+    let nextHandleId = 0;
+    let startCallCount = 0;
+    /** One deferred gate per upcoming startLanHostServer() call; shifted off in order. Missing = resolves immediately. */
+    const gates: Array<Promise<void>> = [];
+
+    function gateNextStart(): () => void {
+      let release!: () => void;
+      const p = new Promise<void>((res) => { release = res; });
+      gates.push(p);
+      return release;
+    }
+
+    const fakeHostMod = {
+      startLanHostServer: vi.fn(async () => {
+        startCallCount++;
+        const gate = gates.shift();
+        if (gate) await gate;
+        const id = nextHandleId++;
+        const handle = {
+          id,
+          port: 8787,
+          lobbyId: `lobby_fake_${id}`,
+          getLobbySnapshot: () => ({
+            slots: [
+              { slotIndex: 0, type: 'human' },
+              ...Array.from({ length: 7 }, (_, i) => ({ slotIndex: i + 1, type: 'open' })),
+            ],
+            matchStarted: false,
+          }),
+          isHostConnected: () => true,
+          stop: vi.fn().mockResolvedValue(undefined),
+        };
+        createdHandles.push(handle);
+        return handle;
+      }),
+    };
+
+    const fakeDiscovery = {
+      startListening: vi.fn().mockResolvedValue(undefined),
+      stopListening: vi.fn(),
+      advertise: vi.fn((info: unknown) => { advertiseCalls.push(info); }),
+      stopAdvertising: vi.fn(),
+      getDiscovered: vi.fn(() => []),
+      dispose: vi.fn(),
+    };
+    const fakeDiscoveryMod = { createLanDiscovery: vi.fn(() => fakeDiscovery) };
+    const fakeVersionMod = { buildLabel: () => 'Build FAKE' };
+    const fakeHostTokenMod = { generateHostToken: () => `token-${Math.random()}` };
+    const loader = async () => [fakeHostMod, fakeDiscoveryMod, fakeVersionMod, fakeHostTokenMod];
+
+    return {
+      loader,
+      createdHandles,
+      advertiseCalls,
+      fakeDiscovery,
+      gateNextStart,
+      /** Waits until startLanHostServer() has actually been invoked `n` times (it may be gated/pending). */
+      waitForStartCalls: (n: number) => waitFor(() => startCallCount >= n),
+    };
+  }
+
+  it('a stopHost() that runs while startLanHostServer() is still pending prevents the handle from becoming active', async () => {
+    const fx = makeGatedFakeModules();
+    const owner = createLanOwner(fx.loader);
+
+    const release = fx.gateNextStart();
+    const startPromise = owner.startHost({ port: 8787 });
+
+    // Wait for startLanHostServer() to actually be invoked (it's gated, so
+    // it won't resolve yet) before racing an explicit stop against it.
+    await fx.waitForStartCalls(1);
+    expect(fx.createdHandles).toHaveLength(0);
+    expect(owner.isHosting()).toBe(false);
+
+    // An explicit stop arrives while the relay is still being created.
+    await owner.stopHost();
+
+    // Now let the pending startLanHostServer() resolve.
+    release();
+    const result = await startPromise;
+
+    expect(result.ok).toBe(false);
+    expect(fx.createdHandles).toHaveLength(1);
+    // The handle that was created for the cancelled attempt must have been
+    // stopped immediately, and must never have become the active host.
+    expect(fx.createdHandles[0].stop).toHaveBeenCalledTimes(1);
+    expect(owner.isHosting()).toBe(false);
+    // A cancelled host must never advertise.
+    expect(fx.advertiseCalls).toHaveLength(0);
+  });
+
+  it('rapid start -> cancel -> start leaves only the second host active', async () => {
+    const fx = makeGatedFakeModules();
+    const owner = createLanOwner(fx.loader);
+
+    const releaseFirst = fx.gateNextStart();
+    const firstStart = owner.startHost({ port: 8787 });
+    await fx.waitForStartCalls(1); // first startLanHostServer() call is now pending on its gate
+
+    // Start a second attempt before the first resolves — startHost() itself
+    // cancels any prior attempt (via its own leading stopHost() call).
+    const secondStart = owner.startHost({ port: 8787 });
+
+    // Release the first (now-superseded) startLanHostServer() call.
+    releaseFirst();
+    const firstResult = await firstStart;
+    const secondResult = await secondStart;
+
+    expect(firstResult.ok).toBe(false);
+    expect(secondResult.ok).toBe(true);
+    expect(fx.createdHandles).toHaveLength(2);
+    // The first handle must have been stopped and never left active...
+    expect(fx.createdHandles[0].stop).toHaveBeenCalledTimes(1);
+    // ...while the second is the one actually running.
+    expect(fx.createdHandles[1].stop).not.toHaveBeenCalled();
+    expect(owner.isHosting()).toBe(true);
+
+    await owner.stopHost();
+    expect(fx.createdHandles[1].stop).toHaveBeenCalledTimes(1);
+  });
+});

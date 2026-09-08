@@ -546,3 +546,64 @@ describe('LanClient bounded connection timeouts', () => {
     expect(errorMessage).toBe('');
   });
 });
+
+describe('LanClient preserves connection-error state across the socket close that follows', () => {
+  it('keeps state=error and the useful lastError after onerror is followed by onclose', async () => {
+    // Reproduce a genuine post-open transport failure: the server violates
+    // the WebSocket framing protocol, which fires a real 'error' event on
+    // the client socket, immediately followed by 'close' (as commonly
+    // happens in browsers/Electron too) — without this fix, 'close' would
+    // overwrite the useful error state with a generic 'disconnected'.
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    await new Promise<void>((resolve) => wss.once('listening', resolve));
+    extraServers.push({ close: () => wss.close() });
+    wss.on('connection', (ws) => {
+      // @ts-expect-error -- reaching into the ws internals purely to corrupt the wire protocol for this test
+      ws._socket.write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]));
+    });
+    const addr = wss.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+    const client = new LanClient(`ws://127.0.0.1:${port}`);
+    clients.push(client);
+    let errorMessage = '';
+    let disconnectedCalled = false;
+    client.onError = (msg) => { errorMessage = msg; };
+    client.onDisconnected = () => { disconnectedCalled = true; };
+    client.connect();
+
+    await waitFor(() => client.state === 'error');
+    expect(errorMessage).not.toBe('');
+    const errorAtOnError = errorMessage;
+
+    // The 'close' event follows shortly after — state and lastError must
+    // survive it, and onDisconnected should still fire (it's a distinct
+    // callback, so this isn't a duplicate onError).
+    await waitFor(() => disconnectedCalled);
+    expect(client.state).toBe('error');
+    expect(client.lastError).toBe(errorAtOnError);
+    expect(client.lastError).not.toBe('');
+  });
+
+  it('still reports a plain disconnected state when the server just closes cleanly (no preceding error)', async () => {
+    host = await startLanHostServer({ port: 0, build: 'Build TEST' });
+    const url = `ws://127.0.0.1:${host.port}`;
+
+    const hostClient = new LanClient(url);
+    clients.push(hostClient);
+    hostClient.connect();
+    await waitFor(() => hostClient.state === 'lobby');
+
+    let disconnectedReason = '';
+    hostClient.onDisconnected = (reason) => { disconnectedReason = reason; };
+
+    await host.stop();
+    host = null;
+
+    await waitFor(() => disconnectedReason.length > 0);
+    // No error preceded this close, so onclose must still produce the
+    // normal 'disconnected' state — the error-preservation fix must not
+    // leak into ordinary clean disconnects.
+    expect(hostClient.state).toBe('disconnected');
+  });
+});

@@ -215,11 +215,20 @@ export class LanClient {
 
     socket.onclose = (ev) => {
       if (this.generation !== myGeneration) return;
+      // A genuine connection failure (onerror, or a rejection message that
+      // already set state='error') is very often followed by a 'close'
+      // event — browsers/Electron commonly fire both. Don't let that
+      // overwrite a meaningful error with a generic 'disconnected': once
+      // this attempt is already in the 'error' state, close just finishes
+      // tearing the socket down without erasing why it failed.
+      const wasError = this.state === 'error';
       const reason = ev.reason || 'Connection closed';
-      this.state = 'disconnected';
       this.ws = null;
       this.finalizeHandshake();
       this.stopHeartbeat();
+      if (!wasError) {
+        this.state = 'disconnected';
+      }
       this.onDisconnected?.(reason);
     };
 

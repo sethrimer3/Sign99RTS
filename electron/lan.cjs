@@ -70,6 +70,16 @@ function createLanOwner(loadModulesFn) {
   let onDiscoveredChanged = null;
   /** @type {Promise<void> | null} */
   let stopHostPromise = null;
+  /**
+   * Bumped every time startHost() begins a new attempt, and every time
+   * stopHost() is invoked (an explicit stop cancels whatever is currently
+   * starting, not just whatever already finished starting). startHost()
+   * checks this after every await; if it no longer matches the generation
+   * it claimed, the operation was superseded or cancelled mid-flight, so
+   * it must not assign its (possibly just-created) handle to `activeHost`
+   * and must immediately stop that handle instead of leaving it running.
+   */
+  let hostOperationGeneration = 0;
 
   async function ensureDiscovery() {
     if (discovery) return discovery;
@@ -158,8 +168,25 @@ function createLanOwner(loadModulesFn) {
    * never logged.
    */
   async function startHost(opts = {}) {
-    await stopHost();
+    await stopHost(); // cancels/tears down any previous attempt or active host
+    const generation = ++hostOperationGeneration;
+
+    /** True once a newer startHost() or an explicit stopHost() has superseded this attempt. */
+    const isStale = () => generation !== hostOperationGeneration;
+
+    /** Make sure a handle that must not become active never stays alive. */
+    async function discardStaleHandle(handle) {
+      if (activeHost === handle) {
+        activeHost = null;
+        activeHostName = '';
+        activeBuild = '';
+      }
+      await handle.stop();
+    }
+
     const [hostMod, , versionMod, hostTokenMod] = await loadModules();
+    if (isStale()) return { ok: false, error: 'Hosting was cancelled.' };
+
     const build = versionMod.buildLabel();
     const hostToken = hostTokenMod.generateHostToken();
 
@@ -183,6 +210,16 @@ function createLanOwner(loadModulesFn) {
     } catch (err) {
       return { ok: false, error: describeStartError(err) };
     }
+
+    // The relay is up — but if this attempt was cancelled (or superseded
+    // by a newer startHost()) while startLanHostServer() was pending, this
+    // handle must never become `activeHost`: stop it immediately instead
+    // of leaving a server running for a screen nobody is looking at.
+    if (isStale()) {
+      await handle.stop();
+      return { ok: false, error: 'Hosting was cancelled.' };
+    }
+
     activeHost = handle;
     activeHostName = opts.hostName || 'Sign99 Host';
     activeBuild = build;
@@ -194,6 +231,15 @@ function createLanOwner(loadModulesFn) {
       // Hosting still works without discovery (manual IP join remains
       // available) — surface the failure but don't fail startHost entirely.
       console.warn('[LAN] Discovery failed to start while hosting:', describeStartError(err));
+    }
+
+    if (isStale()) {
+      // Cancelled while discovery was starting. A concurrent stopHost()
+      // may already have torn this handle down (if it ran after we
+      // assigned `activeHost` above); discardStaleHandle() is idempotent
+      // either way and guarantees no server is left running.
+      await discardStaleHandle(handle);
+      return { ok: false, error: 'Hosting was cancelled.' };
     }
 
     // Deliberately no syncAdvertisement() call here: the local renderer
@@ -221,6 +267,9 @@ function createLanOwner(loadModulesFn) {
    * already in flight.
    */
   function stopHost() {
+    // Cancel whatever is currently starting, not just whatever already
+    // finished starting — see hostOperationGeneration above.
+    hostOperationGeneration++;
     if (stopHostPromise) return stopHostPromise;
     stopHostPromise = (async () => {
       if (discovery) discovery.stopAdvertising();
