@@ -32,6 +32,33 @@ interface TrailPoint {
   age: number;
 }
 
+/** Canonical Terran fighter hull, shared by gameplay and miniature UI previews. */
+export function drawTerranFighterHull(
+  ctx: CanvasRenderingContext2D,
+  r: number,
+  color: Color,
+  hostile: boolean,
+  alpha: number = 0.72,
+): void {
+  ctx.strokeStyle = colorToCSS(color, alpha);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  if (hostile) {
+    ctx.moveTo(-r * 0.18, -r * 0.12);
+    ctx.lineTo(-r * 1.0, -r * 0.92);
+    ctx.lineTo(-r * 0.58, -r * 0.30);
+    ctx.moveTo(-r * 0.18, r * 0.12);
+    ctx.lineTo(-r * 1.0, r * 0.92);
+    ctx.lineTo(-r * 0.58, r * 0.30);
+  }
+  ctx.moveTo(r * 1.2, 0);
+  ctx.lineTo(-r * 0.6, -r * 0.6);
+  ctx.lineTo(-r * 0.3, 0);
+  ctx.lineTo(-r * 0.6, r * 0.6);
+  ctx.closePath();
+  ctx.stroke();
+}
+
 // ---------------------------------------------------------------------------
 // FighterShip
 // ---------------------------------------------------------------------------
@@ -406,24 +433,7 @@ export class FighterShip extends Entity {
     ctx.translate(screen.x, screen.y);
     ctx.rotate(this.angle + twistOffset);
 
-    // Ship body: small triangle, team-colored outline
-    ctx.strokeStyle = colorToCSS(teamColor(this.team), outlineAlpha);
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    if (this.team !== Team.Player) {
-      ctx.moveTo(-r * 0.18, -r * 0.12);
-      ctx.lineTo(-r * 1.0, -r * 0.92);
-      ctx.lineTo(-r * 0.58, -r * 0.30);
-      ctx.moveTo(-r * 0.18, r * 0.12);
-      ctx.lineTo(-r * 1.0, r * 0.92);
-      ctx.lineTo(-r * 0.58, r * 0.30);
-    }
-    ctx.moveTo(r * 1.2, 0);
-    ctx.lineTo(-r * 0.6, -r * 0.6);
-    ctx.lineTo(-r * 0.3, 0);
-    ctx.lineTo(-r * 0.6, r * 0.6);
-    ctx.closePath();
-    ctx.stroke();
+    drawTerranFighterHull(ctx, r, coreColor, this.team !== Team.Player, outlineAlpha);
 
     ctx.restore();
 

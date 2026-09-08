@@ -24,7 +24,7 @@ function cloneColor(color: Color, intensity: number = color.intensity): Color {
   return { r: color.r, g: color.g, b: color.b, intensity };
 }
 
-function option(id: ThemeColorId): Color {
+export function themeColor(id: ThemeColorId): Color {
   return THEME_COLOR_OPTIONS.find((item) => item.id === id)?.color ?? THEME_COLOR_OPTIONS[0].color;
 }
 
@@ -36,8 +36,8 @@ function assign(target: Color, source: Color): void {
 }
 
 export function applyThemeColors(): void {
-  const player = option(themeSettings.playerColor);
-  const enemy = option(themeSettings.enemyColor);
+  const player = themeColor(themeSettings.playerColor);
+  const enemy = themeColor(themeSettings.enemyColor);
   const text = cloneColor(player, 0.9);
   const playerOutline = cloneColor(player, 1.12);
   const playerDimOutline = cloneColor(player, 0.72);
@@ -64,10 +64,17 @@ export function applyThemeColors(): void {
   assign(Colors.particles_enemy_exhaust, cloneColor(enemy, 0.55));
 }
 
-export function cycleThemeColor(current: ThemeColorId, dir: number): ThemeColorId {
+export function cycleThemeColor(current: ThemeColorId, dir: number, excluded?: ThemeColorId): ThemeColorId {
   const index = THEME_COLOR_OPTIONS.findIndex((item) => item.id === current);
   const start = index >= 0 ? index : 0;
-  return THEME_COLOR_OPTIONS[(start + dir + THEME_COLOR_OPTIONS.length) % THEME_COLOR_OPTIONS.length].id;
+  const step = dir < 0 ? -1 : 1;
+  for (let offset = 1; offset <= THEME_COLOR_OPTIONS.length; offset++) {
+    const candidate = THEME_COLOR_OPTIONS[
+      (start + step * offset + THEME_COLOR_OPTIONS.length * offset) % THEME_COLOR_OPTIONS.length
+    ].id;
+    if (candidate !== excluded) return candidate;
+  }
+  return current;
 }
 
 export function themeColorLabel(id: ThemeColorId): string {

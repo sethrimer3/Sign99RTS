@@ -24,7 +24,7 @@ import { buildLabel } from './version.js';
 import { gameFont } from './fonts.js';
 import { drawDecodedText } from './decodeText.js';
 import { t as tr, LOCALES, LOCALE_NAMES, getLocale, setLocale, type Locale } from './i18n.js';
-import { applyThemeColors, cycleThemeColor, themeColorLabel, themeSettings, type ThemeColorId } from './theme.js';
+import { applyThemeColors, cycleThemeColor, themeColor, themeColorLabel, themeSettings, type ThemeColorId } from './theme.js';
 import {
   PracticeConfig,
   cloneDefaultPracticeConfig,
@@ -76,6 +76,7 @@ import { OnlineLobbyManager } from './online/onlineLobby.js';
 import { SignalingClient } from './online/signalingClient.js';
 import { DEFAULT_VISUAL_QUALITY, type VisualQuality } from './visualquality.js';
 import { clampCinematicLevel, type CinematicLevel } from './cinematic.js';
+import { drawTerranFighterHull } from './fighter.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -307,6 +308,13 @@ export class MainMenu {
   private mouseXLatched: number = 0;
   private mouseYLatched: number = 0;
   private rankedSliderDragging: boolean = false;
+  private sliderDraggingKey: string | null = null;
+  private wheelDeltaLatched: number = 0;
+  private settingsScroll: number = 0;
+  private settingsScrollbarDragging: boolean = false;
+  private settingsScrollbarGrabOffset: number = 0;
+  private menuInputOffsetY: number = 0;
+  private menuInputViewport: HitRect | null = null;
 
   // Output set by setup screens after the user clicks their start button.
   private pendingAction: MenuAction = 'none';
@@ -335,6 +343,9 @@ export class MainMenu {
     this.state = s;
     this.selectedIndex = 0;
     this.rankedSliderDragging = false;
+    this.sliderDraggingKey = null;
+    this.settingsScrollbarDragging = false;
+    this.settingsScroll = 0;
     this.hits = [];
     this.openedAt = performance.now() * 0.001;
     Audio.playSound('menucursor');
@@ -361,6 +372,7 @@ export class MainMenu {
       this.mouseXLatched = this.mouseX();
       this.mouseYLatched = this.mouseY();
     }
+    if (Input.wheelDelta !== 0) this.wheelDeltaLatched += Input.wheelDelta;
 
     if (screenW !== this.lastScreenW || screenH !== this.lastScreenH) {
       this.bgStars = createBackgroundStars(screenW, screenH);
@@ -402,6 +414,8 @@ export class MainMenu {
     if (this.state === 'none') return 'none';
     if (Input.mouseReleased || !Input.mouseDown) {
       this.rankedSliderDragging = false;
+      this.sliderDraggingKey = null;
+      this.settingsScrollbarDragging = false;
     }
 
     return this.handleSimpleListInput();
@@ -576,6 +590,7 @@ export class MainMenu {
     // Always clear the latch at the end of a draw so the same click
     // never fires twice across consecutive frames.
     this.mousePressedLatched = false;
+    this.wheelDeltaLatched = 0;
   }
 
   // -------------------------------------------------------------------
@@ -1121,6 +1136,23 @@ export class MainMenu {
     const x = cx - 230;
     let y = 160;
     const rowH = 44;
+    const viewportTop = 125;
+    const viewportBottom = Math.max(viewportTop + 80, h - 115);
+    const viewportH = viewportBottom - viewportTop;
+    const contentBottom = 650;
+    const maxScroll = Math.max(0, contentBottom - viewportBottom);
+    if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
+      this.settingsScroll = Math.max(0, Math.min(maxScroll, this.settingsScroll + this.wheelDeltaLatched * 0.55));
+    }
+    this.settingsScroll = Math.max(0, Math.min(maxScroll, this.settingsScroll));
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, viewportTop, w, viewportH);
+    ctx.clip();
+    ctx.translate(0, -this.settingsScroll);
+    this.menuInputOffsetY = this.settingsScroll;
+    this.menuInputViewport = { x: 0, y: viewportTop, w, h: viewportH };
 
     const LOCALE_OPTIONS: Locale[] = [...LOCALES];
     y = this.drawCycleRow<Locale>(
@@ -1141,11 +1173,11 @@ export class MainMenu {
       QUALITY_OPTIONS.indexOf(this.visualQuality) / (QUALITY_OPTIONS.length - 1),
     );
 
-    y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.playerColor'), themeSettings.playerColor, (v) => {
+    y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.playerColor'), themeSettings.playerColor, themeSettings.enemyColor, false, (v) => {
       themeSettings.playerColor = v;
       applyThemeColors();
     });
-    y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.enemyColor'), themeSettings.enemyColor, (v) => {
+    y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.enemyColor'), themeSettings.enemyColor, themeSettings.playerColor, true, (v) => {
       themeSettings.enemyColor = v;
       applyThemeColors();
     });
@@ -1168,6 +1200,12 @@ export class MainMenu {
     ctx.fillText(tr('settings.fontNote'), cx, y + 36);
 
     this.drawDiscordButton(ctx, cx, y + 86);
+
+    this.menuInputOffsetY = 0;
+    this.menuInputViewport = null;
+    ctx.restore();
+
+    if (maxScroll > 0) this.drawSettingsScrollbar(ctx, w, viewportTop, viewportH, maxScroll);
 
     this.drawButtonRow(ctx, [
       { label: tr('common.back'), action: () => this.setState('title'), emphasis: true },
@@ -1319,6 +1357,8 @@ export class MainMenu {
     h: number,
     label: string,
     value: ThemeColorId,
+    excluded: ThemeColorId,
+    hostile: boolean,
     onChange: (v: ThemeColorId) => void,
   ): number {
     this.drawRowLabel(ctx, x, y, label);
@@ -1333,11 +1373,103 @@ export class MainMenu {
     ctx.font = gameFont(18);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = colorToCSS(TextColors.normal, 0.95);
+    const selectedColor = themeColor(value);
+    ctx.fillStyle = colorToCSS(selectedColor, 0.95);
+    ctx.shadowColor = colorToCSS(selectedColor, 0.65);
+    ctx.shadowBlur = 7;
     ctx.fillText(themeColorLabel(value), bodyRect.x + bodyRect.w / 2, y);
-    if (this.handleClick(leftRect)) onChange(cycleThemeColor(value, -1));
-    if (this.handleClick(rightRect) || this.handleClick(bodyRect)) onChange(cycleThemeColor(value, 1));
+    ctx.shadowBlur = 0;
+    this.drawColorShipWaypoint(ctx, valX + valW + 31, y, selectedColor, hostile);
+    if (this.handleClick(leftRect)) onChange(cycleThemeColor(value, -1, excluded));
+    if (this.handleClick(rightRect) || this.handleClick(bodyRect)) onChange(cycleThemeColor(value, 1, excluded));
     return y + h;
+  }
+
+  private drawSettingsScrollbar(ctx: CanvasRenderingContext2D, w: number, trackY: number, trackH: number, maxScroll: number): void {
+    const track: HitRect = { x: w - 25, y: trackY, w: 10, h: trackH };
+    const totalH = trackH + maxScroll;
+    const thumbH = Math.max(34, trackH * (trackH / totalH));
+    const travel = trackH - thumbH;
+    const thumbY = trackY + (this.settingsScroll / maxScroll) * travel;
+    const thumb: HitRect = { x: track.x - 5, y: thumbY, w: track.w + 10, h: thumbH };
+    const rawX = this.rawMouseX();
+    const rawY = this.rawMouseY();
+
+    if (this.mousePressedLatched && pointInRect(this.mouseXLatched, this.mouseYLatched, thumb)) {
+      this.settingsScrollbarDragging = true;
+      this.settingsScrollbarGrabOffset = this.mouseYLatched - thumbY;
+      this.mousePressedLatched = false;
+    } else if (this.mousePressedLatched && pointInRect(this.mouseXLatched, this.mouseYLatched, track)) {
+      this.settingsScroll = Math.max(0, Math.min(maxScroll, ((this.mouseYLatched - trackY - thumbH * 0.5) / travel) * maxScroll));
+      this.settingsScrollbarDragging = true;
+      this.settingsScrollbarGrabOffset = thumbH * 0.5;
+      this.mousePressedLatched = false;
+    }
+    if (this.settingsScrollbarDragging && Input.mouseDown) {
+      this.settingsScroll = Math.max(0, Math.min(maxScroll, ((rawY - trackY - this.settingsScrollbarGrabOffset) / travel) * maxScroll));
+    }
+
+    ctx.save();
+    ctx.fillStyle = colorToCSS(Colors.menu_background, 0.78);
+    ctx.fillRect(track.x, track.y, track.w, track.h);
+    ctx.strokeStyle = MENU_ACCENT_CYAN + '0.48)';
+    ctx.strokeRect(track.x + 0.5, track.y + 0.5, track.w - 1, track.h - 1);
+    const gradient = ctx.createLinearGradient(thumb.x, thumbY, thumb.x + thumb.w, thumbY);
+    gradient.addColorStop(0, MENU_ACCENT_CYAN + '0.78)');
+    gradient.addColorStop(1, MENU_ACCENT_PINK + '0.82)');
+    ctx.shadowColor = MENU_ACCENT_CYAN + '0.75)';
+    ctx.shadowBlur = pointInRect(rawX, rawY, thumb) || this.settingsScrollbarDragging ? 13 : 6;
+    ctx.fillStyle = gradient;
+    ctx.fillRect(thumb.x, thumbY, thumb.w, thumbH);
+    ctx.restore();
+  }
+
+  private drawColorShipWaypoint(ctx: CanvasRenderingContext2D, x: number, y: number, color: { r: number; g: number; b: number; intensity: number }, hostile: boolean): void {
+    const orbitRadius = 13;
+    const angle = this.animTime * 2.15;
+    const shipX = x + Math.cos(angle) * orbitRadius;
+    const shipY = y + Math.sin(angle) * orbitRadius * 0.55;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = colorToCSS(color, 0.38);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.ellipse(x, y, orbitRadius, orbitRadius * 0.55, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const pulse = 1 + Math.sin(this.animTime * 4.5) * 0.18;
+    ctx.strokeStyle = colorToCSS(color, 0.82);
+    ctx.beginPath();
+    ctx.arc(x, y, 3.4 * pulse, 0, Math.PI * 2);
+    ctx.moveTo(x - 6, y);
+    ctx.lineTo(x + 6, y);
+    ctx.moveTo(x, y - 6);
+    ctx.lineTo(x, y + 6);
+    ctx.stroke();
+
+    ctx.translate(shipX, shipY);
+    ctx.rotate(angle + Math.PI / 2);
+    ctx.shadowColor = colorToCSS(color, 0.9);
+    ctx.shadowBlur = 7;
+    const fighterRadius = 6.5;
+    drawTerranFighterHull(ctx, fighterRadius, color, hostile, 0.92);
+    const enginePulse = 0.5 + 0.5 * Math.sin(this.animTime * 5.3);
+    ctx.fillStyle = colorToCSS(color, 0.18 + enginePulse * 0.10);
+    ctx.beginPath();
+    ctx.arc(-fighterRadius * 0.7, 0, fighterRadius * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = colorToCSS(color, 0.88);
+    ctx.beginPath();
+    ctx.arc(0, 0, fighterRadius * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = colorToCSS(Colors.particles_switch, 0.34);
+    ctx.beginPath();
+    ctx.arc(-fighterRadius * 0.09, -fighterRadius * 0.09, fighterRadius * 0.14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   // -------------------------------------------------------------------
@@ -1478,7 +1610,13 @@ export class MainMenu {
     ctx.fillStyle = colorToCSS(TextColors.normal, 0.85);
     ctx.fillText(fmt(value), sx + sw + 12, y);
 
-    if (this.handleClick(track) || (Input.mouseDown && pointInRect(this.mouseX(), this.mouseY(), track))) {
+    const sliderKey = `${this.state}:${label}:${x}`;
+    if (this.mousePressedLatched && this.menuPointerInRect(this.mouseXLatched, this.mouseYLatched, track)) {
+      this.sliderDraggingKey = sliderKey;
+      this.mousePressedLatched = false;
+      this.clickPulse = { rect: track, t: 0.18 };
+    }
+    if (this.sliderDraggingKey === sliderKey && Input.mouseDown) {
       const tt = Math.max(0, Math.min(1, (this.mouseX() - sx) / sw));
       let v = min + tt * (max - min);
       v = Math.round(v / step) * step;
@@ -2999,7 +3137,7 @@ export class MainMenu {
    */
   private handleClick(rect: HitRect): boolean {
     if (!this.mousePressedLatched) return false;
-    if (!pointInRect(this.mouseXLatched, this.mouseYLatched, rect)) return false;
+    if (!this.menuPointerInRect(this.mouseXLatched, this.mouseYLatched, rect)) return false;
     Audio.playSound('menuselection');
     this.clickPulse = { rect, t: 0.18 };
     this.mousePressedLatched = false;
@@ -3008,11 +3146,24 @@ export class MainMenu {
   }
 
   private mouseX(): number {
-    return Input.mousePos.x / Math.max(0.01, this.uiZoom);
+    return this.rawMouseX();
   }
 
   private mouseY(): number {
+    return this.rawMouseY() + this.menuInputOffsetY;
+  }
+
+  private rawMouseX(): number {
+    return Input.mousePos.x / Math.max(0.01, this.uiZoom);
+  }
+
+  private rawMouseY(): number {
     return Input.mousePos.y / Math.max(0.01, this.uiZoom);
+  }
+
+  private menuPointerInRect(x: number, y: number, rect: HitRect): boolean {
+    if (this.menuInputViewport && !pointInRect(x, y - this.menuInputOffsetY, this.menuInputViewport)) return false;
+    return pointInRect(x, y, rect);
   }
 }
 
