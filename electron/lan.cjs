@@ -111,13 +111,20 @@ function createLanOwner(loadModulesFn) {
 
   /**
    * Re-derive the discovery advertisement from the *current* lobby snapshot
-   * and push it to the discovery broadcaster. Called once right after
-   * hosting starts, and again every time the lobby actually changes
-   * (onLobbyChanged/onMatchStarted) — event-driven, not a polling loop — so
-   * "Find LAN Games" always reflects live slot counts and match state.
+   * and push it to the discovery broadcaster. Called once the authenticated
+   * local host connection is established (onHostConnected), and again every
+   * time the lobby actually changes thereafter (onLobbyChanged/
+   * onMatchStarted) — event-driven, not a polling loop — so "Find LAN
+   * Games" always reflects live slot counts and match state.
+   *
+   * Deliberately refuses to advertise until `isHostConnected()` is true:
+   * between the WebSocket relay opening and the local renderer completing
+   * its host-token handshake, slot 0 is still open and the lobby isn't
+   * real yet — nothing should be discoverable during that window.
    */
   function syncAdvertisement() {
     if (!activeHost || !discovery) return;
+    if (!activeHost.isHostConnected()) return;
     const lobby = activeHost.getLobbySnapshot();
     const occupiedHumanSlots = lobby.slots.filter((s) => s.type === 'human').length;
     const aiSlots = lobby.slots.filter((s) => s.type === 'ai').length;
@@ -163,6 +170,7 @@ function createLanOwner(loadModulesFn) {
         build,
         hostToken,
         logger: console,
+        onHostConnected: () => syncAdvertisement(),
         onLobbyChanged: () => syncAdvertisement(),
         onMatchStarted: () => syncAdvertisement(),
         onHostDisconnected: () => {
@@ -188,7 +196,11 @@ function createLanOwner(loadModulesFn) {
       console.warn('[LAN] Discovery failed to start while hosting:', describeStartError(err));
     }
 
-    syncAdvertisement();
+    // Deliberately no syncAdvertisement() call here: the local renderer
+    // hasn't connected with its hostToken yet at this point (it only does
+    // so after receiving this very IPC response), so the lobby isn't real
+    // yet. The first advertisement fires from onHostConnected above, once
+    // the authenticated host is actually in slot 0.
 
     return {
       ok: true,

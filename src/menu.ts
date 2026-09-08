@@ -1878,8 +1878,16 @@ export class MainMenu {
     this._discoveredLobbies = initial?.lobbies ?? [];
   }
 
-  /** Stop discovery listening when leaving every LAN menu screen. Safe to call repeatedly. */
+  /**
+   * Stop discovery listening when leaving every LAN menu screen, and fully
+   * tear down the subscription: unsubscribe onDiscoveredGamesChanged and
+   * clear the handle, so re-opening Find LAN Games subscribes exactly once
+   * again rather than accumulating listeners or leaving a stale one bound
+   * to a screen the player already left. Safe to call repeatedly.
+   */
   private stopLanDiscoveryListening(): void {
+    this._lanDiscoveryUnsub?.();
+    this._lanDiscoveryUnsub = null;
     if (!this._lanDiscoveryListening) return;
     this._lanDiscoveryListening = false;
     void this.lanBridge?.stopDiscovery();

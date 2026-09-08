@@ -218,7 +218,7 @@ export class LanClient {
       const reason = ev.reason || 'Connection closed';
       this.state = 'disconnected';
       this.ws = null;
-      this.clearConnectTimeout();
+      this.finalizeHandshake();
       this.stopHeartbeat();
       this.onDisconnected?.(reason);
     };
@@ -227,6 +227,7 @@ export class LanClient {
       if (this.generation !== myGeneration) return;
       this.lastError = 'WebSocket error — the host may be offline or unreachable.';
       this.state = 'error';
+      this.finalizeHandshake();
       this.onError?.(this.lastError);
     };
   }
@@ -234,14 +235,25 @@ export class LanClient {
   disconnect(): void {
     // Invalidate any in-flight callbacks from this attempt immediately.
     this.generation++;
-    this.teardownSocket();
+    this.teardownSocket(); // also finalizes the handshake (timers cleared, phase settled)
     this.state = 'disconnected';
+  }
+
+  /**
+   * Cancel every pending handshake timer (connect + join) and mark the
+   * handshake phase settled. This is the one place that guarantees no
+   * stale timer can fire later — call it on every terminal transition:
+   * the socket closing, erroring, being torn down, or the handshake
+   * completing (welcome / join_rejected). Idempotent.
+   */
+  private finalizeHandshake(): void {
+    this.clearConnectTimeout();
+    this.clearJoinTimeout();
     this.phase = 'settled';
   }
 
   private teardownSocket(): void {
-    this.clearConnectTimeout();
-    this.clearJoinTimeout();
+    this.finalizeHandshake();
     this.stopHeartbeat();
     if (this.ws) {
       // Detach handlers first so a close triggered by us doesn't fire a
@@ -329,9 +341,7 @@ export class LanClient {
         this.hostProtocolVersion = m.protocolVersion;
         this.hostBuild = m.build;
         this.state = 'lobby';
-        this.phase = 'settled';
-        this.clearConnectTimeout();
-        this.clearJoinTimeout();
+        this.finalizeHandshake();
         this.onLobbyUpdate?.(m.lobby);
         break;
       }
@@ -341,8 +351,7 @@ export class LanClient {
         break;
       }
       case 'join_rejected': {
-        this.phase = 'settled';
-        this.clearJoinTimeout();
+        this.finalizeHandshake();
         this.lastError = msg.reason;
         this.state = 'error';
         this.onJoinRejected?.(msg.reason);

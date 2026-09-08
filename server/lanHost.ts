@@ -94,6 +94,15 @@ export interface LanHostOptions {
   hostToken?: string;
   /** Called whenever the lobby state changes (join/leave/ready/config/etc). */
   onLobbyChanged?: (lobby: LobbyState) => void;
+  /**
+   * Called exactly once, the moment the *authenticated* designated host
+   * connection is welcomed into slot 0 (i.e. `isHostConnected()` just
+   * became true). Distinct from `onLobbyChanged` so callers that gate
+   * something on host readiness — e.g. Electron only starting UDP
+   * advertising once the lobby is actually real — don't have to
+   * special-case the first lobby-changed event.
+   */
+  onHostConnected?: (lobby: LobbyState) => void;
   /** Called once the match starts. */
   onMatchStarted?: () => void;
   /** Called when the server has fully stopped (port released). */
@@ -287,6 +296,7 @@ export function startLanHostServer(options: LanHostOptions = {}): Promise<LanHos
           };
           send(ws, welcome);
           log.log(`[LAN] Host connected: ${clientId}`);
+          options.onHostConnected?.(getLobbyState());
         } else {
           const sc: MsgServerConnected = {
             type: 'server_connected', clientId, protocolVersion: LAN_PROTOCOL_VERSION, build,

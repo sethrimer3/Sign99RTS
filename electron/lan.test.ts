@@ -73,6 +73,23 @@ describe('electron/lan.cjs — real host lifecycle', () => {
     expect(client.mySlot).toBe(0);
   });
 
+  it('rejects a join attempt from a remote-looking client that arrives before the local host connects', async () => {
+    const result = await owner.startHost({ hostName: 'Test Owner', port: 0 });
+    expect(result.ok).toBe(true);
+
+    // A second client connects with no token at all (as any real remote
+    // machine on the LAN would) before the local renderer has presented
+    // its hostToken.
+    const early = new LanClient(`ws://127.0.0.1:${result.port}`);
+    clients.push(early);
+    let rejection = '';
+    early.onJoinRejected = (reason) => { rejection = reason; };
+    early.onServerReady = () => early.sendJoinRequest('TooEarly');
+    early.connect();
+    await waitFor(() => rejection.length > 0);
+    expect(rejection).toBe('Waiting for the host to finish connecting. Try again in a moment.');
+  });
+
   it('stopHost is idempotent and actually releases the port for an immediate restart', async () => {
     const first = await owner.startHost({ port: 0 });
     const port = first.port!;
@@ -106,11 +123,12 @@ describe('electron/lan.cjs — real host lifecycle', () => {
 describe('electron/lan.cjs — event-driven discovery advertisement (fake modules)', () => {
   function makeFakeModules() {
     const advertiseCalls: unknown[] = [];
+    let hostConnected = false;
     let lobbySnapshot = {
-      slots: [
-        { slotIndex: 0, type: 'human' }, // host
-        ...Array.from({ length: 7 }, (_, i) => ({ slotIndex: i + 1, type: 'open' })),
-      ],
+      // Slot 0 is only actually "human" once the fake host connection is
+      // simulated (setHostConnected(true)) — mirrors the real relay, where
+      // slot 0 is assigned only on the authenticated welcome.
+      slots: Array.from({ length: 8 }, (_, i) => ({ slotIndex: i, type: 'open' })),
       matchStarted: false,
     };
     let capturedOptions: Record<string, unknown> = {};
@@ -119,7 +137,7 @@ describe('electron/lan.cjs — event-driven discovery advertisement (fake module
       port: 8787,
       lobbyId: 'lobby_fake',
       getLobbySnapshot: () => lobbySnapshot,
-      isHostConnected: () => true,
+      isHostConnected: () => hostConnected,
       stop: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -147,23 +165,82 @@ describe('electron/lan.cjs — event-driven discovery advertisement (fake module
 
     const loader = async () => [fakeHostMod, fakeDiscoveryMod, fakeVersionMod, fakeHostTokenMod];
 
+    /** Simulate the authenticated local host connection completing (or being lost). */
+    function setHostConnected(value: boolean): void {
+      hostConnected = value;
+      if (value) {
+        lobbySnapshot = {
+          slots: [
+            { slotIndex: 0, type: 'human' },
+            ...Array.from({ length: 7 }, (_, i) => ({ slotIndex: i + 1, type: 'open' })),
+          ],
+          matchStarted: false,
+        };
+      }
+    }
+
     return {
       loader,
       advertiseCalls,
       fakeHandle,
       fakeDiscovery,
       setLobby: (next: typeof lobbySnapshot) => { lobbySnapshot = next; },
-      getCapturedOptions: () => capturedOptions,
+      setHostConnected,
+      getCapturedOptions: () => capturedOptions as {
+        onHostConnected?: () => void;
+        onLobbyChanged?: () => void;
+        onMatchStarted?: () => void;
+        onHostDisconnected?: () => void;
+      },
     };
   }
 
-  it('advertises once at startup and again whenever the lobby changes (event-driven, not polled)', async () => {
+  it('does not advertise a joinable lobby before the local host connects (startHost() alone)', async () => {
     const fx = makeFakeModules();
     const owner = createLanOwner(fx.loader);
 
     await owner.startHost({ hostName: 'Fake Host', port: 8787 });
+
+    // The relay is up (startLanHostServer resolved) but nobody has
+    // authenticated as host yet — slot 0 is still open. Nothing should
+    // have been broadcast.
+    expect(fx.advertiseCalls).toHaveLength(0);
+    expect(fx.fakeHandle.isHostConnected()).toBe(false);
+
+    await owner.stopHost();
+  });
+
+  it('the authenticated host connection triggers the first advertisement, with correct slot counts', async () => {
+    const fx = makeFakeModules();
+    const owner = createLanOwner(fx.loader);
+    await owner.startHost({ hostName: 'Fake Host', port: 8787 });
+    expect(fx.advertiseCalls).toHaveLength(0);
+
+    // Simulate the local renderer's hostToken handshake completing —
+    // server/lanHost.ts calls onHostConnected exactly here in production.
+    fx.setHostConnected(true);
+    fx.getCapturedOptions().onHostConnected?.();
+
     expect(fx.advertiseCalls).toHaveLength(1);
-    expect(fx.advertiseCalls[0]).toMatchObject({ openSlots: 7, occupiedHumanSlots: 1, aiSlots: 0, matchStarted: false });
+    expect(fx.advertiseCalls[0]).toMatchObject({
+      openSlots: 7,
+      occupiedHumanSlots: 1,
+      aiSlots: 0,
+      matchStarted: false,
+    });
+
+    await owner.stopHost();
+  });
+
+  it('later lobby changes still advertise correctly after the initial host-connected advertisement', async () => {
+    const fx = makeFakeModules();
+    const owner = createLanOwner(fx.loader);
+
+    await owner.startHost({ hostName: 'Fake Host', port: 8787 });
+    fx.setHostConnected(true);
+    const opts = fx.getCapturedOptions();
+    opts.onHostConnected?.();
+    expect(fx.advertiseCalls).toHaveLength(1);
 
     // Simulate a second player joining: onLobbyChanged fires with a fresh snapshot.
     fx.setLobby({
@@ -174,7 +251,6 @@ describe('electron/lan.cjs — event-driven discovery advertisement (fake module
       ],
       matchStarted: false,
     });
-    const opts = fx.getCapturedOptions() as { onLobbyChanged?: () => void; onMatchStarted?: () => void };
     opts.onLobbyChanged?.();
 
     expect(fx.advertiseCalls).toHaveLength(2);
@@ -211,7 +287,7 @@ describe('electron/lan.cjs — event-driven discovery advertisement (fake module
     await owner.startHost({ port: 8787 });
     expect(owner.isHosting()).toBe(true);
 
-    const opts = fx.getCapturedOptions() as { onHostDisconnected?: () => void };
+    const opts = fx.getCapturedOptions();
     opts.onHostDisconnected?.();
 
     // stopHost() is async; wait for it to actually finish.
@@ -225,6 +301,9 @@ describe('electron/lan.cjs — event-driven discovery advertisement (fake module
     const fx = makeFakeModules();
     const owner = createLanOwner(fx.loader);
     await owner.startHost({ port: 8787 });
+    fx.setHostConnected(true);
+    fx.getCapturedOptions().onHostConnected?.();
+    expect(fx.advertiseCalls.length).toBeGreaterThan(0);
     for (const call of fx.advertiseCalls) {
       expect(JSON.stringify(call)).not.toContain('fake-token');
     }

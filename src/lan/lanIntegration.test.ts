@@ -461,6 +461,45 @@ describe('LanClient bounded connection timeouts', () => {
     expect(client.state).toBe('error');
   });
 
+  it('does not fire a stale join-timeout error after the socket closes mid-join', async () => {
+    // Regression test: server_connected -> join_request -> the socket
+    // closes before any welcome/join_rejected arrives. The client must
+    // report a clean disconnect and must NOT later fire a
+    // "did not complete the join request" error from the now-orphaned
+    // join timer.
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    await new Promise<void>((resolve) => wss.once('listening', resolve));
+    extraServers.push({ close: () => wss.close() });
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'server_connected', clientId: 'fake', protocolVersion: LAN_PROTOCOL_VERSION, build: 'x' }));
+      ws.on('message', () => {
+        // Close the socket instead of ever answering the join_request.
+        ws.close();
+      });
+    });
+    const addr = wss.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+    // Join timeout is deliberately longer than how long we'll actually wait,
+    // so if it fires at all, it can only be the stale timer this test guards against.
+    const client = new LanClient(`ws://127.0.0.1:${port}`, { joinTimeoutMs: 300 });
+    clients.push(client);
+    let errorMessage = '';
+    let disconnectedReason = '';
+    client.onError = (msg) => { errorMessage = msg; };
+    client.onDisconnected = (reason) => { disconnectedReason = reason; };
+    client.onServerReady = () => client.sendJoinRequest('Stuck');
+    client.connect();
+
+    await waitFor(() => disconnectedReason.length > 0);
+    expect(client.state).toBe('disconnected');
+
+    // Wait well past the join timeout window — the stale timer must not fire.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(errorMessage).toBe('');
+    expect(client.state).toBe('disconnected');
+  });
+
   it('a normal join cancels the join-response timeout (no spurious late error)', async () => {
     host = await startLanHostServer({ port: 0, build: 'Build TEST' });
     const url = `ws://127.0.0.1:${host.port}`;
