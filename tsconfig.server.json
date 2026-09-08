@@ -13,5 +13,13 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false
   },
-  "include": ["server/**/*.ts", "src/lan/protocol.ts"]
+  "include": [
+    "server/**/*.ts",
+    "src/lan/protocol.ts",
+    "src/lan/discovery.ts",
+    "src/lan/lanLobby.ts",
+    "src/lan/lanAddress.ts",
+    "src/version.ts"
+  ],
+  "exclude": ["server/**/*.test.ts"]
 }

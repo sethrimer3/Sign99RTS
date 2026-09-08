@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npx tsc --noEmit && npx vite build",
+    "dev:host": "vite --host",
+    "build": "npx tsc --noEmit && npx vite build && npm run build:server",
+    "build:server": "npx tsc --project tsconfig.server.json",
     "desktop": "npm run build && electron electron/main.cjs",
     "electron": "npm run desktop",
     "electron:debug": "npm run build && electron electron/main.cjs --devtools",
@@ -13,7 +15,7 @@
     "typecheck": "npx tsc --noEmit",
     "typecheck:server": "npx tsc --project tsconfig.server.json --noEmit",
     "lan:server": "tsx server/lanServer.ts",
-    "dev:lan": "concurrently \"npm run dev\" \"npm run lan:server\"",
+    "dev:lan": "concurrently \"npm run dev:host\" \"npm run lan:server\"",
     "test": "vitest run",
     "test:watch": "vitest"
   },

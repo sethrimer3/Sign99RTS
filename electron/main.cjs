@@ -1,11 +1,9 @@
 const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { spawn } = require('node:child_process');
-const net = require('node:net');
-const http = require('node:http');
 
 const steamBridge = require('./steam/steamworksBridge.cjs');
+const lan = require('./lan.cjs');
 
 // Enable the Steam overlay for Electron (appends GPU command-line switches, so
 // must run before app is ready). Safe no-op if the native addon is missing.
@@ -19,13 +17,7 @@ const REPO_ROOT = path.join(__dirname, '..');
 const DIST_INDEX = path.join(REPO_ROOT, 'dist', 'index.html');
 const USER_DATA_DIR = path.join(REPO_ROOT, '.electron-user-data');
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
-const LAN_SERVER_ENTRY = path.join(REPO_ROOT, 'server', 'lanServer.ts');
 const APP_ICON_PATH = path.resolve(REPO_ROOT, 'ASSETS', 'icon', 'Sign99_Icon.ico');
-const LAN_PORT = parseInt(process.env.LAN_PORT ?? '8787', 10);
-const LAN_DISCOVERY_HTTP_PORT = parseInt(process.env.LAN_DISCOVERY_HTTP_PORT ?? '8788', 10);
-const SHOULD_AUTO_START_LAN_HELPER =
-  process.env.SIGN99_AUTO_START_LAN_HELPER !== '0' &&
-  process.env.SIGN99_AUTO_START_LAN_HELPER !== 'false';
 const OPEN_DEVTOOLS =
   process.argv.includes('--devtools') ||
   process.env.ELECTRON_DEBUG === '1' ||
@@ -36,153 +28,49 @@ const DISABLE_GPU =
   process.env.SIGN99_DISABLE_GPU === '1' ||
   process.env.SIGN99_DISABLE_GPU === 'true';
 
-/** @type {import('node:child_process').ChildProcessWithoutNullStreams | null} */
-let lanHelperProcess = null;
-let lanHelperStarting = false;
-
 app.setPath('userData', USER_DATA_DIR);
 
 if (DISABLE_GPU) {
   app.disableHardwareAcceleration();
 }
 
-function probeTcpPort(port, host = '127.0.0.1', timeoutMs = 350) {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    let settled = false;
-    const finish = (open) => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      resolve(open);
-    };
-    socket.setTimeout(timeoutMs);
-    socket.once('connect', () => finish(true));
-    socket.once('timeout', () => finish(false));
-    socket.once('error', () => finish(false));
-    socket.connect(port, host);
+// ---------------------------------------------------------------------------
+// LAN networking IPC — the desktop game owns its own LAN relay + discovery
+// (see electron/lan.cjs). No external process, no tsx, no dev server.
+//
+// Hosting is never started automatically at app launch: it starts only when
+// the renderer explicitly asks (the player clicked "Host LAN Lobby"), and
+// stops cleanly when the renderer asks or the app quits. Discovery
+// *listening* is cheap and may run independently while the multiplayer
+// menu is open, regardless of whether this machine is also hosting.
+// ---------------------------------------------------------------------------
+
+function broadcastDiscoveredGames(win, lobbies) {
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('sign99:lan:discovered-changed', lobbies);
+  }
+}
+
+function installLanIpc(win) {
+  lan.setDiscoveredGamesListener((lobbies) => broadcastDiscoveredGames(win, lobbies));
+
+  ipcMain.handle('sign99:lan:start-host', async (_event, opts) => {
+    return lan.startHost(opts || {});
   });
-}
-
-function probeLanHelperHttp(timeoutMs = 500) {
-  return new Promise((resolve) => {
-    const req = http.get(
-      {
-        host: '127.0.0.1',
-        port: LAN_DISCOVERY_HTTP_PORT,
-        path: '/lan/self',
-        timeout: timeoutMs,
-      },
-      (res) => {
-        res.resume();
-        resolve(res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 500);
-      },
-    );
-    req.once('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
-    req.once('error', () => resolve(false));
+  ipcMain.handle('sign99:lan:stop-host', async () => {
+    await lan.stopHost();
+    return { ok: true };
   });
-}
-
-async function waitForLanHelperHttp(timeoutMs = 5000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (await probeLanHelperHttp(500)) return true;
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
-  return false;
-}
-
-function resolveTsxCommand() {
-  const isWindows = process.platform === 'win32';
-  const localTsx = path.join(REPO_ROOT, 'node_modules', '.bin', isWindows ? 'tsx.cmd' : 'tsx');
-  if (fs.existsSync(localTsx)) {
-    return { command: localTsx, args: [LAN_SERVER_ENTRY], shell: isWindows };
-  }
-  return {
-    command: isWindows ? 'npm.cmd' : 'npm',
-    args: ['run', 'lan:server'],
-    shell: isWindows,
-  };
-}
-
-async function ensureLanHelperRunning() {
-  if (!SHOULD_AUTO_START_LAN_HELPER) {
-    console.log('[Sign99 Electron] LAN helper auto-start disabled by SIGN99_AUTO_START_LAN_HELPER.');
-    return false;
-  }
-  if (lanHelperProcess && !lanHelperProcess.killed) return true;
-  if (lanHelperStarting) return false;
-
-  lanHelperStarting = true;
-  try {
-    if (await probeLanHelperHttp()) {
-      console.log('[Sign99 Electron] Existing LAN helper detected on localhost.');
-      return true;
-    }
-
-    const portInUse = await probeTcpPort(LAN_PORT);
-    if (portInUse) {
-      console.warn(`[Sign99 Electron] LAN port ${LAN_PORT} is already in use, but the discovery helper on ${LAN_DISCOVERY_HTTP_PORT} did not answer. Not starting another helper.`);
-      return false;
-    }
-
-    if (!fs.existsSync(LAN_SERVER_ENTRY)) {
-      console.warn(`[Sign99 Electron] LAN helper entry not found: ${LAN_SERVER_ENTRY}`);
-      return false;
-    }
-
-    const { command, args, shell } = resolveTsxCommand();
-    console.log(`[Sign99 Electron] Starting LAN helper: ${command} ${args.join(' ')}`);
-
-    lanHelperProcess = spawn(command, args, {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        SIGN99_ELECTRON_LAN_HELPER: '1',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      shell,
-    });
-
-    lanHelperProcess.stdout.on('data', (data) => {
-      process.stdout.write(`[Sign99 LAN helper] ${data}`);
-    });
-    lanHelperProcess.stderr.on('data', (data) => {
-      process.stderr.write(`[Sign99 LAN helper] ${data}`);
-    });
-    lanHelperProcess.once('exit', (code, signal) => {
-      console.log(`[Sign99 Electron] LAN helper exited with code=${code ?? 'null'} signal=${signal ?? 'null'}.`);
-      lanHelperProcess = null;
-    });
-    lanHelperProcess.once('error', (err) => {
-      console.error('[Sign99 Electron] Failed to start LAN helper:', err);
-      lanHelperProcess = null;
-    });
-
-    return waitForLanHelperHttp();
-  } finally {
-    lanHelperStarting = false;
-  }
-}
-
-ipcMain.handle('sign99:ensure-lan-helper', async () => {
-  const ok = await ensureLanHelperRunning();
-  return { ok };
-});
-
-function stopLanHelper() {
-  if (!lanHelperProcess || lanHelperProcess.killed) return;
-  console.log('[Sign99 Electron] Stopping LAN helper.');
-  lanHelperProcess.kill('SIGINT');
-  setTimeout(() => {
-    if (lanHelperProcess && !lanHelperProcess.killed) {
-      lanHelperProcess.kill();
-    }
-  }, 1500).unref();
+  ipcMain.handle('sign99:lan:start-discovery', async () => {
+    return lan.startDiscoveryListening();
+  });
+  ipcMain.handle('sign99:lan:stop-discovery', async () => {
+    lan.stopDiscoveryListening();
+    return { ok: true };
+  });
+  ipcMain.handle('sign99:lan:get-discovered', async () => {
+    return { lobbies: lan.getDiscoveredGames() };
+  });
 }
 
 function joinCspDirectives(directives) {
@@ -292,10 +180,10 @@ app.on('second-instance', (_event, argv) => {
 
 app.whenReady().then(() => {
   installElectronCsp();
-  void ensureLanHelperRunning();
   createWindow();
   const win = BrowserWindow.getAllWindows()[0];
   if (win) {
+    installLanIpc(win);
     // Lazy init: the bridge only calls steamworks.init() when the renderer first
     // asks (Multiplayer menu). Pass { eager: true } to init at boot instead.
     steamBridge.attach(win, { eager: process.env.SIGN99_STEAM_EAGER === '1' });
@@ -309,7 +197,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
-  stopLanHelper();
+  lan.disposeAll();
   steamBridge.dispose();
 });
 

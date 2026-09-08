@@ -48,6 +48,10 @@ export interface LobbyState {
 export interface MsgJoinRequest {
   type: 'join_request';
   playerName: string;
+  /** Client's LAN protocol version, so the host can reject incompatible builds with a clear reason. */
+  protocolVersion?: number;
+  /** Human-readable build label (e.g. "Build 055"), surfaced in mismatch errors. */
+  build?: string;
 }
 
 export interface MsgReadyToggle {
@@ -195,6 +199,9 @@ export interface SerializedBuilding {
 export interface MsgServerConnected {
   type: 'server_connected';
   clientId: string;
+  /** The host's LAN protocol version, so clients can self-check before joining. */
+  protocolVersion: number;
+  build: string;
 }
 
 /** Server assigns this client an id, role, and slot after successful join */
@@ -204,6 +211,8 @@ export interface MsgWelcome {
   isHost: boolean;
   slotIndex: number;
   lobby: LobbyState;
+  protocolVersion: number;
+  build: string;
 }
 
 /** Lobby state changed */
@@ -305,7 +314,17 @@ export type ServerMessage =
 
 
 export const DEFAULT_LAN_PORT = 8787;
-export const DISCOVERY_PROTOCOL_VERSION = 1;
+
+/**
+ * Single network-protocol version shared by the WebSocket lobby handshake
+ * (join_request / welcome / server_connected) and the UDP discovery
+ * advertisement. Bump this whenever a wire-incompatible change is made to
+ * either; mismatched clients/hosts are rejected with a human-readable error
+ * instead of silently misbehaving.
+ */
+export const LAN_PROTOCOL_VERSION = 2;
+/** @deprecated use LAN_PROTOCOL_VERSION — kept as an alias for older references. */
+export const DISCOVERY_PROTOCOL_VERSION = LAN_PROTOCOL_VERSION;
 
 export interface LanDiscoveryAdvertisement {
   type: 'sign99_lan_advertise';

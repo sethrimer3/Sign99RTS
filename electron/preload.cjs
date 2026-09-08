@@ -1,8 +1,30 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Existing LAN helper bridge (unchanged).
+// ---------------------------------------------------------------------------
+// LAN bridge.
+//
+// Narrow, explicit surface — the renderer never gets raw Node networking
+// objects. All actual LAN networking (WebSocket relay, UDP discovery) runs
+// in the Electron main process (electron/lan.cjs); this just forwards
+// requests and discovery-changed pushes across the context bridge.
+// ---------------------------------------------------------------------------
 contextBridge.exposeInMainWorld('sign99Lan', {
-  ensureHelper: () => ipcRenderer.invoke('sign99:ensure-lan-helper'),
+  /** Start hosting a LAN lobby. Resolves { ok, port, lobbyId, wsUrl } or { ok: false, error }. */
+  startHost: (opts) => ipcRenderer.invoke('sign99:lan:start-host', opts),
+  /** Stop hosting (safe to call even if not hosting). */
+  stopHost: () => ipcRenderer.invoke('sign99:lan:stop-host'),
+  /** Begin listening for other LAN hosts' advertisements. */
+  startDiscovery: () => ipcRenderer.invoke('sign99:lan:start-discovery'),
+  /** Stop listening for advertisements. */
+  stopDiscovery: () => ipcRenderer.invoke('sign99:lan:stop-discovery'),
+  /** One-shot read of the currently known discovered lobbies. */
+  getDiscoveredGames: () => ipcRenderer.invoke('sign99:lan:get-discovered'),
+  /** Subscribe to live discovery updates. Returns an unsubscribe function. */
+  onDiscoveredGamesChanged: (handler) => {
+    const wrapped = (_e, lobbies) => handler(lobbies);
+    ipcRenderer.on('sign99:lan:discovered-changed', wrapped);
+    return () => ipcRenderer.removeListener('sign99:lan:discovered-changed', wrapped);
+  },
 });
 
 // ---------------------------------------------------------------------------

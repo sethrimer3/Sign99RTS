@@ -49,6 +49,18 @@ import {
 } from './vsaiconfig.js';
 import { LanClient } from './lan/lanClient.js';
 import type { LobbyState, LobbySlot, AIDifficulty, MsgMatchStart, LanDiscoveredLobby } from './lan/protocol.js';
+import { LAN_PROTOCOL_VERSION } from './lan/protocol.js';
+import { normalizeLanTarget } from './lan/lanAddress.js';
+
+/** Narrow LAN networking API exposed by electron/preload.cjs. Undefined in a plain browser. */
+interface Sign99LanBridge {
+  startHost(opts: { hostName?: string; port?: number }): Promise<{ ok: boolean; port?: number; lobbyId?: string; wsUrl?: string; error?: string }>;
+  stopHost(): Promise<{ ok: boolean }>;
+  startDiscovery(): Promise<{ ok: boolean; error?: string }>;
+  stopDiscovery(): Promise<{ ok: boolean }>;
+  getDiscoveredGames(): Promise<{ lobbies: LanDiscoveredLobby[] }>;
+  onDiscoveredGamesChanged(handler: (lobbies: LanDiscoveredLobby[]) => void): () => void;
+}
 import { factionLabel, RACE_SELECTIONS, type RaceSelection } from './confluence.js';
 import { WebRtcTransport, type WebRtcPeerConnectionState } from './online/webrtcTransport.js';
 import type { MultiplayerTransport } from './net/transport.js';
@@ -318,6 +330,7 @@ export class MainMenu {
   }
 
   private setState(s: MenuState): void {
+    if (s !== 'lan_browser') this.stopLanDiscoveryListening();
     this.state = s;
     this.selectedIndex = 0;
     this.rankedSliderDragging = false;
@@ -1650,94 +1663,44 @@ export class MainMenu {
   // LAN: private helpers
   // -------------------------------------------------------------------
 
+  /** Narrow bridge exposed by electron/preload.cjs — undefined in a plain browser. */
+  private get lanBridge(): Sign99LanBridge | undefined {
+    return (window as Window & { sign99Lan?: Sign99LanBridge }).sign99Lan;
+  }
+
   private async openHostLobby(): Promise<void> {
     this.setState('lan_host_lobby');
     this._lanLobby = null;
 
-    const helperAvailable = await this.checkLocalLanHelper();
-    if (!helperAvailable) {
-      this.lanClient.disconnect();
-      this.lanClient.lastError = 'LAN helper did not start. Close extra Sign99 windows, allow Node.js in Windows Firewall, then retry.';
-      return;
-    }
-    await this.resetLocalLanLobby();
-
-    this.lanClient = new LanClient('ws://localhost:8787');
-
-    this.lanClient.onLobbyUpdate = (lobby) => { this._lanLobby = lobby; };
-    this.lanClient.onMatchStart = (msg) => {
-      this._lanMatchStart = msg;
-      this.pendingLanMatchStart = msg;
-      this.pendingAction = 'start_lan_host';
-    };
-    this.lanClient.onDisconnected = () => { this._lanLobby = null; };
-    this.lanClient.connect();
-  }
-
-  private async resetLocalLanLobby(): Promise<void> {
-    try {
-      await fetch('http://localhost:8788/lan/reset', {
-        method: 'POST',
-        cache: 'no-store',
-      });
-    } catch {
-      // Older helpers do not expose reset; the WebSocket connect will still surface any real failure.
-    }
-  }
-
-  private async checkLocalLanHelper(): Promise<boolean> {
-    await this.ensureElectronLanHelper();
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
-    try {
-      const res = await fetch('http://localhost:8788/lan/self', {
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-      return res.ok;
-    } catch {
-      return false;
-    } finally {
-      window.clearTimeout(timeoutId);
-    }
-  }
-
-  private async ensureElectronLanHelper(): Promise<boolean> {
-    const api = (window as Window & {
-      sign99Lan?: { ensureHelper?: () => Promise<{ ok?: boolean }> };
-    }).sign99Lan;
-    if (!api?.ensureHelper) return false;
-    try {
-      const res = await api.ensureHelper();
-      if (!res?.ok) return false;
-      await new Promise(resolve => window.setTimeout(resolve, 500));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private connectToJoinUrl(): void {
-    if (this.lanClient.state === 'connecting' || this.lanClient.state === 'lobby') {
-      return;
-    }
-    const url = this._joinUrl.trim();
-    // Validate URL format before attempting to connect.
-    if (!url || url === 'ws://') {
-      this.lanClient.lastError = 'Please enter a valid WebSocket URL (e.g. ws://192.168.1.25:8787)';
-      return;
-    }
-    if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
-      this.lanClient.lastError = 'URL must start with ws:// or wss://';
+    const bridge = this.lanBridge;
+    if (!bridge) {
+      // Plain browser (no Electron): the LAN relay must already be running
+      // externally via `npm run dev:lan`. Connect straight to it.
+      this.beginLanConnection('ws://localhost:8787', true);
       return;
     }
 
+    this.lanClient.disconnect();
+    this.lanClient.lastError = '';
+    const result = await bridge.startHost({ hostName: this._joinName || 'Host' });
+    if (!result?.ok) {
+      this.lanClient.lastError = result?.error
+        ? `Could not start LAN hosting: ${result.error}`
+        : 'Could not start LAN hosting. Close any other Sign99RTS host and check your firewall settings.';
+      return;
+    }
+    this.beginLanConnection(result.wsUrl ?? 'ws://127.0.0.1:8787', true);
+  }
+
+  /** Shared setup for both hosting (connecting to our own freshly-started local server) and joining. */
+  private beginLanConnection(url: string, isHostConnection: boolean): void {
+    this.lanClient.disconnect();
     this.lanClient = new LanClient(url);
     this._lanLobby = null;
 
     this.lanClient.onLobbyUpdate = (lobby) => {
       this._lanLobby = lobby;
-      if (this.state === 'lan_join' || this.state === 'lan_browser') {
+      if (!isHostConnection && (this.state === 'lan_join' || this.state === 'lan_browser')) {
         this.setState('lan_client_lobby');
       }
     };
@@ -1751,24 +1714,45 @@ export class MainMenu {
     this.lanClient.onMatchStart = (msg) => {
       this._lanMatchStart = msg;
       this.pendingLanMatchStart = msg;
-      this.pendingAction = 'start_lan_client';
+      this.pendingAction = isHostConnection ? 'start_lan_host' : 'start_lan_client';
     };
-    this.lanClient.onDisconnected = () => {
+    this.lanClient.onMatchEnd = (reason) => {
       this._lanLobby = null;
-      if (this.state === 'lan_client_lobby') {
+      this.lanClient.lastError = reason;
+      if (this.state === 'lan_client_lobby' || this.state === 'lan_host_lobby') {
         this.setState('lan_type');
       }
     };
+    this.lanClient.onDisconnected = () => {
+      this._lanLobby = null;
+      if (!isHostConnection && this.state === 'lan_client_lobby') {
+        this.setState('lan_type');
+      }
+    };
+    this.lanClient.onError = (message) => {
+      this.lanClient.lastError = message;
+    };
+
+    if (!isHostConnection) {
+      // Non-host: wait for the server's explicit "ready to join" signal
+      // (server_connected) before sending join_request — this is a
+      // deterministic protocol handshake, not a race on socket-open timing.
+      this.lanClient.onServerReady = () => {
+        this.lanClient.sendJoinRequest(this._joinName || 'Player', LAN_PROTOCOL_VERSION, buildLabel());
+      };
+    }
 
     this.lanClient.connect();
-    // Wait for 'server_connected' (or 'welcome' for backwards compat) before
-    // sending join_request. The onConnected fires on socket open; after that
-    // the server sends server_connected and we send join_request.
-    this.lanClient.onConnected = () => {
-      // A brief delay ensures the server's server_connected message arrives
-      // before we try to send join_request. In practice this is sub-ms.
-      this.lanClient.sendJoinRequest(this._joinName || 'Player');
-    };
+  }
+
+  private connectToJoinUrl(): void {
+    if (this.lanClient.busy) return; // guards against duplicate rapid-click connects
+    const normalized = normalizeLanTarget(this._joinUrl);
+    if (!normalized.ok) {
+      this.lanClient.lastError = normalized.error;
+      return;
+    }
+    this.beginLanConnection(normalized.url, false);
   }
 
   // -------------------------------------------------------------------
@@ -1788,8 +1772,8 @@ export class MainMenu {
 
     // Server setup instructions
     const st = this.lanClient.state;
-    const statusText = st === 'lobby' ? `Connected — ws://localhost:8787  (your LAN IP:8787 for others)`
-      : st === 'connecting' ? 'Connecting to ws://localhost:8787 …'
+    const statusText = st === 'lobby' ? `Hosting on ${this.lanClient.url} — share your LAN IP with others`
+      : st === 'connecting' ? `Starting host at ${this.lanClient.url} …`
       : st === 'error' ? `Error: ${this.lanClient.lastError}`
       : this.lanClient.lastError ? this.lanClient.lastError
       : 'Disconnected';
@@ -1803,7 +1787,7 @@ export class MainMenu {
     if (st !== 'lobby') {
       ctx.font = gameFont(11);
       ctx.fillStyle = colorToCSS(Colors.radar_gridlines, 0.65);
-      ctx.fillText('Electron starts the LAN helper automatically. If this stays here, close extra Sign99 windows and retry.', cx, 118);
+      ctx.fillText('If this stays here, another Sign99RTS host may already be running, or a firewall is blocking the port.', cx, 118);
     }
 
     // Slots table
@@ -1826,6 +1810,7 @@ export class MainMenu {
     this.drawButtonRow(ctx, [
       { label: 'Back / Disconnect', action: () => {
         this.lanClient.disconnect();
+        void this.lanBridge?.stopHost();
         this._lanLobby = null;
         this.lanClient.lastError = '';
         this.setState('lan_type');
@@ -1841,31 +1826,48 @@ export class MainMenu {
   }
 
 
+  /** Unsubscribe handle for the current onDiscoveredGamesChanged subscription, if any. */
+  private _lanDiscoveryUnsub: (() => void) | null = null;
+  /** True while this menu has asked the Electron main process to keep listening for LAN hosts. */
+  private _lanDiscoveryListening: boolean = false;
+
   private openLanBrowser(): void {
     this._discoveredLobbies = [];
     this._lanDiscoveryError = '';
     this.setState('lan_browser');
-    void this.refreshLanDiscovery();
+    void this.startLanDiscoveryListening();
   }
 
-  private async refreshLanDiscovery(): Promise<void> {
-    this._lanDiscoveryError = '';
-    try {
-      const res = await this.fetchLanDiscovery();
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { lobbies?: LanDiscoveredLobby[] };
-      this._discoveredLobbies = Array.isArray(data.lobbies) ? data.lobbies : [];
-    } catch {
-      this._discoveredLobbies = [];
-      this._lanDiscoveryError = 'Automatic LAN discovery could not reach the local Sign99 LAN helper. You can still enter the host URL manually.';
+  /** Start (or resume) discovery listening. Safe to call repeatedly. */
+  private async startLanDiscoveryListening(): Promise<void> {
+    const bridge = this.lanBridge;
+    if (!bridge) {
+      this._lanDiscoveryError = 'Automatic LAN discovery requires the desktop app. In a browser, use Join Manually with the host’s IP address.';
+      return;
     }
+    this._lanDiscoveryError = '';
+    if (!this._lanDiscoveryUnsub) {
+      this._lanDiscoveryUnsub = bridge.onDiscoveredGamesChanged((lobbies) => {
+        this._discoveredLobbies = lobbies;
+      });
+    }
+    const result = await bridge.startDiscovery();
+    this._lanDiscoveryListening = !!result?.ok;
+    if (!result?.ok) {
+      this._lanDiscoveryError = result?.error
+        ? `LAN discovery failed to start: ${result.error}`
+        : 'LAN discovery failed to start. You can still enter the host URL manually.';
+      return;
+    }
+    const initial = await bridge.getDiscoveredGames();
+    this._discoveredLobbies = initial?.lobbies ?? [];
   }
 
-  private async fetchLanDiscovery(): Promise<Response> {
-    const first = await fetch('http://localhost:8788/lan/discovered', { cache: 'no-store' }).catch(() => null);
-    if (first) return first;
-    await this.ensureElectronLanHelper();
-    return fetch('http://localhost:8788/lan/discovered', { cache: 'no-store' });
+  /** Stop discovery listening when leaving every LAN menu screen. Safe to call repeatedly. */
+  private stopLanDiscoveryListening(): void {
+    if (!this._lanDiscoveryListening) return;
+    this._lanDiscoveryListening = false;
+    void this.lanBridge?.stopDiscovery();
   }
 
   private drawLanBrowser(ctx: CanvasRenderingContext2D, w: number, h: number): void {
@@ -1879,7 +1881,7 @@ export class MainMenu {
     ctx.fillText('FIND LAN GAMES', cx, 68);
     ctx.font = gameFont(12);
     ctx.fillStyle = colorToCSS(Colors.radar_gridlines, 0.8);
-    ctx.fillText('Detected lobbies from local discovery helper (localhost:8788)', cx, 96);
+    ctx.fillText('Hosts on your local network are detected automatically.', cx, 96);
     if (this._lanDiscoveryError) { ctx.fillStyle = colorToCSS(Colors.alert2, 0.9); ctx.fillText(this._lanDiscoveryError, cx, 122); }
     const startY = 150;
     this._discoveredLobbies.forEach((lobby, i) => {
@@ -1907,7 +1909,7 @@ export class MainMenu {
     this.drawButtonRow(ctx, [
       { label: tr('common.back'), action: () => this.setState('lan_type') },
       { label: 'Join Manually', action: () => this.setState('lan_join') },
-      { label: 'Refresh LAN Games', emphasis: true, action: () => { void this.refreshLanDiscovery(); } },
+      { label: 'Refresh LAN Games', emphasis: true, action: () => { void this.startLanDiscoveryListening(); } },
     ], cx, h - 56);
   }
 
@@ -1933,7 +1935,7 @@ export class MainMenu {
     ctx.font = gameFont(11);
     ctx.textAlign = 'center';
     ctx.fillStyle = colorToCSS(Colors.radar_gridlines, 0.6);
-    ctx.fillText('Format: ws://HOST_IP:8787  (e.g. ws://192.168.1.25:8787)', cx, 116);
+    ctx.fillText('Just the host IP works, e.g. 192.168.1.25 — or the full ws://192.168.1.25:8787', cx, 116);
 
     // ---- URL field ----
     ctx.font = gameFont(13);

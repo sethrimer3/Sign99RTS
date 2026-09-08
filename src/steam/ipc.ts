@@ -142,7 +142,9 @@ export interface Sign99SteamBridge {
 declare global {
   interface Window {
     sign99Steam?: Sign99SteamBridge;
-    sign99Lan?: { ensureHelper: () => Promise<{ ok: boolean }> };
+    // See the Sign99LanBridge interface in src/menu.ts for the full shape;
+    // left loose here so this file doesn't need to import menu.ts.
+    sign99Lan?: unknown;
   }
 }
 
