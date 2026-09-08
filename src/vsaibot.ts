@@ -44,7 +44,7 @@ import {
   MINE_INITIAL_SPEED_MIN,
   WEAPON_STATS,
 } from './constants.js';
-import { teamColor } from './teamutils.js';
+import { teamColor, isHostile } from './teamutils.js';
 import { buildingBlocksShips, buildingShipCollisionRect } from './buildingCollision.js';
 import { GRID_CELL_SIZE } from './grid.js';
 
@@ -366,24 +366,28 @@ export class VsAIDirector {
         this.memory.delete(id);
       }
     }
+    const hostile = (team: Team): boolean => isHostile(this.ship.team, team);
+
     if (fullKnowledge) {
-      // Remember every player entity instantly.
-      this.observe(state.player, state.gameTime);
+      // Remember every hostile entity instantly.
+      for (const ship of state.playerShips.values()) {
+        if (ship.alive && hostile(ship.team)) this.observe(ship, state.gameTime);
+      }
       for (const b of state.buildings) {
-        if (b.alive && b.team === Team.Player) this.observe(b, state.gameTime);
+        if (b.alive && hostile(b.team)) this.observe(b, state.gameTime);
       }
       for (const f of state.fighters) {
-        if (f.alive && f.team === Team.Player) this.observe(f, state.gameTime);
+        if (f.alive && hostile(f.team)) this.observe(f, state.gameTime);
       }
       return;
     }
-    // Limited vision: union of vision discs around AI ship + each enemy unit/building.
+    // Limited vision: union of vision discs around AI ship + each friendly unit/building.
     const observers: Vec2[] = [this.ship.position];
     for (const b of state.buildings) {
-      if (b.alive && b.team === Team.Enemy) observers.push(b.position);
+      if (b.alive && b.team === this.ship.team) observers.push(b.position);
     }
     for (const f of state.fighters) {
-      if (f.alive && f.team === Team.Enemy) observers.push(f.position);
+      if (f.alive && f.team === this.ship.team) observers.push(f.position);
     }
 
     const visible = (p: Vec2): boolean => {
@@ -393,15 +397,17 @@ export class VsAIDirector {
       return false;
     };
 
-    if (state.player.alive && visible(state.player.position)) {
-      this.observe(state.player, state.gameTime);
+    for (const ship of state.playerShips.values()) {
+      if (ship.alive && hostile(ship.team) && visible(ship.position)) {
+        this.observe(ship, state.gameTime);
+      }
     }
     for (const b of state.buildings) {
-      if (!b.alive || b.team !== Team.Player) continue;
+      if (!b.alive || !hostile(b.team)) continue;
       if (visible(b.position)) this.observe(b, state.gameTime);
     }
     for (const f of state.fighters) {
-      if (!f.alive || f.team !== Team.Player) continue;
+      if (!f.alive || !hostile(f.team)) continue;
       if (visible(f.position)) this.observe(f, state.gameTime);
     }
   }
@@ -430,10 +436,11 @@ export class VsAIDirector {
       return;
     }
 
-    // Chase when player is very low HP — pursue before they can escape.
-    if (state.player.alive && state.player.healthFraction < 0.25) {
+    // Chase when a known hostile ship is very low HP — pursue before it can escape.
+    const woundedHostile = this.findWoundedHostileShip(state);
+    if (woundedHostile) {
       this.setGoal('chase', state);
-      this.goalTarget = state.player.position.clone();
+      this.goalTarget = woundedHostile.position.clone();
       this.reactionTimer = this.reactionDelay() * 0.5; // faster reaction for chase
       return;
     }
@@ -579,11 +586,43 @@ export class VsAIDirector {
 
   private findOwnCP(state: GameState): CommandPost | null {
     for (const b of state.buildings) {
-      if (b.alive && b.team === Team.Enemy && b instanceof CommandPost) {
+      if (b.alive && b.team === this.ship.team && b instanceof CommandPost) {
         return b;
       }
     }
     return null;
+  }
+
+  /** Any living hostile ship (human or AI) relative to this AI's team. */
+  private hostileShips(state: GameState): PlayerShip[] {
+    const result: PlayerShip[] = [];
+    for (const ship of state.playerShips.values()) {
+      if (ship.alive && isHostile(this.ship.team, ship.team)) result.push(ship);
+    }
+    return result;
+  }
+
+  /** Nearest living hostile ship to a world position, or null if none. */
+  private nearestHostileShip(state: GameState, pos: Vec2): PlayerShip | null {
+    let best: PlayerShip | null = null;
+    let bestDist = Infinity;
+    for (const ship of this.hostileShips(state)) {
+      const d = ship.position.distanceTo(pos);
+      if (d < bestDist) { bestDist = d; best = ship; }
+    }
+    return best;
+  }
+
+  /** A known, visible hostile ship whose health has dropped below the finishing threshold. */
+  private findWoundedHostileShip(state: GameState): PlayerShip | null {
+    let best: PlayerShip | null = null;
+    let bestDist = Infinity;
+    for (const ship of this.hostileShips(state)) {
+      if (ship.healthFraction >= 0.25 || !this.memory.has(ship.id)) continue;
+      const d = ship.position.distanceTo(this.ship.position);
+      if (d < bestDist) { bestDist = d; best = ship; }
+    }
+    return best;
   }
 
   /** Soft "harass" target: an exposed player generator or shipyard. */
@@ -592,7 +631,7 @@ export class VsAIDirector {
     let bestScore = -Infinity;
     for (const m of this.memory.values()) {
       const e = m.entity;
-      if (!e.alive || e.team !== Team.Player) continue;
+      if (!e.alive || !isHostile(this.ship.team, e.team)) continue;
       let priority = 0;
       if (e instanceof PowerGenerator) priority = 5;
       else if (e instanceof Shipyard) priority = 4;
@@ -614,7 +653,7 @@ export class VsAIDirector {
     let best: KnownTarget | null = null;
     let bestDist = Infinity;
     for (const m of this.memory.values()) {
-      if (!m.entity.alive || m.entity.team !== Team.Player) continue;
+      if (!m.entity.alive || !isHostile(this.ship.team, m.entity.team)) continue;
       // Prefer damaged targets — weight distance by inverse health fraction.
       const healthBias = m.entity instanceof PlayerShip
         ? (1.0 - Math.max(0, m.entity.healthFraction)) * 200
@@ -633,7 +672,7 @@ export class VsAIDirector {
     let best: Entity | null = null;
     let bestDist = radius;
     for (const m of this.memory.values()) {
-      if (!m.entity.alive || m.entity.team !== Team.Player) continue;
+      if (!m.entity.alive || !isHostile(this.ship.team, m.entity.team)) continue;
       const d = m.lastSeenPos.distanceTo(pos);
       if (d < bestDist) {
         bestDist = d;
@@ -649,9 +688,9 @@ export class VsAIDirector {
    * angle so repeated scouts approach from different directions.
    */
   private findPlayerBaseArea(state: GameState): Vec2 | null {
-    // Prefer a known player CP from memory.
+    // Prefer a known hostile CP from memory.
     for (const m of this.memory.values()) {
-      if (m.entity instanceof CommandPost && m.entity.team === Team.Player) {
+      if (m.entity instanceof CommandPost && isHostile(this.ship.team, m.entity.team)) {
         const angle = Math.random() * Math.PI * 2;
         const dist = 90 + Math.random() * 160;
         return new Vec2(
@@ -660,13 +699,14 @@ export class VsAIDirector {
         );
       }
     }
-    // Fall back to somewhere near the player ship.
-    if (state.player.alive) {
+    // Fall back to somewhere near the nearest known hostile ship.
+    const nearestShip = this.nearestHostileShip(state, this.ship.position);
+    if (nearestShip) {
       const angle = Math.random() * Math.PI * 2;
       const dist = 80 + Math.random() * 130;
       return new Vec2(
-        state.player.position.x + Math.cos(angle) * dist,
-        state.player.position.y + Math.sin(angle) * dist,
+        nearestShip.position.x + Math.cos(angle) * dist,
+        nearestShip.position.y + Math.sin(angle) * dist,
       );
     }
     return null;
@@ -761,12 +801,12 @@ export class VsAIDirector {
   private localRetreatThreat(state: GameState, pos: Vec2): number {
     let threat = 0;
     for (const b of state.buildings) {
-      if (!b.alive || b.team === this.ship.team || !(b instanceof TurretBase)) continue;
+      if (!b.alive || !isHostile(this.ship.team, b.team) || !(b instanceof TurretBase)) continue;
       const d = b.position.distanceTo(pos);
       if (d <= b.range * 1.15) threat += 1 - d / (b.range * 1.15);
     }
     for (const f of state.fighters) {
-      if (!f.alive || f.docked || f.team === this.ship.team) continue;
+      if (!f.alive || f.docked || !isHostile(this.ship.team, f.team)) continue;
       const d = f.position.distanceTo(pos);
       if (d <= 280) threat += 0.35 * (1 - d / 280);
     }
@@ -865,7 +905,7 @@ export class VsAIDirector {
       } else {
       this.ship.consumePrimaryFire(PRIMARY_FIRE_COOLDOWN);
       state.addEntity(new Bullet(this.ship.team, this.ship.position.clone(),
-        fireAngle, this.ship, liveGoalEntity ?? (state.player.alive ? state.player : null)));
+        fireAngle, this.ship, liveGoalEntity ?? this.nearestHostileShip(state, this.ship.position)));
       Audio.playSoundAt('fire', this.ship.position);
       if (liveGoalEntity && aim) {
         recordCombatAimSample({
@@ -971,7 +1011,7 @@ export class VsAIDirector {
     let best: Entity | null = null;
     let bestDist = 90;
     for (const m of this.memory.values()) {
-      if (!m.entity.alive || m.entity.team !== Team.Player) continue;
+      if (!m.entity.alive || !isHostile(this.ship.team, m.entity.team)) continue;
       const d = m.entity.position.distanceTo(this.goalTarget);
       if (d < bestDist) {
         bestDist = d;

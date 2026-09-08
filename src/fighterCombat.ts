@@ -1,9 +1,10 @@
 /**
- * Player-team fighter weapon-fire logic extracted from game.ts.
+ * Fighter weapon-fire logic extracted from game.ts.
  *
- * Handles the per-tick firing pass for all live, undocked fighters that
- * belong to the local player's team (Team.Player in practice/single-player).
- * Enemy fighter AI is handled inside fighter.ts / practicemode.ts.
+ * Handles the per-tick firing pass for all live, undocked fighters,
+ * regardless of team — this covers human-controlled fighters on any team
+ * as well as LAN AI fighters (which have no other source of autonomous
+ * fire; practicemode.ts only drives the single-player Vs. AI enemy base).
  */
 
 import { Audio } from './audio.js';
@@ -32,15 +33,23 @@ import type { Entity } from './entities.js';
 const fighterTargetScratch: Entity[] = [];
 
 /**
- * For each live, undocked Team.Player fighter: find the nearest enemy in
- * weapon range and fire the appropriate weapon for that fighter type.
+ * For each live, undocked fighter: find the nearest enemy in weapon range
+ * and fire the appropriate weapon for that fighter type.
+ *
+ * In 'practice'/'vs_ai' modes the single Vs. AI enemy base's fighters are
+ * already fired by practicemode.ts's own loop (which also drives their
+ * targeting/orders), so this pass skips them there to avoid double-firing.
+ * In LAN/online modes there is no such per-team loop, so every team's
+ * fighters (human and AI alike) are handled here.
  *
  * Fighter references are not mutated beyond standard shot-consumption and
  * nova-charge state; all projectiles are inserted into `state` directly.
  */
 export function updateFighterWeaponFire(state: GameState, spaceFluid: SpaceFluid): void {
+  const skipNonPlayerTeams = state.gameMode === 'practice' || state.gameMode === 'vs_ai';
   for (const f of state.fighters) {
-    if (!f.alive || f.docked || f.team !== Team.Player) continue;
+    if (!f.alive || f.docked) continue;
+    if (skipNonPlayerTeams && f.team !== Team.Player) continue;
     if (!f.canFire()) continue;
 
     const nearby = state.queryEntitiesInRange(f.position, f.weaponRange, fighterTargetScratch);
