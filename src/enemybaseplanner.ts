@@ -35,6 +35,7 @@
 import { Vec2 } from './math.js';
 import { Team } from './entities.js';
 import { GameState } from './gamestate.js';
+import { isHostile } from './teamutils.js';
 import { BuildingBase, CommandPost, Shipyard, PowerGenerator, ResearchLab, Factory } from './building.js';
 import { TurretBase } from './turret.js';
 import { GRID_CELL_SIZE, cellCenter, cellKey, footprintCenter } from './grid.js';
@@ -261,6 +262,18 @@ export class EnemyBasePlanner {
     return !isConfluenceFaction(state.factionByTeam, this.team);
   }
 
+  /** Nearest living hostile ship (human or AI) to a world position, or null if none. */
+  private nearestHostileShip(state: GameState, pos: Vec2): { position: Vec2; alive: boolean } | null {
+    let best: { position: Vec2; alive: boolean } | null = null;
+    let bestDist = Infinity;
+    for (const ship of state.playerShips.values()) {
+      if (!ship.alive || !isHostile(this.team, ship.team)) continue;
+      const d = ship.position.distanceTo(pos);
+      if (d < bestDist) { bestDist = d; best = ship; }
+    }
+    return best;
+  }
+
   constructor(team: Team, config: PracticeConfig, seed: number = 1337) {
     this.team = team;
     this.config = config;
@@ -480,9 +493,10 @@ export class EnemyBasePlanner {
     const cp = this.rootCommandPost?.alive ? this.rootCommandPost : null;
     if (!cp) return;
 
-    // Announce if the player is rushing the command post.
-    if (state.player.alive
-        && state.player.position.distanceTo(cp.position) < GRID_CELL_SIZE * CP_RUSH_DETECTION_CELLS) {
+    // Announce if a hostile ship is rushing the command post.
+    const rusher = this.nearestHostileShip(state, cp.position);
+    if (rusher
+        && rusher.position.distanceTo(cp.position) < GRID_CELL_SIZE * CP_RUSH_DETECTION_CELLS) {
       this.emitPlannerChat([
         'Intruder detected near command post!',
         'Enemy is attacking our core!',
@@ -519,8 +533,9 @@ export class EnemyBasePlanner {
 
     // Track Command Post rushes.
     const cp = this.rootCommandPost?.alive ? this.rootCommandPost : null;
-    if (cp && state.player.alive) {
-      if (state.player.position.distanceTo(cp.position) < GRID_CELL_SIZE * 10) {
+    if (cp) {
+      const rusher = this.nearestHostileShip(state, cp.position);
+      if (rusher && rusher.position.distanceTo(cp.position) < GRID_CELL_SIZE * 10) {
         this.adaptive.commandPostRushes++;
       }
     }
@@ -1366,12 +1381,14 @@ export class EnemyBasePlanner {
       def.key === 'massdriverturret' ||
       def.key === 'regenturret'
     ) {
-      const towardPlayerX = Math.sign(state.player.position.x - cellCenter(buildingCx, buildingCy).x);
-      const towardPlayerY = Math.sign(state.player.position.y - cellCenter(buildingCx, buildingCy).y);
-      if (Math.abs(towardPlayerX) >= Math.abs(towardPlayerY)) {
-        pushWallColumn(originCx + (towardPlayerX > 0 ? fp : -1), originCy, originCy + fp - 1);
+      const buildingCenter = cellCenter(buildingCx, buildingCy);
+      const threatPos = this.nearestHostileShip(state, buildingCenter)?.position ?? null;
+      const towardThreatX = threatPos ? Math.sign(threatPos.x - buildingCenter.x) : 1;
+      const towardThreatY = threatPos ? Math.sign(threatPos.y - buildingCenter.y) : 0;
+      if (Math.abs(towardThreatX) >= Math.abs(towardThreatY)) {
+        pushWallColumn(originCx + (towardThreatX > 0 ? fp : -1), originCy, originCy + fp - 1);
       } else {
-        pushWallLine(originCx, originCx + fp - 1, originCy + (towardPlayerY > 0 ? fp : -1));
+        pushWallLine(originCx, originCx + fp - 1, originCy + (towardThreatY > 0 ? fp : -1));
       }
       cap = Math.min(cap, 3);
     } else {
@@ -1856,12 +1873,12 @@ export class EnemyBasePlanner {
     return null;
   }
 
-  /** Returns the player building most valuable to attack (for VsAIDirector harass). */
+  /** Returns the hostile building most valuable to attack (for VsAIDirector harass). */
   getSuggestedHarassTarget(state: GameState): Vec2 | null {
     let best: Vec2 | null = null;
     let bestScore = -Infinity;
     for (const b of state.buildings) {
-      if (!b.alive || b.team !== Team.Player) continue;
+      if (!b.alive || !isHostile(this.team, b.team)) continue;
       const s = b instanceof PowerGenerator ? 5
         : b instanceof Shipyard   ? 4
         : b instanceof ResearchLab ? 3

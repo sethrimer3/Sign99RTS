@@ -13,15 +13,16 @@ import { HUD } from './hud.js';
 import { MainMenu, MenuAction } from './menu.js';
 import { Colors, colorToCSS } from './colors.js';
 import { Team, EntityType, ShipGroup, Entity } from './entities.js';
-import { DT, WORLD_WIDTH, WORLD_HEIGHT, RESEARCH_COST, RESEARCH_TIME, TICK_RATE, WEAPON_STATS, ACTIVE_RESEARCH_ITEMS, SHIP_STATS } from './constants.js';
-import { BuildingBase, CommandPost } from './building.js';
+import { DT, WORLD_WIDTH, WORLD_HEIGHT, RESEARCH_COST, RESEARCH_TIME, TICK_RATE, WEAPON_STATS, ACTIVE_RESEARCH_ITEMS, SHIP_STATS, BASELINE_RESOURCE_GAIN, RESOURCE_GAIN_RATE } from './constants.js';
+import { BuildingBase, CommandPost, Factory } from './building.js';
 import { Shipyard } from './building.js';
+import { EnemyBasePlanner } from './enemybaseplanner.js';
 import { TurretBase } from './turret.js';
 import { FighterShip, BomberShip, SynonymousFighterShip, SynonymousNovaBomberShip, SwarmShip } from './fighter.js';
 import { Bullet } from './projectile.js';
 import { GuidedMissile } from './projectile.js';
 import { PracticeMode } from './practicemode.js';
-import { cloneDefaultPracticeConfig } from './practiceconfig.js';
+import { cloneDefaultPracticeConfig, difficultyIndex, type DifficultyName } from './practiceconfig.js';
 import { TutorialMode } from './tutorial.js';
 import { AIShip, VsAIDirector } from './vsaibot.js';
 import { PlayerShip } from './ship.js';
@@ -98,6 +99,19 @@ import { FighterGroupStatusUI } from './fighterGroupStatus.js';
 
 type GamePhase = 'menu' | 'playing' | 'paused';
 type PersistentGroupOrder = 'waypoint' | 'follow' | 'protect';
+
+/** Per-slot base-growth state for a LAN AI, mirroring PracticeMode's single-base runtime. */
+interface LanAiBase {
+  team: Team;
+  cp: CommandPost;
+  planner: EnemyBasePlanner;
+  difficulty: DifficultyName;
+  resources: number;
+  tickTimer: number;
+}
+const LAN_AI_BASE_TICK_INTERVAL = 0.5;
+/** Income multiplier per difficulty index, matching PracticeMode's curve. */
+const LAN_AI_INCOME_MUL_BY_DIFFICULTY = [0.55, 0.8, 1.0, 1.2, 1.45, 1.85];
 
 const PLAYER_FIRE_COOLDOWN = WEAPON_STATS.fire.fireRate * DT;
 const MAX_FIXED_UPDATES_PER_FRAME = 5;
@@ -199,6 +213,13 @@ export class Game {
    * Each entry drives one AIShip for a configured AI lobby slot.
    */
   private lanAiDirectors: VsAIDirector[] = [];
+  /**
+   * Base planners for LAN AI slots (host-only), one per AI slot's own
+   * command post. Each grows/defends that slot's base independently and
+   * feeds coordination data (defense points, harass targets, construction
+   * sites) back to the matching VsAIDirector via `director.planner`.
+   */
+  private lanAiBases: LanAiBase[] = [];
   /** Last received snapshot seq (client-only, for debug). */
   private lanLastSnapshotSeq: number = -1;
   /**
@@ -571,6 +592,8 @@ export class Game {
           this.hud.showAIChat('RIVAL', msg, Colors.alert1);
         }
       }
+      // Tick each LAN AI slot's base planner (economy + build queue growth).
+      this.updateLanAiBases(DT);
     }
 
     // Update core game state (entities, collision, power, resources, research, particles)
@@ -892,6 +915,33 @@ export class Game {
 
   private updateAIShipRespawn(dt: number): void {
     updateAIShipRespawn(this.state, this.hud, this.aiRespawn, dt, Game.AI_RESPAWN_DELAY);
+  }
+
+  /**
+   * Drives every LAN AI slot's EnemyBasePlanner: accrues that team's
+   * resource pool and lets the planner spend it on its build queue.
+   * Mirrors PracticeMode's single-base income/update loop, just repeated
+   * per AI slot instead of assuming one enemy team.
+   */
+  private updateLanAiBases(dt: number): void {
+    for (const base of this.lanAiBases) {
+      if (!base.cp.alive) continue;
+      let poweredFactories = 0;
+      for (const b of this.state.buildings) {
+        if (b.alive && b.team === base.team && b instanceof Factory && b.powered) poweredFactories++;
+      }
+      const incomeMul = LAN_AI_INCOME_MUL_BY_DIFFICULTY[difficultyIndex(base.difficulty)];
+      base.resources += (BASELINE_RESOURCE_GAIN * incomeMul + poweredFactories * RESOURCE_GAIN_RATE) * dt;
+
+      base.tickTimer -= dt;
+      if (base.tickTimer > 0) continue;
+      base.tickTimer = LAN_AI_BASE_TICK_INTERVAL;
+      const spent = base.planner.update(this.state, base.cp, LAN_AI_BASE_TICK_INTERVAL, base.resources);
+      base.resources = Math.max(0, base.resources - spent);
+      for (const msg of base.planner.drainChats()) {
+        this.hud.showAIChat('BASE', msg, Colors.alert1);
+      }
+    }
   }
 
   private localPlayerTeam(): Team {
@@ -1337,6 +1387,7 @@ export class Game {
     this.lanClient = this.mainMenu.getLanClient();
     this.lanRemoteInputs.clear();
     this.lanAiDirectors = [];
+    this.lanAiBases = [];
     this.lanSnapshotSeq = 0;
     this.lanInputSeq = 0;
     this.lanLastSnapshotSeq = -1;
@@ -1426,6 +1477,7 @@ export class Game {
     // authoritative host needs to simulate all bases; clients create their
     // local one immediately while waiting for the first snapshot.
     const baseSpawns = isHost ? spawns : spawns.filter((spawn) => spawn.slotIndex === this.lanMySlot);
+    const cpBySlot = new Map<number, CommandPost>();
     for (const spawn of baseSpawns) {
       const slot = matchStart.lobby.slots.find((candidate) => candidate.slotIndex === spawn.slotIndex);
       if (!slot) continue;
@@ -1438,6 +1490,7 @@ export class Game {
       this.state.addEntity(cp);
       this.state.ensureConfluenceSeedCircle(team, cpPos);
       this.state.ensureSynonymousSeedSwarm(team, cpPos);
+      cpBySlot.set(spawn.slotIndex, cp);
 
       if (isConfluenceFaction(this.state.factionByTeam, team) || isSynonymousFaction(this.state.factionByTeam, team)) continue;
       const startCx = Math.floor(cpPos.x / GRID_CELL_SIZE);
@@ -1452,6 +1505,42 @@ export class Game {
     }
     this.state.power.markDirty();
     this.state.resources = 500;
+
+    // Host: give each AI slot's own command post a growing base, driven by
+    // an EnemyBasePlanner. This is what lets VsAIDirector coordinate
+    // (defense points, harass targets, construction escorts) in LAN games —
+    // previously LAN AI slots had no planner at all and never expanded
+    // past their starting Command Post.
+    if (isHost) {
+      let aiSlotOrdinal = 0;
+      for (const slot of matchStart.lobby.slots) {
+        if (slot.type !== 'ai') continue;
+        const director = this.lanAiDirectors[aiSlotOrdinal];
+        aiSlotOrdinal++;
+        const cp = cpBySlot.get(slot.slotIndex);
+        if (!director || !cp) continue;
+        const team = teamForLobbySlot(slot.slotIndex);
+        const difficulty: DifficultyName =
+          slot.aiDifficulty === 'easy' ? 'Easy'
+          : slot.aiDifficulty === 'hard' ? 'Hard'
+          : slot.aiDifficulty === 'nightmare' ? 'Nightmare'
+          : 'Normal';
+        const plannerConfig = cloneDefaultPracticeConfig();
+        plannerConfig.difficulty = difficulty;
+        plannerConfig.enemyRace = resolveRaceSelection(slot.race ?? 'terran', matchStart.seed + slot.slotIndex * 0.37);
+        const planner = new EnemyBasePlanner(team, plannerConfig, Math.floor(matchStart.seed * 7919 + slot.slotIndex * 104729) >>> 0);
+        planner.init(this.state, cp);
+        director.planner = planner;
+        this.lanAiBases.push({
+          team,
+          cp,
+          planner,
+          difficulty,
+          resources: 500,
+          tickTimer: 0,
+        });
+      }
+    }
 
     // Wire up LAN callbacks.
     if (this.lanClient) {
@@ -1490,6 +1579,7 @@ export class Game {
         Audio.playMenuMusic();
         this.lanClient = null;
         this.lanAiDirectors = [];
+        this.lanAiBases = [];
       };
     }
 
@@ -1526,6 +1616,7 @@ export class Game {
     this.lanMySlot = matchStart.mySlot;
     this.lanRemoteInputs.clear();
     this.lanAiDirectors = [];
+    this.lanAiBases = [];
     this.lanSnapshotSeq = 0;
     this.lanInputSeq = 0;
     this.lanLastSnapshotSeq = -1;
