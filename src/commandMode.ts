@@ -142,6 +142,7 @@ export function issueShipOrder(
         f.order = 'waypoint';
         f.targetPos = target.clone();
         if (f.docked) f.launch();
+        f.triggerOrderDash(target);
       }
       ctx.hud.showMessage(`${label}: Waypoint`, Colors.general_building, 2);
       break;
@@ -164,6 +165,7 @@ export function issueShipOrder(
         f.order = 'protect';
         f.targetPos = protectPos.clone();
         if (f.docked) f.launch();
+        f.triggerOrderDash(protectPos);
       }
       ctx.hud.showMessage(`${label}: Protect Base`, Colors.general_building, 2);
       break;
@@ -174,6 +176,7 @@ export function issueShipOrder(
         f.order = 'follow';
         f.targetPos = ctx.state.player.position.clone();
         if (f.docked) f.launch();
+        f.triggerOrderDash(ctx.state.player.position);
       }
       ctx.hud.showMessage(`${label}: Follow Player`, Colors.general_building, 2);
       break;
@@ -242,6 +245,7 @@ function issueCommandModeOrder(
     f.order = 'waypoint';
     f.targetPos = targetPos.clone();
     if (f.docked) f.launch();
+    f.triggerOrderDash(targetPos);
   }
   if (commandModeState.selectedFighters.size > 0) {
     ctx.waypointMarkers.set('all', { pos: targetPos.clone(), issuedAt: ctx.state.gameTime });

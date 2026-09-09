@@ -18,7 +18,7 @@ import { BuildingBase, CommandPost, Factory } from './building.js';
 import { Shipyard } from './building.js';
 import { EnemyBasePlanner } from './enemybaseplanner.js';
 import { TurretBase } from './turret.js';
-import { FighterShip, BomberShip, SynonymousFighterShip, SynonymousNovaBomberShip, SwarmShip } from './fighter.js';
+import { FighterShip, BomberShip, SynonymousFighterShip, SynonymousNovaBomberShip, SwarmShip, FIGHTER_UPGRADE_RESEARCH_KEYS, applyFighterResearchUpgrade } from './fighter.js';
 import { Bullet } from './projectile.js';
 import { GuidedMissile } from './projectile.js';
 import { PracticeMode } from './practicemode.js';
@@ -987,9 +987,9 @@ export class Game {
       if (b.type === EntityType.SwarmYard) {
         b.shipCapacity = 20;
         b.buildInterval = 0.65;
-      } else if (this.state.researchedItems.has('advancedFighters')) {
-        b.shipCapacity = 7;
-        b.buildInterval = 4;
+      } else {
+        if (this.state.researchedItems.has('fighterYard1')) b.buildInterval = 4;
+        if (this.state.researchedItems.has('fighterYard2')) b.shipCapacity = 7;
       }
       b.dockedShips = dockedByYard.get(b) ?? 0;
 
@@ -1006,9 +1006,11 @@ export class Game {
             ? new SynonymousNovaBomberShip(spawnPos.clone(), Team.Player, group, b)
             : new BomberShip(spawnPos.clone(), Team.Player, group, b)
           : synonymous
-            ? new SynonymousFighterShip(spawnPos.clone(), Team.Player, group, b, this.state.researchedItems.has('advancedFighters'))
+            ? new SynonymousFighterShip(spawnPos.clone(), Team.Player, group, b, this.state.researchedItems.has('fighterHp1'))
             : new FighterShip(spawnPos.clone(), Team.Player, group, b);
-        if (this.state.researchedItems.has('advancedFighters')) fighter.upgradeToAdvanced();
+        for (const key of FIGHTER_UPGRADE_RESEARCH_KEYS) {
+          if (this.state.researchedItems.has(key)) applyFighterResearchUpgrade(fighter, key);
+        }
         b.activeShips++;
         this.state.addEntity(fighter);
         b.dockedShips++;
@@ -1364,7 +1366,15 @@ export class Game {
     const fullTech = [
       ...allTurrets,
       'bomberyard',
-      'advancedFighters',
+      'fighterYard1',
+      'fighterYard2',
+      'fighterTargeting',
+      'fighterWeapon1',
+      'fighterWeapon2',
+      'fighterSpeed1',
+      'fighterSpeed2',
+      'fighterHp1',
+      'fighterHp2',
       'shipHp1',
       'shipHp2',
       'shipHp3',

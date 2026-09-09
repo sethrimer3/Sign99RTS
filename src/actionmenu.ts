@@ -80,7 +80,15 @@ const RESEARCH_DESCRIPTIONS: Record<string, string> = {
   regenturret:          'Unlocks construction of Regen Turrets. Heals nearby structures.',
   advancedRegenTurrets: 'Regen Turrets rebuild destroyed conduits for free.',
   bomberyard:           'Unlocks construction of Bomber Yards for nova bombers.',
-  advancedFighters:     'Improves fighter ships with enhanced stats and combat AI.',
+  fighterTargeting:     'Smarter fighter AI: dodges hazards and prioritizes turrets as targets.',
+  fighterWeapon1:       'Fighters deal 50% more weapon damage and gain 8% more range.',
+  fighterWeapon2:       'Fighters fire 50% faster.',
+  fighterSpeed1:        'Fighters gain 50% more thrust/speed and 20% faster turning.',
+  fighterSpeed2:        'Fighters dash forward whenever given a new move order or instruction.',
+  fighterHp1:           'Fighters gain 50% more max HP.',
+  fighterHp2:           'Fighters unlock a shield equal to 50% of max HP.',
+  fighterYard1:         'Fighter Yards produce ships 20% faster.',
+  fighterYard2:         'Fighter Yards hold 2 more ships (5 → 7).',
 };
 
 function wrapDescriptionText(ctx: CanvasRenderingContext2D, text: string): string[] {
@@ -325,7 +333,15 @@ const RESEARCH_LABELS: Record<string, string> = {
   advancedRegenTurrets: 'Advanced\nRegen Turrets',
   bomberyard: 'Bomber\nYard',
   swarmyard: 'Swarm\nYard',
-  advancedFighters: 'Advanced\nFighters',
+  fighterTargeting: 'Fighter\nTargeting',
+  fighterWeapon1: 'Fighter\nDamage',
+  fighterWeapon2: 'Fighter\nFire Rate',
+  fighterSpeed1: 'Fighter\nSpeed',
+  fighterSpeed2: 'Fighter\nDash',
+  fighterHp1: 'Fighter\nHP',
+  fighterHp2: 'Fighter\nShield',
+  fighterYard1: 'Yard\nSpeed',
+  fighterYard2: 'Yard\nCapacity',
 };
 
 export function researchDisplayName(key: string): string {
@@ -509,6 +525,10 @@ function buildResearchRoot(state: GameState): RadialItem[] {
     if (state.researchQueue.includes(key)) return null;
     if (!(ACTIVE_RESEARCH_ITEMS as readonly string[]).includes(key)) return null;
     if (key === 'advancedRegenTurrets' && !state.researchedItems.has('regenturret')) return null;
+    if (key === 'fighterWeapon2' && !state.researchedItems.has('fighterWeapon1')) return null;
+    if (key === 'fighterSpeed2' && !state.researchedItems.has('fighterSpeed1')) return null;
+    if (key === 'fighterHp2' && !state.researchedItems.has('fighterHp1')) return null;
+    if (key === 'fighterYard2' && !state.researchedItems.has('fighterYard1')) return null;
     const researchKey = key as keyof typeof RESEARCH_COST;
     return {
       label: isPlayerSynonymous(state) && key === 'bomberyard' ? 'Nova\nBombers' : RESEARCH_LABELS[key] ?? key,
@@ -537,7 +557,10 @@ function buildResearchRoot(state: GameState): RadialItem[] {
     return visibleCategories([
       category('Main Ship', ['synonymousSpeed', 'synonymousVitality']),
       category('Weapons', ['synonymousPierce', nextFireSpeed]),
-      category('Fighters', ['advancedFighters', 'bomberyard', 'swarmyard']),
+      category('Fighters', [
+        'fighterTargeting', 'fighterWeapon1', 'fighterWeapon2', 'fighterSpeed1', 'fighterSpeed2',
+        'fighterHp1', 'fighterHp2', 'fighterYard1', 'fighterYard2', 'bomberyard', 'swarmyard',
+      ]),
       category('Defensive Turrets', ['synonymousminelayer', 'exciterturret', 'massdriverturret', 'regenturret']),
     ]);
   }
@@ -547,7 +570,10 @@ function buildResearchRoot(state: GameState): RadialItem[] {
   return visibleCategories([
     category('Defensive Turrets', ['missileturret', 'exciterturret', 'massdriverturret', 'regenturret', 'advancedRegenTurrets']),
     category('Main Ship', [nextHp, nextSpeedEnergy, nextShield, 'shipDash']),
-    category('Fighters', ['advancedFighters', 'bomberyard', 'swarmyard']),
+    category('Fighters', [
+      'fighterTargeting', 'fighterWeapon1', 'fighterWeapon2', 'fighterSpeed1', 'fighterSpeed2',
+      'fighterHp1', 'fighterHp2', 'fighterYard1', 'fighterYard2', 'bomberyard', 'swarmyard',
+    ]),
     category('Weapons', ['weaponCannon', 'weaponGatling', 'weaponLaser', 'weaponGuidedMissile'], [
       { label: 'Cannon', sublabel: 'Ready', disabled: true, infoOnly: true },
     ]),

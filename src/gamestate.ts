@@ -8,7 +8,7 @@ import { Shipyard } from './building.js';
 import { SynonymousMineLayer, TurretBase } from './turret.js';
 import { MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
 import { isSynonymousDriftMine } from './synonymousMine.js';
-import { FighterShip, SwarmShip } from './fighter.js';
+import { FighterShip, SwarmShip, FIGHTER_UPGRADE_RESEARCH_KEYS, applyFighterResearchUpgrade } from './fighter.js';
 import { ParticleSystem } from './particles.js';
 import { RingEffectSystem } from './ringeffects.js';
 import { Camera } from './camera.js';
@@ -1353,7 +1353,7 @@ export class GameState {
   }
 
   private applyAdvancedFighterHazardAvoidance(fighter: FighterShip, dt: number): void {
-    if (!fighter.advancedTier || fighter.docked || !fighter.alive) return;
+    if (!fighter.targetingUpgraded || fighter.docked || !fighter.alive) return;
     for (const p of this.queryEntitiesInRange(fighter.position, 220, this.spatialQueryScratch)) {
       if (!(p instanceof MassDriverBullet) || !p.isBursting || p.team === fighter.team) continue;
       fighter.avoidHazard(p.position, p.radius, dt);
@@ -1458,15 +1458,9 @@ export class GameState {
       const completed = this.researchProgress.item;
       this.researchedItems.add(completed);
       this.player.applyResearchUpgrade(completed);
-      if (completed === 'advancedFighters') {
-        for (const b of this.buildings) {
-          if (b.alive && b.team === Team.Player && b instanceof Shipyard) {
-            b.shipCapacity = 7;
-            b.buildInterval = 4;
-          }
-        }
+      if ((FIGHTER_UPGRADE_RESEARCH_KEYS as readonly string[]).includes(completed)) {
         for (const f of this.fighters) {
-          if (f.alive && f.team === Team.Player) f.upgradeToAdvanced();
+          if (f.alive && f.team === Team.Player) applyFighterResearchUpgrade(f, completed);
         }
       } else if (completed === 'shipShield1') {
         for (const f of this.fighters) {

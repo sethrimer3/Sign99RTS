@@ -11,6 +11,31 @@ import { teamColor } from './teamutils.js';
 
 export type FighterOrder = 'idle' | 'attack' | 'dock' | 'defend' | 'escort' | 'harass' | 'protect' | 'waypoint' | 'follow';
 
+/** Research keys that grant an individual fighter-ship upgrade (applies to all fighter yard output). */
+export const FIGHTER_UPGRADE_RESEARCH_KEYS = [
+  'fighterTargeting',
+  'fighterWeapon1',
+  'fighterWeapon2',
+  'fighterSpeed1',
+  'fighterSpeed2',
+  'fighterHp1',
+  'fighterHp2',
+] as const;
+
+/** Apply a single fighter-upgrade research key's effect to one fighter. No-op for unrecognized keys. */
+export function applyFighterResearchUpgrade(fighter: FighterShip, key: string): void {
+  switch (key) {
+    case 'fighterTargeting': fighter.upgradeTargeting(); break;
+    case 'fighterWeapon1': fighter.upgradeWeaponDamage(); break;
+    case 'fighterWeapon2': fighter.upgradeWeaponFireRate(); break;
+    case 'fighterSpeed1': fighter.upgradeSpeed(); break;
+    case 'fighterSpeed2': fighter.upgradeDash(); break;
+    case 'fighterHp1': fighter.upgradeHp(); break;
+    case 'fighterHp2': fighter.upgradeShield(); break;
+    default: break;
+  }
+}
+
 const GROUP_COLORS: Record<ShipGroup, Color> = {
   [ShipGroup.Red]: Colors.redgroup,
   [ShipGroup.Green]: Colors.greengroup,
@@ -26,6 +51,11 @@ const PASSIVE_HEALTH_REGEN_RATE = 1;
 const TRAIL_LIFETIME = 0.42;
 const TRAIL_MIN_DISTANCE = 3;
 const FIGHTER_VISUAL_SCALE = 0.75;
+/** Instant velocity burst applied (as a multiple of maxSpeed) when a dash-unlocked fighter is given a new order. */
+const ORDER_DASH_SPEED_MULT = 1.6;
+const DASH_TRAIL_LIFETIME = 0.5;
+const DASH_TRAIL_MIN_DISTANCE = 5;
+const DASH_TRAIL_MAX_POINTS = 18;
 
 interface TrailPoint {
   pos: Vec2;
@@ -66,7 +96,21 @@ export class FighterShip extends Entity {
   shieldRegenRate: number = SHIELD_REGEN_RATE;
   private shieldRegenDelay = 0;
   protected healthRegenDelay = 0;
+  /**
+   * True once every individual fighter upgrade has been granted. Used only
+   * for LAN client mirroring (a single wire flag bundles the whole set) —
+   * gameplay code should check the specific upgrade flag it cares about.
+   */
   advancedTier = false;
+  /** Individual, independently-researchable fighter upgrades. */
+  targetingUpgraded = false;
+  weaponDamageUpgraded = false;
+  weaponFireRateUpgraded = false;
+  speedUpgraded = false;
+  dashUnlocked = false;
+  hpUpgraded = false;
+  private dashTrail: TrailPoint[] = [];
+  private dashEffectTimer = 0;
 
   constructor(
     position: Vec2,
@@ -239,18 +283,85 @@ export class FighterShip extends Entity {
     this.fireTimer = cooldownTicks / TICK_RATE;
   }
 
+  /** Grants every individual fighter upgrade at once (used for LAN client mirroring). */
   upgradeToAdvanced(): void {
     if (this.advancedTier) return;
     this.advancedTier = true;
+    this.upgradeTargeting();
+    this.upgradeHp();
+    this.upgradeShield();
+    this.upgradeSpeed();
+    this.upgradeDash();
+    this.upgradeWeaponDamage();
+    this.upgradeWeaponFireRate();
+  }
+
+  /** Smarter AI targeting/decision-making: hazard avoidance + turret-priority targeting. */
+  upgradeTargeting(): void {
+    this.targetingUpgraded = true;
+  }
+
+  /** +50% max HP. */
+  upgradeHp(): void {
+    if (this.hpUpgraded) return;
+    this.hpUpgraded = true;
     this.maxHealth *= 1.5;
     this.health = this.maxHealth;
+    if (this.shieldUnlocked) this.maxShield = this.maxHealth * 0.5;
+  }
+
+  /** Second HP tier: unlocks a shield equal to 50% of max HP. */
+  upgradeShield(): void {
+    this.shieldUnlocked = true;
     this.maxShield = this.maxHealth * 0.5;
+    this.shield = this.maxShield;
+  }
+
+  /** +50% thrust/speed, +20% turn rate. */
+  upgradeSpeed(): void {
+    if (this.speedUpgraded) return;
+    this.speedUpgraded = true;
     this.thrustPower *= 1.5;
     this.maxSpeed *= 1.5;
     this.turnRate *= 1.2;
+  }
+
+  /** Second speed tier: an instant dash burst whenever the fighter is given a new order. */
+  upgradeDash(): void {
+    this.dashUnlocked = true;
+  }
+
+  /** +50% weapon damage, +8% weapon range. */
+  upgradeWeaponDamage(): void {
+    if (this.weaponDamageUpgraded) return;
+    this.weaponDamageUpgraded = true;
     this.weaponDamage *= 1.5;
     this.weaponRange *= 1.08;
+  }
+
+  /** Second weapon tier: 50% faster fire rate. */
+  upgradeWeaponFireRate(): void {
+    if (this.weaponFireRateUpgraded) return;
+    this.weaponFireRateUpgraded = true;
     this.fireRate = Math.max(1, this.fireRate / 1.5);
+  }
+
+  /**
+   * Instant velocity burst toward `target`, mirroring the player ship's dash.
+   * Called whenever a dash-unlocked fighter is given a fresh move order
+   * (a new waypoint, follow, protect, or similar instruction) rather than on
+   * every AI re-target within the same order.
+   */
+  triggerOrderDash(target: Vec2): void {
+    if (!this.dashUnlocked || this.docked || !this.alive) return;
+    const toTarget = target.sub(this.position);
+    const dir = toTarget.length() > 1 ? toTarget.normalize() : new Vec2(Math.cos(this.angle), Math.sin(this.angle));
+    this.velocity = dir.scale(this.maxSpeed * ORDER_DASH_SPEED_MULT);
+    this.dashEffectTimer = DASH_TRAIL_LIFETIME;
+    this.dashTrail = [
+      { pos: this.position.add(dir.scale(-this.radius * 0.8)), age: DASH_TRAIL_LIFETIME * 0.16 },
+      { pos: this.position.clone(), age: 0 },
+    ];
   }
 
   avoidHazard(center: Vec2, radius: number, dt: number): void {
@@ -352,31 +463,64 @@ export class FighterShip extends Entity {
       this.trail.push({ pos: this.position.clone(), age: 0 });
     }
     if (this.trail.length > 20) this.trail.shift();
+
+    for (const point of this.dashTrail) point.age += dt;
+    this.dashTrail = this.dashTrail.filter((point) => point.age <= DASH_TRAIL_LIFETIME);
+    if (this.dashEffectTimer > 0) {
+      this.dashEffectTimer = Math.max(0, this.dashEffectTimer - dt);
+      const dashLast = this.dashTrail[this.dashTrail.length - 1];
+      if (!dashLast || dashLast.pos.distanceTo(this.position) >= DASH_TRAIL_MIN_DISTANCE) {
+        this.dashTrail.push({ pos: this.position.clone(), age: 0 });
+      }
+    }
+    while (this.dashTrail.length > DASH_TRAIL_MAX_POINTS) this.dashTrail.shift();
   }
 
   protected drawMotionTrail(ctx: CanvasRenderingContext2D, camera: Camera, color: Color): void {
-    if (this.trail.length < 2) return;
-    const speedFraction = Math.max(0, Math.min(1, this.velocity.length() / Math.max(1, this.maxSpeed)));
-    const sizeScale = 0.2 + speedFraction * 0.8;
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 5 * sizeScale;
-    for (let i = 1; i < this.trail.length; i++) {
-      const a = this.trail[i - 1];
-      const b = this.trail[i];
-      const fade = 1 - Math.max(a.age, b.age) / TRAIL_LIFETIME;
-      if (fade <= 0) continue;
-      const from = camera.worldToScreen(a.pos);
-      const to = camera.worldToScreen(b.pos);
-      ctx.strokeStyle = colorToCSS(color, 0.08 + fade * 0.28);
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
+    if (this.trail.length >= 2) {
+      const speedFraction = Math.max(0, Math.min(1, this.velocity.length() / Math.max(1, this.maxSpeed)));
+      const sizeScale = 0.2 + speedFraction * 0.8;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 5 * sizeScale;
+      for (let i = 1; i < this.trail.length; i++) {
+        const a = this.trail[i - 1];
+        const b = this.trail[i];
+        const fade = 1 - Math.max(a.age, b.age) / TRAIL_LIFETIME;
+        if (fade <= 0) continue;
+        const from = camera.worldToScreen(a.pos);
+        const to = camera.worldToScreen(b.pos);
+        ctx.strokeStyle = colorToCSS(color, 0.08 + fade * 0.28);
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
-    ctx.restore();
+    if (this.dashTrail.length >= 2) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 6;
+      for (let i = 1; i < this.dashTrail.length; i++) {
+        const a = this.dashTrail[i - 1];
+        const b = this.dashTrail[i];
+        const fade = 1 - Math.max(a.age, b.age) / DASH_TRAIL_LIFETIME;
+        if (fade <= 0) continue;
+        const from = camera.worldToScreen(a.pos);
+        const to = camera.worldToScreen(b.pos);
+        ctx.strokeStyle = colorToCSS(Colors.general_building, 0.15 + fade * 0.5);
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 
   // --- Drawing ---
@@ -845,14 +989,14 @@ export class SwarmShip extends FighterShip {
     this.weaponDamage = 0.75;
   }
 
-  override upgradeToAdvanced(): void {
-    super.upgradeToAdvanced();
+  /** Swarm ships never gain a shield — the HP tier-2 upgrade is a no-op for them. */
+  override upgradeShield(): void {
     this.maxShield = 0;
     this.shield = 0;
   }
 
   protected override updatePassiveHealthRegen(dt: number): void {
-    if (!this.advancedTier) return;
+    if (!this.hpUpgraded) return;
     super.updatePassiveHealthRegen(dt);
   }
 
