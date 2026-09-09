@@ -1162,7 +1162,7 @@ export class MainMenu {
     const viewportBottom = Math.max(viewportTop + 80, h - 115);
     const viewportH = viewportBottom - viewportTop;
     const contentBottom = this.settingsTab === 'controls'
-      ? 190 + KEYBIND_DEFINITIONS.length * rowH + 90
+      ? 190 + (KEYBIND_DEFINITIONS.length + 1) * rowH + 90
       : this.settingsTab === 'gameplay' ? (this.languageDropdownOpen ? 620 : 390)
       : this.settingsTab === 'graphics' ? (this.spaceColorDropdownOpen ? 608 + SPACE_COLOR_OPTIONS.length * 30 : 608)
       : 520;
@@ -1203,7 +1203,13 @@ export class MainMenu {
       y = this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.musicVolume'), Audio.getMusicVolume(), (v) => Audio.setMusicVolume(v));
       this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.sfxVolume'), Audio.getSfxVolume(), (v) => Audio.setSfxVolume(v));
     } else {
-      for (const binding of KEYBIND_DEFINITIONS) y = this.drawKeybindRow(ctx, x, y, rowH, binding.label, binding.key);
+      for (const binding of KEYBIND_DEFINITIONS) {
+        y = this.drawKeybindRow(ctx, x, y, rowH, binding.label, binding.key);
+        if (binding.key === 'Shift') {
+          y = this.drawCheckboxRow(ctx, x, y, rowH, tr('settings.dashSingleTap'), Input.getDashSingleTap(),
+            (v) => { Input.setDashSingleTap(v); });
+        }
+      }
       this.drawButtonRow(ctx, [{ label: tr('common.resetDefaults'), action: () => Input.resetBindings() }], cx, y + 18);
     }
 

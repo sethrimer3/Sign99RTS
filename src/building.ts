@@ -19,6 +19,7 @@ import { getCinematicLevel } from './cinematic.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { researchCategory, researchIcon } from './research.js';
 import { renderProjectileTrail, type TrailSample, type ProjectileTrailStyle } from './projectileTrail.js';
+import { renderBuildingCoreEffect } from './buildingCoreEffect.js';
 
 interface BaseVisual {
   side: number;
@@ -96,9 +97,39 @@ export abstract class BuildingBase extends Entity {
     if (isLegacyGraphics()) this.drawSunEdgeGlare(ctx, x, y, v.side, v.simple, camera);
     if (damage > 0.02) this.drawDamageWear(ctx, x, y, v.side, damage);
     this.drawDimPanelLines(ctx, x, y, v.side);
-    const c = v.side * 0.12;
+    const legacyCore = isLegacyGraphics();
+    // Corner nodes. Legacy: small footprint-relative squares. New look: each node
+    // is exactly one conduit cell regardless of building size, and doubles as the
+    // mask for the fiery core effect below.
+    const c = legacyCore
+      ? v.side * 0.12
+      : Math.min(v.side * 0.45, GRID_CELL_SIZE * camera.zoom);
     ctx.fillStyle = colorToCSS(Colors.menu_background_detail, 0.45);
     ctx.fillRect(x, y, c, c); ctx.fillRect(x + v.side - c, y, c, c); ctx.fillRect(x, y + v.side - c, c, c); ctx.fillRect(x + v.side - c, y + v.side - c, c, c);
+    if (!legacyCore) {
+      // Thin connecting lines between the corner nodes (kept even at 0% so the
+      // building still reads like its base art), then the core effect masked to
+      // nodes + lines, scaled by HP fraction and gated on power / construction.
+      const gap = v.side - 2 * c;
+      if (gap > 0) {
+        const bw = Math.max(1, c * 0.4);
+        ctx.fillStyle = colorToCSS(Colors.menu_background_detail, 0.3);
+        ctx.fillRect(x + c, y, gap, bw);
+        ctx.fillRect(x + c, y + v.side - bw, gap, bw);
+        ctx.fillRect(x, y + c, bw, gap);
+        ctx.fillRect(x + v.side - bw, y + c, bw, gap);
+      }
+      const intensity = this.powered && this.buildProgress >= 1 && !this.deleting
+        ? Math.max(0, Math.min(1, this.healthFraction))
+        : 0;
+      if (intensity > 0.001) {
+        renderBuildingCoreEffect(ctx, {
+          x, y, side: v.side, nodeSize: c, intensity,
+          timeSec: this.animationTime, seed: this.id,
+          glow: true,
+        });
+      }
+    }
     // Legacy-only: the centre cross/plus that split the building into quadrants.
     if (!v.simple && isLegacyGraphics()) {
       ctx.strokeStyle = colorToCSS(Colors.advanced_building, 0.45 * v.powerAlpha);

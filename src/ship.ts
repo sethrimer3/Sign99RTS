@@ -62,8 +62,11 @@ const BOOST_BATTERY_DRAIN = 30;
 const BOOST_LOCKOUT_FRACTION = 0.01;
 const BOOST_REENABLE_BATTERY = 25;
 const FULL_ENERGY_HEALTH_REGEN_MULT = 2;
-const DASH_MIN_ENERGY_FRACTION = 0.75;
-const DASH_ENERGY_COST_FRACTION = 0.25;
+const DASH_ENERGY_COST_FRACTION = 0.5;
+/** Seconds without any energy drain before the battery starts regenerating again. */
+const ENERGY_REGEN_DELAY = 0.5;
+/** Longer regen delay applied when the battery drains all the way to empty. */
+const ENERGY_DEPLETED_REGEN_DELAY = 1.5;
 const DASH_INITIAL_SPEED = 760;
 const DASH_TRAIL_MIN_DISTANCE = 6;
 const DASH_TRAIL_MAX_POINTS = 52;
@@ -123,6 +126,10 @@ export class PlayerShip extends Entity {
   private trail: TrailPoint[] = [];
   private dashTrail: TrailPoint[] = [];
   private dashEffectTimer = 0;
+  /** Countdown before battery regen resumes; set whenever energy is drained. */
+  private energyRegenDelay = 0;
+  /** Battery level recorded at the end of the previous update, to detect drains. */
+  private energyDrainMark = BATTERY_MAX;
 
   /** Accumulated time used for visual effects like the low-battery flash. */
   drawTime: number = 0;
@@ -230,8 +237,18 @@ export class PlayerShip extends Entity {
     this.position = this.position.add(this.velocity.scale(dt));
     this.updateTrail(dt);
 
-    // Regenerate battery
-    this.battery = Math.min(this.maxBattery, this.battery + this.baseBatteryRegenRate * dt);
+    // Regenerate battery — but only after a quiet period with nothing draining
+    // it. Any drop since the last update (boost, dash, firing, laser charge…)
+    // restarts the delay: 0.5s normally, 1.5s if the battery hit empty.
+    if (this.battery < this.energyDrainMark - 1e-4) {
+      this.energyRegenDelay = this.battery <= 1e-4 ? ENERGY_DEPLETED_REGEN_DELAY : ENERGY_REGEN_DELAY;
+    }
+    if (this.energyRegenDelay > 0) {
+      this.energyRegenDelay = Math.max(0, this.energyRegenDelay - dt);
+    } else {
+      this.battery = Math.min(this.maxBattery, this.battery + this.baseBatteryRegenRate * dt);
+    }
+    this.energyDrainMark = this.battery;
     if (this.synonymousHealthRegenRate > 0 && this.health > 0 && this.health < this.maxHealth) {
       this.health = Math.min(this.maxHealth, this.health + this.synonymousHealthRegenRate * dt);
     }
@@ -262,6 +279,8 @@ export class PlayerShip extends Entity {
     this.health = this.maxHealth;
     this.alive = true;
     this.battery = this.maxBattery;
+    this.energyRegenDelay = 0;
+    this.energyDrainMark = this.maxBattery;
     this.shield = this.shieldUnlocked ? this.maxShield : 0;
     this.shieldRegenDelay = 0;
     this.healthRegenDelay = 0;
@@ -308,7 +327,7 @@ export class PlayerShip extends Entity {
       return;
     }
 
-    if (Input.wasPressed('Shift')) this.tryDash();
+    if (Input.wasDashTriggered('Shift')) this.tryDash();
 
     // --- Movement: WASD as a 4-axis direction, decoupled from facing -----
     let dx = 0;
@@ -690,8 +709,19 @@ export class PlayerShip extends Entity {
 
   private tryDash(): void {
     if (!this.dashUnlocked || this.gatlingOverheatTimer > 0) return;
-    if (this.battery <= this.maxBattery * DASH_MIN_ENERGY_FRACTION) return;
-    const dir = new Vec2(Math.cos(this.angle), Math.sin(this.angle));
+    // Usable with any energy at all; a dash under the 50% cost just empties it.
+    if (this.battery <= 0) return;
+    // Dash in the direction the movement keys are pressing, not where the ship
+    // is facing. With no movement keys held, fall back to the facing direction.
+    let dx = 0;
+    let dy = 0;
+    if (Input.isDown('w')) dy -= 1;
+    if (Input.isDown('s')) dy += 1;
+    if (Input.isDown('a')) dx -= 1;
+    if (Input.isDown('d')) dx += 1;
+    const dir = (dx !== 0 || dy !== 0)
+      ? new Vec2(dx, dy).normalize()
+      : new Vec2(Math.cos(this.angle), Math.sin(this.angle));
     this.battery = Math.max(0, this.battery - this.maxBattery * DASH_ENERGY_COST_FRACTION);
     this.velocity = this.velocity.add(dir.scale(DASH_INITIAL_SPEED));
     // Dashing tears against any Tether holds — halve their grip immediately and

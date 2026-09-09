@@ -51,6 +51,7 @@ import { DEFAULT_VISUAL_QUALITY, VISUAL_QUALITY_PRESETS, type VisualQuality, typ
 import { loadCinematicLevel, saveCinematicLevel, setCinematicLevel, type CinematicLevel } from './cinematic.js';
 import { loadLegacyGraphics, saveLegacyGraphics, setLegacyGraphics } from './graphicsmode.js';
 import { setProjectileTrailLayers } from './projectileTrail.js';
+import { setBuildingCoreEffectTier } from './buildingCoreEffect.js';
 import {
   drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, drawBaseLockwardEffect, type ShipCommandGroup, type WaypointMarker,
 } from './gameRender.js';
@@ -352,6 +353,7 @@ export class Game {
     this.state?.particles.setParticleScale(this.visualPreset.particleScale);
     this.starfield.setShootingStarsEnabled(this.visualPreset.shootingStarsEnabled);
     setProjectileTrailLayers(quality === 'ultraHigh' ? 4 : quality === 'high' ? 3 : quality === 'medium' ? 2 : 1);
+    setBuildingCoreEffectTier(quality);
     this.mainMenu.visualQuality = quality;
     saveVisualQuality(quality);
   }

@@ -93,6 +93,7 @@ const en: Dict = {
   'settings.heading': 'SETTINGS',
   'settings.graphicsQuality': 'Graphics Quality',
   'settings.legacyGraphics': 'Legacy Graphics',
+  'settings.dashSingleTap': 'Tap only once to dash',
   'settings.playerColor': 'Player Color',
   'settings.enemyColor': 'Enemy Color',
   'settings.spaceColor': 'Space Color',

@@ -66,6 +66,11 @@ export class RenderBudget {
 
   crystalVisible: number = 0;
 
+  // --- Gatling field stats (set by GatlingField.draw each frame) ---
+
+  /** Live pooled gatling-turret bullets. */
+  gatlingFieldActive: number = 0;
+
   // --- Adaptive scale ---
 
   private _renderLoadScale: number = 1.0;

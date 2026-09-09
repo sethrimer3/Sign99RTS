@@ -21,6 +21,8 @@ import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS, RESEARCH_MODE, RESEARCH_TIME,
 import { buildCostForBuildingType, type BuildDef } from './builddefs.js';
 import { Colors, colorToCSS } from './colors.js';
 import { teamColor } from './teamutils.js';
+import { isHostile } from './teamutils.js';
+import { GatlingField } from './gatlingField.js';
 import { footprintForBuilding, footprintForBuildingType } from './buildingfootprint.js';
 import { type FactionType, type ConfluenceTerritoryCircle, CONFLUENCE_BASE_RADIUS, CONFLUENCE_PLACEMENT_DISTANCE, CONFLUENCE_PLACEMENT_TOLERANCE, CONFLUENCE_PARENT_EXPAND_DURATION, CONFLUENCE_NEW_CIRCLE_GROW_DURATION, CONFLUENCE_INCLUDE_MARGIN, isConfluenceFaction, isSynonymousFaction } from './confluence.js';
 import { SynonymousSwarmSystem, SYNONYMOUS_BASE_PRODUCTION, SYNONYMOUS_BUILD_COST, SYNONYMOUS_CURRENCY_SYMBOL, SYNONYMOUS_FACTORY_PRODUCTION } from './synonymous.js';
@@ -130,6 +132,19 @@ function segmentSegmentDistance(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2): number 
   );
 }
 
+/** Squared distance from point (px,py) to segment (ax,ay)-(bx,by). Allocation-free. */
+function pointSegDistSq(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const denom = abx * abx + aby * aby;
+  let t = denom > 0 ? ((px - ax) * abx + (py - ay) * aby) / denom : 0;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  const dx = px - (ax + abx * t);
+  const dy = py - (ay + aby * t);
+  return dx * dx + dy * dy;
+}
+
 function compactAlive<T extends Entity>(items: T[]): void {
   let write = 0;
   for (let read = 0; read < items.length; read++) {
@@ -171,6 +186,13 @@ export class GameState {
   destroyedBuildings: DestroyedBuildingRecord[] = [];
   destroyedConduits: DestroyedConduitRecord[] = [];
   projectiles: ProjectileBase[] = [];
+  /**
+   * Pooled, structure-of-arrays store for gatling-turret bullets.  These are
+   * cheap and numerous (hundreds to ~1000 on screen), so they live outside the
+   * per-entity {@link projectiles} list: no Entity allocation, no trail arrays,
+   * batched single-pass rendering.  See src/gatlingField.ts.
+   */
+  gatlingField: GatlingField = new GatlingField();
   fighters: FighterShip[] = [];
   particles: ParticleSystem;
   explosionGlows: ExplosionGlow[] = [];
@@ -213,6 +235,10 @@ export class GameState {
   }> = new Map();
   private spatialIndex: SpatialIndex = new SpatialIndex(GRID_CELL_SIZE * 3);
   private spatialQueryScratch: Entity[] = [];
+  /** Scratch reused by {@link resolveGatlingBullet} for spatial queries. */
+  private gatlingQueryScratch: Entity[] = [];
+  /** Scratch Vec2 reused for bullet-hit feedback (never retained by callees). */
+  private _bulletHitScratch: Vec2 = new Vec2(0, 0);
   private pathBudgetRemaining = 0;
   private pathBudgetFrameToken = -1;
   private buildingCollisionVersionCounter = 0;
@@ -577,6 +603,9 @@ export class GameState {
     this.resolveMineProjectileDamage();
     this.resolveProjectileInterceptions();
     this.resolveCollisions();
+    // Pooled gatling-turret bullets: integrate + collide in one flat pass.
+    // Runs while the spatial index is still populated from rebuildSpatialIndex().
+    this.gatlingField.update(dt, this);
     this.perfStats.projectileCollisionMs = performance.now() - collisionStart;
     this.synonymous.updateBuildingIntegrity(this.buildings);
 
@@ -757,46 +786,132 @@ export class GameState {
         proj.destroy();
         return true;
       }
-      target.takeDamage(proj.damage, proj);
-      this.recentlyDamaged.add(target.id);
-      if (!target.alive) {
-        this.particles.emitExplosion(target.position, target.radius);
-        this.pendingCrystalExplosions.push({ x: target.position.x, y: target.position.y, radius: Math.max(60, target.radius * 4) });
-        // Larger targets add screen shake
-        this.pendingShakeMagnitude = Math.min(Camera.MAX_SHAKE, this.pendingShakeMagnitude + Math.min(4, target.radius * 0.12));
-        // Explosion sound — size depends on entity type
-        if (
-          target.type === EntityType.CommandPost ||
-          target.type === EntityType.PowerGenerator ||
-          target.type === EntityType.FighterYard ||
-          target.type === EntityType.BomberYard ||
-          target.type === EntityType.SwarmYard ||
-          target.type === EntityType.ResearchLab ||
-          target.type === EntityType.Factory
-        ) {
-          Audio.playSoundAt('explode2', target.position);
-        } else if (
-          target.type === EntityType.GatlingTurret ||
-          target.type === EntityType.MissileTurret ||
-          target.type === EntityType.Wall ||
-          target.type === EntityType.TimeBomb ||
-          target.type === EntityType.ExciterTurret ||
-          target.type === EntityType.MassDriverTurret ||
-          target.type === EntityType.RegenTurret ||
-          target.type === EntityType.PlayerShip
-        ) {
-          Audio.playSoundAt('explode1', target.position);
-        } else {
-          Audio.playSoundAt('explode0', target.position);
-        }
-      } else {
-        // Non-fatal hit — play hit sound, emit directional impact sparks
-        const hitAngle = Math.atan2(proj.velocity.y, proj.velocity.x);
-        this.emitBuildingDamageSparks(target, proj.position);
-        this.particles.emitImpact(target.position, hitAngle);
-        Audio.playSoundAt('bhit0', target.position);
-      }
+      this.applyDirectBulletHit(target, proj.damage, proj.position.x, proj.position.y, proj.velocity.x, proj.velocity.y, proj);
       proj.destroy();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Apply a single non-blast projectile hit to `target`: deal damage, register
+   * it for damage-flash bookkeeping, and emit the death / impact feedback
+   * (particles, crystal shockwave, screen shake, audio).
+   *
+   * Shared by {@link checkHit} (per-entity projectiles) and
+   * {@link resolveGatlingBullet} (the pooled {@link GatlingField}), so both
+   * paths produce identical hit feedback.
+   */
+  applyDirectBulletHit(
+    target: Entity,
+    damage: number,
+    hitX: number,
+    hitY: number,
+    velX: number,
+    velY: number,
+    source: Entity | null,
+  ): void {
+    target.takeDamage(damage, source ?? undefined);
+    this.recentlyDamaged.add(target.id);
+    if (!target.alive) {
+      this.particles.emitExplosion(target.position, target.radius);
+      this.pendingCrystalExplosions.push({ x: target.position.x, y: target.position.y, radius: Math.max(60, target.radius * 4) });
+      // Larger targets add screen shake
+      this.pendingShakeMagnitude = Math.min(Camera.MAX_SHAKE, this.pendingShakeMagnitude + Math.min(4, target.radius * 0.12));
+      // Explosion sound — size depends on entity type
+      if (
+        target.type === EntityType.CommandPost ||
+        target.type === EntityType.PowerGenerator ||
+        target.type === EntityType.FighterYard ||
+        target.type === EntityType.BomberYard ||
+        target.type === EntityType.SwarmYard ||
+        target.type === EntityType.ResearchLab ||
+        target.type === EntityType.Factory
+      ) {
+        Audio.playSoundAt('explode2', target.position);
+      } else if (
+        target.type === EntityType.GatlingTurret ||
+        target.type === EntityType.MissileTurret ||
+        target.type === EntityType.Wall ||
+        target.type === EntityType.TimeBomb ||
+        target.type === EntityType.ExciterTurret ||
+        target.type === EntityType.MassDriverTurret ||
+        target.type === EntityType.RegenTurret ||
+        target.type === EntityType.PlayerShip
+      ) {
+        Audio.playSoundAt('explode1', target.position);
+      } else {
+        Audio.playSoundAt('explode0', target.position);
+      }
+    } else {
+      // Non-fatal hit — play hit sound, emit directional impact sparks
+      const hitAngle = Math.atan2(velY, velX);
+      this._bulletHitScratch.set(hitX, hitY);
+      this.emitBuildingDamageSparks(target, this._bulletHitScratch);
+      this.particles.emitImpact(target.position, hitAngle);
+      Audio.playSoundAt('bhit0', target.position);
+    }
+  }
+
+  /**
+   * Collision + environment resolution for one {@link GatlingField} bullet.
+   * Mirrors the non-blast branch of {@link checkHit} plus powered-conduit
+   * blocking, without allocating an Entity per shot.  Returns true when the
+   * bullet was consumed (hit something or was blocked) and must be removed.
+   */
+  resolveGatlingBullet(
+    prevX: number,
+    prevY: number,
+    x: number,
+    y: number,
+    velX: number,
+    velY: number,
+    radius: number,
+    damage: number,
+    team: Team,
+    source: Entity | null,
+  ): boolean {
+    // Powered opposing-team conduit cells chip and stop hostile shots.
+    if (this.grid.conduitCount() > 0) {
+      const cx = Math.floor(x / GRID_CELL_SIZE);
+      const cy = Math.floor(y / GRID_CELL_SIZE);
+      const conduitTeam = this.grid.conduitTeam(cx, cy);
+      if (conduitTeam !== null && conduitTeam !== team && this.power.isCellEnergized(conduitTeam, cx, cy)) {
+        if (this.grid.damageConduit(cx, cy, 1)) this.recordDestroyedConduit(cx, cy, conduitTeam);
+        this.power.markDirty();
+        this._bulletHitScratch.set(x, y);
+        this.particles.emitSpark(this._bulletHitScratch);
+        return true;
+      }
+    }
+
+    const queryRadius = radius + ENTITY_RADIUS.building + Math.hypot(velX, velY) * DT + GRID_CELL_SIZE;
+    this._bulletHitScratch.set(x, y);
+    const nearby = this.queryEntitiesInRange(this._bulletHitScratch, queryRadius, this.gatlingQueryScratch);
+    for (const e of nearby) {
+      if (e === source || !e.alive) continue;
+      if (e instanceof ProjectileBase) continue;
+      if (!(e instanceof BuildingBase || e instanceof FighterShip || e instanceof PlayerShip)) continue;
+      if (!isHostile(team, e.team)) continue;
+      if (e instanceof FighterShip && e.docked) continue;
+
+      const rr = radius + e.radius;
+      if (pointSegDistSq(e.position.x, e.position.y, prevX, prevY, x, y) > rr * rr) continue;
+
+      // Synonymous drone shells absorb the hit before the structure does.
+      if (isSynonymousFaction(this.factionByTeam, e.team)) {
+        const handled = this.synonymous.damageDroneAt(e.team, new Vec2(x, y), damage, {
+          buildingId: e instanceof BuildingBase ? e.id : undefined,
+          fallbackToBuilding: e instanceof BuildingBase,
+          time: this.gameTime,
+        });
+        if (handled) {
+          this.recentlyDamaged.add(e.id);
+          return true;
+        }
+      }
+
+      this.applyDirectBulletHit(e, damage, x, y, velX, velY, source);
       return true;
     }
     return false;
@@ -1854,6 +1969,7 @@ export class GameState {
       if (!camera.isOnScreen(p.position, GRID_CELL_SIZE * 16)) continue;
       p.draw(ctx, camera);
     }
+    this.gatlingField.draw(ctx, camera);
     for (const ship of this.playerShips.values()) {
       if (ship.alive) ship.draw(ctx, camera);
     }

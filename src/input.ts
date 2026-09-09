@@ -4,6 +4,7 @@ import { Vec2 } from './math.js';
 
 const DOUBLE_TAP_WINDOW_MS = 200;
 const KEYBIND_STORAGE_KEY = 'sign99:keybinds';
+const DASH_SINGLE_TAP_STORAGE_KEY = 'sign99:dashSingleTap';
 
 export const KEYBIND_DEFINITIONS = [
   { key: 'w', label: 'Move Up' }, { key: 's', label: 'Move Down' },
@@ -32,6 +33,8 @@ class InputManager {
   /** Fired when a key is pressed for the second time within the double-tap window (double-tap-then-hold). */
   private doubleTapDown = new Set<string>();
   private bindings = new Map<string, string>();
+  /** When true, the dash ship ability triggers on a single boost-key tap instead of a double-tap. */
+  private dashSingleTap = false;
 
   mousePos = new Vec2(0, 0);
   mouseDown = false;
@@ -60,6 +63,7 @@ class InputManager {
 
   constructor() {
     this.loadBindings();
+    this.loadDashSingleTap();
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.onKeyDown);
       window.addEventListener('keyup', this.onKeyUp);
@@ -84,6 +88,27 @@ class InputManager {
         if (typeof value === 'string' && value) this.bindings.set(item.key, this.normalizeKey(value));
       }
     } catch { /* Invalid or unavailable storage: defaults remain active. */ }
+  }
+
+  private loadDashSingleTap(): void {
+    try {
+      this.dashSingleTap = window.localStorage?.getItem(DASH_SINGLE_TAP_STORAGE_KEY) === '1';
+    } catch { /* storage unavailable: default (double-tap) remains active. */ }
+  }
+
+  getDashSingleTap(): boolean { return this.dashSingleTap; }
+
+  setDashSingleTap(value: boolean): void {
+    this.dashSingleTap = !!value;
+    try { window.localStorage?.setItem(DASH_SINGLE_TAP_STORAGE_KEY, this.dashSingleTap ? '1' : '0'); } catch { /* optional */ }
+  }
+
+  /**
+   * True on the frame the dash input fires for the given boost key — a single
+   * press when "tap only once to dash" is enabled, otherwise a quick double-tap.
+   */
+  wasDashTriggered(key: string): boolean {
+    return this.dashSingleTap ? this.wasPressed(key) : this.isDoubleTapDown(key);
   }
 
   private resolveKey(key: string): string {

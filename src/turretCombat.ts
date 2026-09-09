@@ -16,6 +16,7 @@ import { WEAPON_STATS } from './constants.js';
 import { damageLaserLine } from './combatUtils.js';
 import { aimAngle, recordCombatAimSample } from './targeting.js';
 import { Vec2 } from './math.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 
 const MAX_AUDIBLE_GATLING_TURRETS = 2;
 
@@ -52,7 +53,11 @@ export function fireTurretShots(state: GameState, localTeam: Team): void {
       b.consumeShot();
       const spread = (Math.random() - 0.5) * WEAPON_STATS.gatlingturret.spread;
       const fireAngle = (angle ?? b.turretAngle) + spread;
-      state.addEntity(new GatlingTurretBullet(b.team, b.position.clone(), fireAngle, b));
+      if (isLegacyGraphics()) {
+        state.addEntity(new GatlingTurretBullet(b.team, b.position.clone(), fireAngle, b));
+      } else {
+        state.gatlingField.spawn(b.team, b.position.x, b.position.y, fireAngle, b);
+      }
       if (Math.random() < 0.25) state.particles.emitMuzzleFlash(b.position, fireAngle);
       Audio.playLimitedSoundAt('shortbullet', b.position, MAX_AUDIBLE_GATLING_TURRETS);
     } else if (b.type === EntityType.ExciterTurret) {

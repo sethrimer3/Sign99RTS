@@ -26,6 +26,7 @@ import { rankedDifficultyName, clampRank } from './vsaiconfig.js';
 import { BuilderDrone, isBuilderDrone } from './builderdrone.js';
 import { isSynonymousFaction } from './confluence.js';
 import { aimAngle, aimAtEntity, isCombatTargetValid, recordCombatAimSample } from './targeting.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 
 const TURRET_FIRE_CHECK_INTERVAL = 0.1;
 const MAX_AUDIBLE_GATLING_TURRETS = 2;
@@ -589,7 +590,12 @@ export class PracticeMode {
       } else if (b.type === EntityType.GatlingTurret) {
         b.consumeShot();
         const spread = (Math.random() - 0.5) * WEAPON_STATS.gatlingturret.spread;
-        state.addEntity(new GatlingTurretBullet(b.team, b.position.clone(), (angle ?? b.turretAngle) + spread, b));
+        const fireAngle = (angle ?? b.turretAngle) + spread;
+        if (isLegacyGraphics()) {
+          state.addEntity(new GatlingTurretBullet(b.team, b.position.clone(), fireAngle, b));
+        } else {
+          state.gatlingField.spawn(b.team, b.position.x, b.position.y, fireAngle, b);
+        }
         Audio.playLimitedSoundAt('shortbullet', b.position, MAX_AUDIBLE_GATLING_TURRETS);
       } else if (b.type === EntityType.ExciterTurret) {
         const fireAngle = b.position.angleTo(target.position);
