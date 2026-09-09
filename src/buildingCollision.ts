@@ -1,6 +1,6 @@
 import { BuildingBase } from './building.js';
 import { GRID_CELL_SIZE, type CellCoord } from './grid.js';
-import { footprintForBuildingType } from './buildingfootprint.js';
+import { footprintForBuilding } from './buildingfootprint.js';
 
 export interface BuildingShipCollisionRect {
   left: number;
@@ -17,7 +17,7 @@ export function buildingBlocksShips(building: BuildingBase): boolean {
 }
 
 export function buildingFootprintOrigin(building: BuildingBase): CellCoord {
-  const size = footprintForBuildingType(building.type);
+  const size = footprintForBuilding(building);
   return {
     cx: Math.round(building.position.x / GRID_CELL_SIZE - size / 2),
     cy: Math.round(building.position.y / GRID_CELL_SIZE - size / 2),
@@ -25,7 +25,7 @@ export function buildingFootprintOrigin(building: BuildingBase): CellCoord {
 }
 
 export function buildingShipCollisionRect(building: BuildingBase, inflate = 0): BuildingShipCollisionRect {
-  const size = footprintForBuildingType(building.type);
+  const size = footprintForBuilding(building);
   const halfSide = size * GRID_CELL_SIZE * 0.5;
   return {
     left: building.position.x - halfSide - inflate,

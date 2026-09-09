@@ -21,7 +21,7 @@ import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS } from './constants.js';
 import { buildCostForBuildingType, type BuildDef } from './builddefs.js';
 import { Colors, colorToCSS } from './colors.js';
 import { teamColor } from './teamutils.js';
-import { footprintForBuildingType } from './buildingfootprint.js';
+import { footprintForBuilding, footprintForBuildingType } from './buildingfootprint.js';
 import { type FactionType, type ConfluenceTerritoryCircle, CONFLUENCE_BASE_RADIUS, CONFLUENCE_PLACEMENT_DISTANCE, CONFLUENCE_PLACEMENT_TOLERANCE, CONFLUENCE_PARENT_EXPAND_DURATION, CONFLUENCE_NEW_CIRCLE_GROW_DURATION, CONFLUENCE_INCLUDE_MARGIN, isConfluenceFaction, isSynonymousFaction } from './confluence.js';
 import { SynonymousSwarmSystem, SYNONYMOUS_BASE_PRODUCTION, SYNONYMOUS_BUILD_COST, SYNONYMOUS_CURRENCY_SYMBOL, SYNONYMOUS_FACTORY_PRODUCTION } from './synonymous.js';
 import {
@@ -1147,7 +1147,7 @@ export class GameState {
     for (const b of this.buildings) {
       if (!b.alive || b.team !== team) continue;
       if (b.buildProgress < 1 || !b.powered) continue;
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const origin = buildingFootprintOrigin(b);
       const endCx = origin.cx + size - 1;
       const endCy = origin.cy + size - 1;
@@ -1271,7 +1271,7 @@ export class GameState {
     if (!building.alive || building.team === Team.Neutral) return;
     if (building.type === EntityType.Wall) return;
     if (isConfluenceFaction(this.factionByTeam, building.team)) return;
-    const size = footprintForBuildingType(building.type);
+    const size = footprintForBuilding(building);
     const origin = buildingFootprintOrigin(building);
     let planned = 0;
 
@@ -1327,7 +1327,7 @@ export class GameState {
     let bestDist = Infinity;
     for (const b of this.buildings) {
       if (!b.alive || b.team !== team) continue;
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const origin = buildingFootprintOrigin(b);
       if (px < origin.cx || px >= origin.cx + size || py < origin.cy || py >= origin.cy + size) {
         continue;
@@ -2050,7 +2050,7 @@ export class GameState {
 
     for (const building of this.buildings) {
       if (!building.alive || building.team !== team) continue;
-      const halfSide = footprintForBuildingType(building.type) * GRID_CELL_SIZE * 0.5;
+      const halfSide = footprintForBuilding(building) * GRID_CELL_SIZE * 0.5;
       left = Math.min(left, building.position.x - halfSide);
       right = Math.max(right, building.position.x + halfSide);
       top = Math.min(top, building.position.y - halfSide);
@@ -2270,7 +2270,7 @@ export class GameState {
     }
     for (const b of this.buildings) {
       if (!b.alive) continue;
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const bo = buildingFootprintOrigin(b);
       const bx2 = bo.cx + size - 1;
       const by2 = bo.cy + size - 1;
@@ -2301,7 +2301,7 @@ export class GameState {
   isCellOccupiedByBuilding(cx: number, cy: number): boolean {
     for (const b of this.buildings) {
       if (!b.alive) continue;
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const origin = buildingFootprintOrigin(b);
       if (cx >= origin.cx && cx < origin.cx + size && cy >= origin.cy && cy < origin.cy + size) {
         return true;
@@ -2350,7 +2350,7 @@ export class GameState {
     for (const b of this.buildings) {
       if (!b.alive || b.team !== team) continue;
       if (b.type !== EntityType.CommandPost && b.type !== EntityType.PowerGenerator) continue;
-      const sourceSize = footprintForBuildingType(b.type);
+      const sourceSize = footprintForBuilding(b);
       const sourceOrigin = buildingFootprintOrigin(b);
       const sourceX2 = sourceOrigin.cx + sourceSize - 1;
       const sourceY2 = sourceOrigin.cy + sourceSize - 1;

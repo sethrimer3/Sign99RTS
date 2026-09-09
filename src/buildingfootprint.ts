@@ -21,8 +21,12 @@ export function footprintForBuildingType(type: EntityType): number {
     case EntityType.MassDriverTurret:
       return 6;
     case EntityType.ResearchLab:
-      return 3;
+      return 9;
     default:
       return 3;
   }
+}
+
+export function footprintForBuilding(building: { type: EntityType; footprintCells?: number | null }): number {
+  return building.footprintCells ?? footprintForBuildingType(building.type);
 }

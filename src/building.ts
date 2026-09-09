@@ -11,7 +11,7 @@ import {
   HP_VALUES,
 } from './constants.js';
 import { GRID_CELL_SIZE } from './grid.js';
-import { footprintForBuildingType } from './buildingfootprint.js';
+import { footprintForBuilding } from './buildingfootprint.js';
 import { teamColor } from './teamutils.js';
 import { getDistantSunScreenPosition } from './suns.js';
 import { Input } from './input.js';
@@ -35,6 +35,8 @@ export abstract class BuildingBase extends Entity {
   powered = false;
   buildProgress = 1;
   buildDurationSeconds = 0;
+  /** Instance override used by 3x3 Research Nodes sharing the lab entity type. */
+  footprintCells: number | null = null;
   /** Exact amount paid when this construction was placed (for full cancellation refunds). */
   placementCost: number | null = null;
   deletionProgress = 0;
@@ -72,7 +74,7 @@ export abstract class BuildingBase extends Entity {
   startDeleting(): void { if (!this.deleting) { this.deleting = true; this.deletionProgress = 0; } }
 
   protected getBaseVisual(camera: Camera): BaseVisual {
-    const side = footprintForBuildingType(this.type) * GRID_CELL_SIZE * camera.zoom;
+    const side = footprintForBuilding(this) * GRID_CELL_SIZE * camera.zoom;
     return { side, half: side * 0.5, simple: side < 22, powerAlpha: this.powered ? 1 : 0.3 };
   }
 
@@ -613,6 +615,7 @@ export class ResearchLab extends BuildingBase {
   constructor(position: Vec2, team: Team, researchItem: string | null = null) {
     super(EntityType.ResearchLab, team, position, HP_VALUES.researchLab);
     this.researchItem = researchItem;
+    this.footprintCells = researchItem ? 3 : null;
     this.showExactUpgrade = team === Team.Player;
   }
   update(dt: number): void { super.update(dt); this.spinPhase += this.powered ? dt * 2 : dt * 0.35; }

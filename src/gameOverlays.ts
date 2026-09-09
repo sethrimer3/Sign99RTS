@@ -16,7 +16,7 @@ import { TurretBase } from './turret.js';
 import { FighterShip, BomberShip, SynonymousNovaBomberShip } from './fighter.js';
 import { Laser, ChargedLaserBurst, GuidedMissile, BomberMissile, SwarmMissile, MassDriverBullet, GatlingBullet, GatlingTurretBullet } from './projectile.js';
 import { GlowLayer } from './glowlayer.js';
-import { footprintForBuildingType } from './buildingfootprint.js';
+import { footprintForBuilding, footprintForBuildingType } from './buildingfootprint.js';
 import { SHIP_STATS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
 import { GRID_CELL_SIZE } from './grid.js';
 import { WORLD_WIDTH } from './constants.js';
@@ -178,7 +178,7 @@ export function drawMergedShipBlockerOutlines(
   const cells = new Set<string>();
   const entries: Array<{ x: number; y: number; team: Team; shielded: boolean }> = [];
   for (const building of blockers) {
-    const size = footprintForBuildingType(building.type);
+    const size = footprintForBuilding(building);
     const origin = buildingFootprintOrigin(building);
     const originX = origin.cx;
     const originY = origin.cy;
@@ -253,7 +253,7 @@ export function drawCommandModeOverlay(
   for (const b of state.buildings) {
     if (!commandSelectedTurrets.has(b.id) || !b.alive || !(b instanceof TurretBase)) continue;
     const p = camera.worldToScreen(b.position);
-    const s = footprintForBuildingType(b.type) * GRID_CELL_SIZE * camera.zoom;
+    const s = footprintForBuilding(b) * GRID_CELL_SIZE * camera.zoom;
     ctx.strokeStyle = colorToCSS(Colors.alert2, active ? 0.9 : 0.45);
     ctx.lineWidth = 1.5;
     ctx.strokeRect(p.x - s * 0.58, p.y - s * 0.58, s * 1.16, s * 1.16);
@@ -328,7 +328,7 @@ export function drawBuildingHoverHitpoints(
     }
 
     const hoverAlpha = maxOverlayAlpha * (1 - d / fadeRadius);
-    const footprintHalfSize = footprintForBuildingType(b.type) * GRID_CELL_SIZE * 0.5;
+    const footprintHalfSize = footprintForBuilding(b) * GRID_CELL_SIZE * 0.5;
     const directlyHovered = Math.abs(world.x - b.position.x) <= footprintHalfSize
       && Math.abs(world.y - b.position.y) <= footprintHalfSize;
     const targetTextAlpha = directlyHovered ? BUILDING_HEALTH_HOVER_ALPHA : hoverAlpha;
@@ -351,7 +351,7 @@ export function drawBuildingHoverHitpoints(
 
     // Warm outline around building base when hovered
     const warmColor = b.team === Team.Player ? Colors.building_glow_power : Colors.building_glow_shipyard;
-    const baseSize = footprintForBuildingType(b.type) * GRID_CELL_SIZE * camera.zoom;
+    const baseSize = footprintForBuilding(b) * GRID_CELL_SIZE * camera.zoom;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.strokeStyle = colorToCSS(warmColor, 0.45 * hoverAlpha);

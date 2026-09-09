@@ -90,7 +90,6 @@ export type MenuState =
   | 'practice_setup'
   | 'settings'
   | 'pause'
-  | 'surrender_confirm'
   | 'lan_type'
   | 'lan_host_lobby'
   | 'lan_browser'
@@ -322,6 +321,7 @@ export class MainMenu {
   private pendingUiZoom: number | null = null;
   private settingsTab: 'gameplay' | 'graphics' | 'audio' | 'controls' = 'gameplay';
   private settingsOrigin: 'title' | 'pause' = 'title';
+  private surrenderArmed = false;
   private languageDropdownOpen = false;
   private awaitingBinding: BindableKey | null = null;
 
@@ -335,11 +335,13 @@ export class MainMenu {
   openTitle(): void {
     this.state = 'title';
     this.selectedIndex = 0;
+    this.surrenderArmed = false;
   }
 
   openPause(): void {
     this.state = 'pause';
     this.selectedIndex = 0;
+    this.surrenderArmed = false;
   }
 
   private openSettings(origin: 'title' | 'pause'): void {
@@ -358,6 +360,7 @@ export class MainMenu {
     if (s !== 'lan_browser') this.stopLanDiscoveryListening();
     if (s !== 'lan_host_lobby' && this.state === 'lan_host_lobby') this.cancelPendingHostStart();
     this.state = s;
+    this.surrenderArmed = false;
     this.selectedIndex = 0;
     this.rankedSliderDragging = false;
     this.sliderDraggingKey = null;
@@ -478,10 +481,9 @@ export class MainMenu {
       opts[this.selectedIndex].action();
       return this.takePending();
     }
-    if ((this.state === 'pause' || this.state === 'surrender_confirm') && Input.rawWasPressed('Escape')) {
+    if (this.state === 'pause' && Input.rawWasPressed('Escape')) {
       Audio.playSound('menuselection');
-      if (this.state === 'surrender_confirm') this.setState('pause');
-      else this.pendingAction = 'resume';
+      this.pendingAction = 'resume';
       return this.takePending();
     }
     if (
@@ -563,12 +565,13 @@ export class MainMenu {
         return [
           { label: tr('menu.pause.resume'), action: () => { this.pendingAction = 'resume'; } },
           { label: tr('menu.title.settings'), action: () => this.openSettings('pause') },
-          { label: tr('menu.pause.quit'), action: () => this.setState('surrender_confirm') },
-        ];
-      case 'surrender_confirm':
-        return [
-          { label: tr('common.back'), action: () => this.setState('pause') },
-          { label: tr('menu.pause.confirmSurrender'), action: () => { this.pendingAction = 'quit_to_menu'; } },
+          {
+            label: tr(this.surrenderArmed ? 'menu.pause.confirmSurrender' : 'menu.pause.quit'),
+            action: () => {
+              if (this.surrenderArmed) this.pendingAction = 'quit_to_menu';
+              else this.surrenderArmed = true;
+            },
+          },
         ];
       default:
         return null;
@@ -595,7 +598,6 @@ export class MainMenu {
       case 'practice_setup':  this.drawPracticeSetup(ctx, screenW, screenH); break;
       case 'settings':        this.drawSettings(ctx, screenW, screenH); break;
       case 'pause':           this.drawPauseMenu(ctx, screenW, screenH); break;
-      case 'surrender_confirm': this.drawSurrenderConfirmation(ctx, screenW, screenH); break;
       case 'lan_type':        this.drawPlayMenu(ctx, screenW, screenH); break; // re-use play menu draw (simple list)
       case 'lan_host_lobby':  this.drawLanHostLobby(ctx, screenW, screenH); break;
       case 'lan_browser':     this.drawLanBrowser(ctx, screenW, screenH); break;
@@ -851,21 +853,6 @@ export class MainMenu {
 
     const opts = this.currentSimpleOptions()!;
     this.drawClickableOptions(ctx, cx, headerY + 92, opts);
-  }
-
-  private drawSurrenderConfirmation(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    ctx.fillStyle = 'rgba(0,0,0,0.76)';
-    ctx.fillRect(0, 0, w, h);
-    const cx = w * 0.5;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = gameFont(34);
-    ctx.fillStyle = colorToCSS(TextColors.title);
-    ctx.fillText(tr('menu.pause.surrenderQuestion'), cx, h * 0.34);
-    ctx.font = gameFont(17);
-    ctx.fillStyle = colorToCSS(TextColors.normal, 0.82);
-    ctx.fillText(tr('menu.pause.surrenderWarning'), cx, h * 0.40);
-    this.drawClickableOptions(ctx, cx, h * 0.53, this.currentSimpleOptions()!);
   }
 
   // -------------------------------------------------------------------
@@ -1133,8 +1120,15 @@ export class MainMenu {
   }
 
   private drawSettings(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    this.drawBackground(ctx, w, h);
-    this.drawBuildBadge(ctx, w);
+    if (this.settingsOrigin === 'pause') {
+      // The game world has already been rendered by Game.render(). Keep it
+      // visible behind settings so opening this screen still reads as paused.
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      this.drawBackground(ctx, w, h);
+      this.drawBuildBadge(ctx, w);
+    }
 
     const cx = w * 0.5;
     ctx.textAlign = 'center';
