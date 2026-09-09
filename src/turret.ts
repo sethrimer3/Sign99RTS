@@ -804,6 +804,113 @@ export class RegenTurret extends TurretBase {
   }
 }
 
+// ---------------------------------------------------------------------------
+// TetherTurret – latches onto an enemy ship and drags its speed down
+// ---------------------------------------------------------------------------
+
+/** Range at which a Tether can acquire and hold a ship. */
+export const TETHER_RANGE = 420;
+/** Peak slow fraction a single fully-charged Tether applies (20%). */
+export const TETHER_MAX_SLOW = 0.2;
+/** Seconds for a fresh Tether to ramp from 0% to peak slow. */
+export const TETHER_RAMP_SECS = 3.0;
+/** Seconds to recover to peak slow after a dash halves the hold. */
+export const TETHER_RERAMP_SECS = 1.5;
+
+export class TetherTurret extends TurretBase {
+  /** Ship this Tether is currently latched onto. */
+  tetherTarget: Entity | null = null;
+  /** Current slow fraction this Tether contributes (0 .. TETHER_MAX_SLOW). */
+  tetherStrength = 0;
+  /** Last seen dashCount of the target, to detect dashes. */
+  private targetDashCount = 0;
+  /** Seconds left of accelerated re-ramp after a dash. */
+  postDashTimer = 0;
+
+  constructor(position: Vec2, team: Team) {
+    super(
+      EntityType.TetherTurret,
+      team,
+      position,
+      HP_VALUES.turret,
+      60,
+      TETHER_RANGE,
+    );
+  }
+
+  /** Tethers never fire projectiles — their effect is applied in GameState. */
+  override canFire(): boolean {
+    return false;
+  }
+
+  /** Advance the tether hold against `target` (already validated in range). */
+  tickTether(target: Entity, dt: number): void {
+    if (target !== this.tetherTarget) {
+      this.tetherTarget = target;
+      this.tetherStrength = 0;
+      this.targetDashCount = target.dashCount;
+      this.postDashTimer = 0;
+    }
+    if (target.dashCount !== this.targetDashCount) {
+      this.targetDashCount = target.dashCount;
+      this.tetherStrength *= 0.5;
+      this.postDashTimer = TETHER_RERAMP_SECS;
+    }
+    const rate = this.postDashTimer > 0
+      ? TETHER_MAX_SLOW / TETHER_RERAMP_SECS
+      : TETHER_MAX_SLOW / TETHER_RAMP_SECS;
+    this.tetherStrength = Math.min(TETHER_MAX_SLOW, this.tetherStrength + rate * dt);
+    if (this.postDashTimer > 0) this.postDashTimer = Math.max(0, this.postDashTimer - dt);
+    this.turretAngle = this.position.angleTo(target.position);
+    this.beamTargetPos = target.position.clone();
+  }
+
+  /** Drop the current hold (target lost / out of range / turret unpowered). */
+  releaseTether(): void {
+    this.tetherTarget = null;
+    this.tetherStrength = 0;
+    this.postDashTimer = 0;
+    this.beamTargetPos = null;
+  }
+
+  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+    if (!this.alive) return;
+    const screen = camera.worldToScreen(this.position);
+    const r = this.radius * camera.zoom;
+    const detail = colorToCSS(Colors.exciterturret_detail);
+    this.drawTurretBase(ctx, screen, r, detail, camera);
+
+    // Emitter ring — three prongs that pulse brighter as the hold charges.
+    const charge = this.tetherStrength / TETHER_MAX_SLOW;
+    ctx.save();
+    ctx.strokeStyle = colorToCSS(Colors.exciterturret_detail, 0.4 + charge * 0.5);
+    ctx.lineWidth = Math.max(1.4, 2 * camera.zoom);
+    for (let i = 0; i < 3; i++) {
+      const a = this.turretAngle + (i - 1) * 0.9;
+      ctx.beginPath();
+      ctx.moveTo(screen.x + Math.cos(a) * r * 0.35, screen.y + Math.sin(a) * r * 0.35);
+      ctx.lineTo(screen.x + Math.cos(a) * r * 1.05, screen.y + Math.sin(a) * r * 1.05);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Latch beam to the held ship.
+    if (this.tetherTarget?.alive && this.beamTargetPos) {
+      const t = camera.worldToScreen(this.beamTargetPos);
+      const pulse = 0.5 + 0.5 * Math.sin(this.animationTime * 10);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = colorToCSS(Colors.exciterturret_detail, 0.25 + charge * 0.4 + pulse * 0.1);
+      ctx.lineWidth = Math.max(1, (1.5 + charge * 2.5) * camera.zoom);
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
 export class SynonymousMineLayer extends BuildingBase {
   private spin = 0;
   private mineTimer = 0.35;

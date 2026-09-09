@@ -73,12 +73,12 @@ const RESEARCH_DESCRIPTIONS: Record<string, string> = {
   weaponLaser:          'Unlocks the Laser: slow-firing beam that pierces all targets.',
   weaponGuidedMissile:  'Unlocks the Guided Missile: steerable heavy explosive.',
   weaponCannon:         'Unlocks Cannon V.2 with improved homing shells.',
-  missileturret:        'Unlocks construction of Missile Turrets. Guided-missile defense.',
+  missileturret:        'Unlocks construction of Missile turrets. Guided-missile defense.',
   synonymousminelayer:  'Unlocks construction of Mine Layer turrets.',
-  exciterturret:        'Unlocks construction of Exciter Turrets. Sustained-beam defense.',
-  massdriverturret:     'Unlocks construction of Mass Driver Turrets. Extreme-range kinetics.',
-  regenturret:          'Unlocks construction of Regen Turrets. Heals nearby structures.',
-  advancedRegenTurrets: 'Regen Turrets rebuild destroyed conduits for free.',
+  exciterturret:        'Unlocks construction of Prism turrets. Sustained-beam defense.',
+  massdriverturret:     'Unlocks construction of Singularity turrets. First blast drags in nearby ships.',
+  regenturret:          'Unlocks construction of Repair turrets. Heals nearby structures.',
+  advancedRegenTurrets: 'Repair turrets rebuild destroyed conduits for free.',
   bomberyard:           'Unlocks construction of Bomber Yards for nova bombers.',
   advancedFighters:     'Improves fighter ships with enhanced stats and combat AI.',
 };
@@ -316,13 +316,13 @@ const RESEARCH_LABELS: Record<string, string> = {
   weaponLaser: 'Laser',
   weaponGuidedMissile: 'Guided\nMissile',
   weaponCannon: 'Cannon V.2',
-  missileturret: 'Missile\nTurret',
-  gatlingturret: 'Gatling\nTurret',
+  missileturret: 'Missile',
+  gatlingturret: 'Gatling',
   synonymousminelayer: 'Mine\nLayer',
-  exciterturret: 'Exciter\nTurret',
-  massdriverturret: 'Mass Driver\nTurret',
-  regenturret: 'Regen\nTurret',
-  advancedRegenTurrets: 'Advanced\nRegen Turrets',
+  exciterturret: 'Prism',
+  massdriverturret: 'Singularity',
+  regenturret: 'Repair',
+  advancedRegenTurrets: 'Advanced\nRepair',
   bomberyard: 'Bomber\nYard',
   swarmyard: 'Swarm\nYard',
   advancedFighters: 'Advanced\nFighters',
@@ -414,6 +414,8 @@ function placementRangeForBuildDef(def: BuildDef): number {
       return 720;
     case 'massdriverturret':
       return 500;
+    case 'tetherturret':
+      return 420;
     case 'regenturret':
       return 300;
     case 'commandpost':
@@ -441,6 +443,7 @@ const SYNONYMOUS_BUILD_KEYS = new Set([
   'exciterturret',
   'massdriverturret',
   'regenturret',
+  'tetherturret',
   'fighteryard',
   'bomberyard',
 ]);

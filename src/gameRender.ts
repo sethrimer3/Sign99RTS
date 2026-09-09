@@ -11,7 +11,7 @@ import type { VisualQuality } from './visualquality.js';
 import { teamColor } from './teamutils.js';
 
 export type ShipCommandGroup = ShipGroup | 'all';
-export type WaypointMarker = { pos: Vec2; issuedAt: number };
+export type WaypointMarker = { pos: Vec2; issuedAt: number; kind?: 'group' | 'move' };
 
 const GROUP_COLORS: Record<ShipGroup, Color> = {
   [ShipGroup.Red]: Colors.redgroup,
@@ -30,12 +30,13 @@ export function drawWaypointMarkers(
     const marker = waypointMarkers.get(group);
     if (!marker) continue;
     const screen = camera.worldToScreen(marker.pos);
-    const color = group === 'all' ? Colors.alert2 : GROUP_COLORS[group];
-    const label = group === 'all' ? 'A' : `${group + 1}`;
+    const moveCommand = marker.kind === 'move';
+    const color = moveCommand ? Colors.radar_friendly_status : group === 'all' ? Colors.alert2 : GROUP_COLORS[group];
+    const label = moveCommand ? '+' : group === 'all' ? 'A' : `${group + 1}`;
     const t = state.gameTime - marker.issuedAt;
     const phase = state.gameTime * 3.2 + (group === 'all' ? 1.8 : group);
     const pulse = 0.5 + 0.5 * Math.sin(phase);
-    const ring = (18 + pulse * 5) * camera.zoom;
+    const ring = Math.max(15, (18 + pulse * 5) * camera.zoom);
     const lift = Math.sin(state.gameTime * 1.7 + t) * 3 * camera.zoom;
     const core = Math.max(5, 7 * camera.zoom);
     const tickInner = ring * 1.02;
@@ -54,22 +55,34 @@ export function drawWaypointMarkers(
     ctx.arc(0, 0, ring * 1.8, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle = colorToCSS(color, 0.34);
-    ctx.lineWidth = Math.max(1, 1.1 * camera.zoom);
-    ctx.beginPath();
-    ctx.arc(0, 0, ring * 1.28, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.strokeStyle = colorToCSS(color, 0.56);
-    ctx.lineWidth = Math.max(1, 1.6 * camera.zoom);
-    ctx.beginPath();
-    ctx.arc(0, 0, ring * 0.78, 0, Math.PI * 2);
-    ctx.stroke();
+    // Lockward-inspired layers: offset combination-lock wards counter-rotate,
+    // blink independently, and overlap like a polarized backlit display.
+    for (let layer = 0; layer < 3; layer++) {
+      const direction = layer === 1 ? -1 : 1;
+      const rotation = state.gameTime * (0.34 + layer * 0.17) * direction + layer * 1.91;
+      const blink = 0.42 + 0.38 * Math.sin(state.gameTime * (2.1 + layer * 0.73) + layer * 2.4);
+      const wardRadius = ring * (0.72 + layer * 0.22);
+      const wardCount = 5 + layer * 2;
+      ctx.save();
+      ctx.rotate(rotation);
+      ctx.strokeStyle = colorToCSS(color, Math.max(0.12, blink));
+      ctx.lineWidth = Math.max(1, (1.8 - layer * 0.3) * camera.zoom);
+      ctx.beginPath();
+      for (let i = 0; i < wardCount; i++) {
+        const a = i * Math.PI * 2 / wardCount;
+        const notch = i % 2 === 0 ? 0.58 : 0.77;
+        ctx.moveTo(Math.cos(a) * wardRadius * notch, Math.sin(a) * wardRadius * notch);
+        ctx.lineTo(Math.cos(a) * wardRadius, Math.sin(a) * wardRadius);
+        ctx.arc(0, 0, wardRadius, a, a + Math.PI / wardCount * 0.62);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
 
     ctx.strokeStyle = colorToCSS(color, 0.68);
     ctx.lineWidth = Math.max(1, 1.4 * camera.zoom);
     for (let i = 0; i < 4; i++) {
-      const a = state.gameTime * 0.55 + i * Math.PI * 0.5;
+      const a = state.gameTime * -0.55 + i * Math.PI * 0.5;
       const sx = Math.cos(a);
       const sy = Math.sin(a);
       ctx.beginPath();
@@ -78,25 +91,6 @@ export function drawWaypointMarkers(
       ctx.stroke();
     }
 
-    ctx.fillStyle = colorToCSS(color, 0.16);
-    ctx.beginPath();
-    ctx.moveTo(0, -ring * 0.9);
-    ctx.lineTo(ring * 0.68, 0);
-    ctx.lineTo(0, ring * 0.9);
-    ctx.lineTo(-ring * 0.68, 0);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.strokeStyle = colorToCSS(color, 0.76);
-    ctx.lineWidth = Math.max(1, 1.2 * camera.zoom);
-    ctx.beginPath();
-    ctx.moveTo(0, -ring * 0.9);
-    ctx.lineTo(ring * 0.7, 0);
-    ctx.lineTo(0, ring * 0.9);
-    ctx.lineTo(-ring * 0.7, 0);
-    ctx.closePath();
-    ctx.stroke();
-
     ctx.strokeStyle = colorToCSS(color, 0.5);
     ctx.lineWidth = Math.max(1, 1 * camera.zoom);
     ctx.beginPath();
@@ -104,7 +98,7 @@ export function drawWaypointMarkers(
     ctx.lineTo(0, ring * 1.58);
     ctx.stroke();
 
-    ctx.fillStyle = colorToCSS(color, 0.82);
+    ctx.fillStyle = colorToCSS(color, 0.48);
     ctx.beginPath();
     ctx.arc(0, 0, core, 0, Math.PI * 2);
     ctx.fill();
@@ -113,7 +107,11 @@ export function drawWaypointMarkers(
     ctx.font = `bold ${Math.max(9, 12 * camera.zoom)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = colorToCSS(Colors.particles_switch, 0.92);
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(3, 4 * camera.zoom);
+    ctx.strokeStyle = 'rgba(0,0,0,0.96)';
+    ctx.strokeText(label, 0, 0);
+    ctx.fillStyle = colorToCSS(color, 1);
     ctx.fillText(label, 0, 0);
     ctx.restore();
   }

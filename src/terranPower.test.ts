@@ -26,7 +26,13 @@ describe('Terran construction power requirements', () => {
 describe('Terran turret power requirements', () => {
   const turretDefs = Object.values(BUILD_DEFS).filter((def) => {
     const building = def.factory(new Vec2(0, 0), Team.Player);
-    return building instanceof TurretBase && building.type !== EntityType.TimeBomb;
+    // TimeBomb (mine layer) and Tether apply their effect directly rather than
+    // firing a projectile, so the generic canFire() contract does not apply.
+    return (
+      building instanceof TurretBase &&
+      building.type !== EntityType.TimeBomb &&
+      building.type !== EntityType.TetherTurret
+    );
   });
 
   for (const def of turretDefs) {

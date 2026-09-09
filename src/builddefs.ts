@@ -33,6 +33,7 @@ import {
   ExciterTurret,
   MassDriverTurret,
   RegenTurret,
+  TetherTurret,
   SynonymousMineLayer,
 } from './turret.js';
 import { BUILDING_COST, BUILD_TIME } from './constants.js';
@@ -183,26 +184,37 @@ export const BUILD_DEFS: Record<string, BuildDef> = {
   },
   missileturret: {
     key: 'missileturret',
-    label: 'Missile Turret',
+    label: 'Missile',
     description: 'Fires guided missiles that track targets. High single-target damage.',
     cost: BUILDING_COST.missileturret,
     footprintCells: 3,
     buildTime: BUILD_TIME.missileturret,
     tier: 'turret',
-    radialLabel: 'Missile\nTurret',
+    radialLabel: 'Missile',
     researchKey: 'missileturret',
     factory: (pos, team) => new MissileTurret(pos, team),
   },
   gatlingturret: {
     key: 'gatlingturret',
-    label: 'Gatling Turret',
+    label: 'Gatling',
     description: 'Long-range suppressive bullet turret. Consistent damage output at range.',
     cost: BUILDING_COST.gatlingturret,
     footprintCells: 3,
     buildTime: BUILD_TIME.gatlingturret,
     tier: 'turret',
-    radialLabel: 'Gatling\nTurret',
+    radialLabel: 'Gatling',
     factory: (pos, team) => new GatlingTurret(pos, team),
+  },
+  tetherturret: {
+    key: 'tetherturret',
+    label: 'Tether',
+    description: 'Latches onto the first enemy ship in range and drags its speed down over 3s; multiple Tethers stack and can freeze a ship outright.',
+    cost: BUILDING_COST.tetherturret,
+    footprintCells: 4,
+    buildTime: BUILD_TIME.tetherturret,
+    tier: 'turret',
+    radialLabel: 'Tether',
+    factory: (pos, team) => new TetherTurret(pos, team),
   },
   synonymousminelayer: {
     key: 'synonymousminelayer',
@@ -218,37 +230,37 @@ export const BUILD_DEFS: Record<string, BuildDef> = {
   },
   exciterturret: {
     key: 'exciterturret',
-    label: 'Exciter Turret',
+    label: 'Prism',
     description: 'Locks onto a target, then fires a heavy energy beam.',
     cost: BUILDING_COST.exciterturret,
     footprintCells: 4,
     buildTime: BUILD_TIME.exciterturret,
     tier: 'turret',
-    radialLabel: 'Exciter\nTurret',
+    radialLabel: 'Prism',
     researchKey: 'exciterturret',
     factory: (pos, team) => new ExciterTurret(pos, team),
   },
   massdriverturret: {
     key: 'massdriverturret',
-    label: 'Mass Driver',
-    description: 'Fires high-velocity kinetic slugs with extreme range and stopping power.',
+    label: 'Singularity',
+    description: 'Fires a kinetic slug that detonates into a gravity well — the first blast drags in nearby ships, harder the closer they are.',
     cost: BUILDING_COST.massdriverturret,
-    footprintCells: 3,
+    footprintCells: 6,
     buildTime: BUILD_TIME.massdriverturret,
     tier: 'turret',
-    radialLabel: 'Mass\nDriver',
+    radialLabel: 'Singularity',
     researchKey: 'massdriverturret',
     factory: (pos, team) => new MassDriverTurret(pos, team),
   },
   regenturret: {
     key: 'regenturret',
-    label: 'Regen Turret',
+    label: 'Repair',
     description: 'Emits a healing field that slowly repairs nearby allied buildings.',
     cost: BUILDING_COST.regenturret,
     footprintCells: 3,
     buildTime: BUILD_TIME.regenturret,
     tier: 'turret',
-    radialLabel: 'Regen\nTurret',
+    radialLabel: 'Repair',
     researchKey: 'regenturret',
     factory: (pos, team) => new RegenTurret(pos, team),
   },
@@ -284,6 +296,8 @@ export function buildCostForBuildingType(type: EntityType): number {
       return BUILDING_COST.massdriverturret;
     case EntityType.RegenTurret:
       return BUILDING_COST.regenturret;
+    case EntityType.TetherTurret:
+      return BUILDING_COST.tetherturret;
     default:
       return 0;
   }
@@ -319,6 +333,8 @@ export function buildDefForEntityType(type: EntityType): BuildDef | undefined {
       return BUILD_DEFS.massdriverturret;
     case EntityType.RegenTurret:
       return BUILD_DEFS.regenturret;
+    case EntityType.TetherTurret:
+      return BUILD_DEFS.tetherturret;
     default:
       return undefined;
   }

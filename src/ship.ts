@@ -212,7 +212,7 @@ export class PlayerShip extends Entity {
 
     // Clamp speed — boost allows a higher cap.
     const speed = this.velocity.length();
-    const speedCap = this.isBoosting ? this.maxSpeed * BOOST_SPEED_MULT : this.maxSpeed;
+    const speedCap = (this.isBoosting ? this.maxSpeed * BOOST_SPEED_MULT : this.maxSpeed) * this.tetherSpeedMultiplier();
     if (speed > speedCap) {
       this.velocity = this.velocity.normalize().scale(speedCap);
     }
@@ -609,6 +609,10 @@ export class PlayerShip extends Entity {
     const dir = new Vec2(Math.cos(this.angle), Math.sin(this.angle));
     this.battery = Math.max(0, this.battery - this.maxBattery * DASH_ENERGY_COST_FRACTION);
     this.velocity = this.velocity.add(dir.scale(DASH_INITIAL_SPEED));
+    // Dashing tears against any Tether holds — halve their grip immediately and
+    // let them re-tighten. dashCount bump is what the Tethers watch for.
+    this.dashCount++;
+    this.tetherSlowFrac *= 0.5;
     this.dashEffectTimer = DASH_TRAIL_LIFETIME;
     this.dashTrail = [
       { pos: this.position.add(dir.scale(-this.radius * 0.8)), age: DASH_TRAIL_LIFETIME * 0.16 },

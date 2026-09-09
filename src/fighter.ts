@@ -243,8 +243,9 @@ export class FighterShip extends Entity {
     this.avoidVelocity = this.avoidVelocity.scale(0.65);
     this.velocity = this.velocity.scale(1 / (1 + this.friction * dt));
     const speed = this.velocity.length();
-    if (speed > this.maxSpeed) {
-      this.velocity = this.velocity.normalize().scale(this.maxSpeed);
+    const cap = this.maxSpeed * this.tetherSpeedMultiplier();
+    if (speed > cap) {
+      this.velocity = cap <= 0 ? new Vec2(0, 0) : this.velocity.normalize().scale(cap);
     }
     this.position = this.position.add(this.velocity.scale(dt));
   }

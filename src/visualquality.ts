@@ -50,6 +50,13 @@ export interface VisualQualityPreset {
    * crystal motes.  0 = no interaction; 1 = full.
    */
   readonly crystalNebulaInteractionScale: number;
+  /**
+   * Spawn dense, very tight clumps of crystal motes (50–300 each) in
+   * natural nebula-like clusters, in addition to the diffuse clouds.
+   * Only enabled on the top ("Very High") graphics tier; the clumps are
+   * further gated at runtime to Cinematic level 2 and above.
+   */
+  readonly crystalNebulaClumps: boolean;
 
   // --- Distant Suns / Solar Backdrop ---
 
@@ -141,6 +148,7 @@ export const VISUAL_QUALITY_PRESETS: Record<VisualQuality, VisualQualityPreset> 
     crystalNebulaDensityScale: 0,
     crystalNebulaGlow: false,
     crystalNebulaInteractionScale: 0,
+    crystalNebulaClumps: false,
     distantSunsEnabled: false,
     distantSunsRays: false,
     distantSunsCorona: false,
@@ -171,6 +179,7 @@ export const VISUAL_QUALITY_PRESETS: Record<VisualQuality, VisualQualityPreset> 
     crystalNebulaDensityScale: 0,
     crystalNebulaGlow: false,
     crystalNebulaInteractionScale: 0,
+    crystalNebulaClumps: false,
     distantSunsEnabled: true,
     distantSunsRays: false,
     distantSunsCorona: false,
@@ -202,6 +211,7 @@ export const VISUAL_QUALITY_PRESETS: Record<VisualQuality, VisualQualityPreset> 
     crystalNebulaDensityScale: 0.55,
     crystalNebulaGlow: false,
     crystalNebulaInteractionScale: 0.7,
+    crystalNebulaClumps: false,
     distantSunsEnabled: true,
     distantSunsRays: true,
     distantSunsCorona: false,
@@ -232,6 +242,7 @@ export const VISUAL_QUALITY_PRESETS: Record<VisualQuality, VisualQualityPreset> 
     crystalNebulaDensityScale: 1.0,
     crystalNebulaGlow: true,
     crystalNebulaInteractionScale: 1.0,
+    crystalNebulaClumps: true,
     distantSunsEnabled: true,
     distantSunsRays: true,
     distantSunsCorona: true,

@@ -2375,6 +2375,9 @@ export class Game {
     this.state.drawEntities(ctx, this.camera);
     drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn);
     drawWaypointMarkers(ctx, this.camera, this.state, this.waypointMarkers);
+    drawGlowLayer(this.glowLayer, this.camera, this.state, this.visualPreset, renderBudget.renderLoadScale);
+    this.glowLayer.compositeTo(ctx);
+    // Keep command selections and the live drag box crisp above world glows.
     drawCommandModeOverlay(
       ctx,
       w,
@@ -2385,8 +2388,6 @@ export class Game {
       this.commandModeState.dragStart,
       this.commandModeState.dragCurrent,
     );
-    drawGlowLayer(this.glowLayer, this.camera, this.state, this.visualPreset, renderBudget.renderLoadScale);
-    this.glowLayer.compositeTo(ctx);
 
     // Edge indicators (always)
     drawEdgeIndicators(ctx, this.camera, this.state, w, h);

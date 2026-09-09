@@ -529,7 +529,8 @@ export function drawGlowLayer(
         b.type === EntityType.TimeBomb ||
         b.type === EntityType.ExciterTurret ||
         b.type === EntityType.MassDriverTurret ||
-        b.type === EntityType.RegenTurret
+        b.type === EntityType.RegenTurret ||
+        b.type === EntityType.TetherTurret
       ) {
         glow.circleWorld(camera, b.position, b.radius * 1.25, color, 0.045 * pulse, false, 2);
       }

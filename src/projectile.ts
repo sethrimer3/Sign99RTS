@@ -1133,6 +1133,11 @@ export class MassDriverBullet extends ProjectileBase {
     return this.bursting;
   }
 
+  /** How many damage pulses have been consumed so far (1 == the first blast). */
+  get pulsesFired(): number {
+    return this.burstPulseIndex;
+  }
+
   private currentBlastRadius(): number {
     const grow = Math.min(1, this.burstElapsed / this.expansionDuration);
     const eased = 1 - Math.pow(1 - grow, 3);

@@ -5,7 +5,7 @@ import { Entity, Team, EntityType } from './entities.js';
 import { PlayerShip } from './ship.js';
 import { BuildingBase, CommandPost, Wall } from './building.js';
 import { Shipyard } from './building.js';
-import { SynonymousMineLayer, TurretBase } from './turret.js';
+import { SynonymousMineLayer, TetherTurret, TurretBase } from './turret.js';
 import { MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
 import { isSynonymousDriftMine } from './synonymousMine.js';
 import { FighterShip, SwarmShip } from './fighter.js';
@@ -315,6 +315,7 @@ export class GameState {
         else if (entity.type === EntityType.ExciterTurret) entity.synonymousVisualKind = 'laserturret';
         else if (entity.type === EntityType.MassDriverTurret) entity.synonymousVisualKind = 'laserturret';
         else if (entity.type === EntityType.RegenTurret) entity.synonymousVisualKind = 'laserturret';
+        else if (entity.type === EntityType.TetherTurret) entity.synonymousVisualKind = 'laserturret';
         else if (entity.type === EntityType.TimeBomb) entity.synonymousVisualKind = 'minelayer';
       }
       this.buildings.push(entity);
@@ -513,6 +514,7 @@ export class GameState {
     for (const b of this.buildings) {
       if (b instanceof SynonymousMineLayer) b.tickMineLayer(this);
     }
+    this.updateTethers(dt);
     this.synonymous.updateBuildingIntegrity(this.buildings);
     this.rebuildSpatialIndex();
 
@@ -553,6 +555,8 @@ export class GameState {
         const pulseRadius = p.consumeDamagePulse();
         if (pulseRadius !== null) {
           this.applyMassDriverPulse(p, pulseRadius);
+          // Singularity: the first blast drags in nearby ships.
+          if (p.pulsesFired === 1) this.applySingularityPull(p, pulseRadius);
         }
       }
       if (p instanceof SynonymousNovaBomb && p.consumePulse()) {
@@ -1352,6 +1356,84 @@ export class GameState {
     Audio.playSoundAt('explode1', proj.position);
   }
 
+  /** True for player / fighter / bomber hulls — the things Tethers and the
+   *  Singularity pull can grab. */
+  private isShipEntity(e: Entity): boolean {
+    return (
+      e.type === EntityType.PlayerShip ||
+      e.type === EntityType.Fighter ||
+      e.type === EntityType.Bomber
+    );
+  }
+
+  /**
+   * Singularity first-blast gravity well: yank every non-allied ship within
+   * twice the blast radius toward the detonation, harder the closer it is.
+   */
+  private applySingularityPull(proj: MassDriverBullet, radius: number): void {
+    const reach = radius * 2;
+    const PULL_PEAK = 520;
+    for (const e of this.queryEntitiesInRange(proj.position, reach + ENTITY_RADIUS.building, this.spatialQueryScratch)) {
+      if (!e.alive || e.team === Team.Neutral || e.team === proj.team) continue;
+      if (!this.isShipEntity(e)) continue;
+      const d = e.position.distanceTo(proj.position);
+      if (d > reach || d < 1) continue;
+      const closeness = 1 - d / reach; // 1 at the centre, 0 at the edge
+      const mag = PULL_PEAK * closeness * closeness;
+      const dir = proj.position.sub(e.position).normalize();
+      e.velocity = e.velocity.add(dir.scale(mag));
+    }
+    this.ringEffects.spawn('blackout_wave', proj.position.clone(), reach * 0.15, reach * 0.9, 0.4, 0.6);
+  }
+
+  /**
+   * Per-tick Tether resolution. Runs for every team so AI-owned Tethers work
+   * too. Resets each ship's accumulated slow, then lets every powered Tether
+   * latch onto the nearest opposing ship and add its hold.
+   */
+  private updateTethers(dt: number): void {
+    let anyTether = false;
+    for (const b of this.buildings) {
+      if (b instanceof TetherTurret) { anyTether = true; break; }
+    }
+    if (!anyTether) return;
+
+    for (const s of this.playerShips.values()) s.tetherSlowFrac = 0;
+    for (const f of this.fighters) f.tetherSlowFrac = 0;
+
+    for (const b of this.buildings) {
+      if (!(b instanceof TetherTurret)) continue;
+      if (!b.alive || b.buildProgress < 1 || !b.powered) {
+        b.releaseTether();
+        continue;
+      }
+      let target = b.tetherTarget;
+      const stillValid =
+        target !== null &&
+        target.alive &&
+        target.team !== b.team &&
+        target.team !== Team.Neutral &&
+        this.isShipEntity(target) &&
+        b.position.distanceTo(target.position) <= b.range;
+      if (!stillValid) {
+        target = null;
+        let bestDist = b.range;
+        for (const e of this.queryEntitiesInRange(b.position, b.range, this.spatialQueryScratch)) {
+          if (!e.alive || e.team === Team.Neutral || e.team === b.team) continue;
+          if (!this.isShipEntity(e)) continue;
+          const d = b.position.distanceTo(e.position);
+          if (d < bestDist) { bestDist = d; target = e; }
+        }
+      }
+      if (!target) {
+        b.releaseTether();
+        continue;
+      }
+      b.tickTether(target, dt);
+      target.tetherSlowFrac += b.tetherStrength;
+    }
+  }
+
   private applyAdvancedFighterHazardAvoidance(fighter: FighterShip, dt: number): void {
     if (!fighter.advancedTier || fighter.docked || !fighter.alive) return;
     for (const p of this.queryEntitiesInRange(fighter.position, 220, this.spatialQueryScratch)) {
@@ -2148,6 +2230,7 @@ export class GameState {
       : def.key === 'exciterturret' ? EntityType.ExciterTurret
       : def.key === 'massdriverturret' ? EntityType.MassDriverTurret
       : def.key === 'regenturret' ? EntityType.RegenTurret
+      : def.key === 'tetherturret' ? EntityType.TetherTurret
       : null;
     if (type === null) return { valid: true, reason: 'OK' };
     const cap = type === EntityType.Factory ? MAX_FACTORIES

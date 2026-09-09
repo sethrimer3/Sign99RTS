@@ -23,7 +23,7 @@ import { Team, EntityType } from './entities.js';
 import type { GameState } from './gamestate.js';
 import type { Camera } from './camera.js';
 import { CommandPost } from './building.js';
-import { GatlingTurret, MissileTurret, ExciterTurret, MassDriverTurret } from './turret.js';
+import { GatlingTurret, MissileTurret, ExciterTurret, MassDriverTurret, TetherTurret } from './turret.js';
 import { GRID_CELL_SIZE, cellCenter, cellKey } from './grid.js';
 import { AIScore, cellOf } from './aiscore.js';
 
@@ -143,7 +143,8 @@ export class EnemyAI {
         b.type === EntityType.MissileTurret ||
         b.type === EntityType.GatlingTurret ||
         b.type === EntityType.ExciterTurret ||
-        b.type === EntityType.MassDriverTurret
+        b.type === EntityType.MassDriverTurret ||
+        b.type === EntityType.TetherTurret
       ) n++;
     }
     return n;
@@ -180,7 +181,7 @@ export class EnemyAI {
     const pos = cellCenter(safe.cx, safe.cy);
     // Cycle turret types so a base doesn't end up all-missile.
     const turretCount = this.myTurretCount(state);
-    const types = [GatlingTurret, MissileTurret, ExciterTurret, MassDriverTurret];
+    const types = [GatlingTurret, MissileTurret, ExciterTurret, MassDriverTurret, TetherTurret];
     const TurretClass = types[turretCount % types.length];
     const turret = new TurretClass(pos, this.team);
     turret.buildProgress = 0; // visible construction
