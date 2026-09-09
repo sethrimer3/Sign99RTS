@@ -276,18 +276,6 @@ export class DistantSuns {
     if (getCinematicLevel() >= 5) {
       this.drawQuaternaryDustBand(ctx, camera, screenW, screenH);
     }
-    if (getCinematicLevel() >= 6) {
-      this.drawSolarFilamentHalo(ctx, cx, cy, screenW, screenH);
-    }
-    if (getCinematicLevel() >= 7) {
-      this.drawGravitationalLensRing(ctx, cx, cy, screenW, screenH);
-    }
-    if (getCinematicLevel() >= 8) {
-      this.drawSolarProminences(ctx, cx, cy, screenW, screenH);
-    }
-    if (getCinematicLevel() >= 9) {
-      this.drawMagneticFieldArcs(ctx, cx, cy, screenW, screenH);
-    }
 
     // 2 — Warm directional screen fill (all quality levels).
     this.drawScreenWarmth(ctx, cx, cy, screenW, screenH);

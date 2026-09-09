@@ -2339,7 +2339,7 @@ export class Game {
     // Layer 2: asteroid field (disabled via asteroidFieldLayers:0; kept for code stability)
     if (this.cinematicLevel > -2) this.asteroidField.draw(ctx, this.camera, w, h);
     // Crystal nebula clouds — behind gameplay entities, in front of starfield.
-    if (this.cinematicLevel > -2) this.crystalNebula.draw(ctx, this.camera, this.glowLayer, this.visualPreset);
+    if (this.cinematicLevel >= -2) this.crystalNebula.draw(ctx, this.camera, this.glowLayer, this.visualPreset);
     // Advance the fluid simulation by the frame delta and draw it under the game world.
     this.spaceFluid.step(this.lastFrameMs);
     this.spaceFluid.render(ctx);
@@ -2488,34 +2488,59 @@ export class Game {
     ctx.restore();
   }
 
-  private drawPracticeHUD(ctx: CanvasRenderingContext2D, _w: number, h: number): void {
+  private drawPracticeHUD(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     ctx.font = '12px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
-    ctx.textAlign = 'left';
+    ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     ctx.fillStyle = colorToCSS(Colors.general_building, 0.7);
-    ctx.fillText(
-      `Bases destroyed: ${this.practiceMode.score.basesDestroyed} | Time: ${Math.floor(this.practiceMode.score.timeSurvived)}s`,
-      10, 10,
-    );
+    const right = w - 12;
+    const lines: string[] = [];
     const cfg = this.mainMenu.vsAIConfig;
-    if (this.state.gameMode === 'vs_ai' && cfg.ranked) {
-      if (cfg.mode === 'survival') {
+    if (this.state.gameMode === 'practice') {
+      lines.push('Game mode: Practice');
+      lines.push('Modifiers: none');
+    } else {
+      const modeName = cfg.mode === 'survival' ? 'Survival' : 'Vs. AI';
+      lines.push(`Game mode: ${cfg.ranked ? `Ranked ${modeName}` : modeName}`);
+
+      const modifiers: string[] = [];
+      if (cfg.cheatFullMapKnowledge) modifiers.push('Full Map');
+      if (cfg.cheat125xResources) modifiers.push('1.25x Res');
+      const multiplier = cfg.ranked ? ` x${rankedScoreMultiplier(cfg).toFixed(2)}` : '';
+      lines.push(`Modifiers: ${modifiers.length > 0 ? modifiers.join(', ') : 'none'}${multiplier}`);
+
+      if (cfg.ranked && cfg.mode === 'survival') {
         const survivalScore = this.currentRankedSurvivalScoreBreakdown();
-        ctx.fillText(
+        lines.push(
           `Time survived ${survivalScore.timeSeconds}s x${survivalScore.difficultyMultiplier.toFixed(2)} = ${survivalScore.score}`,
-          10, 26,
         );
-        return;
+      } else if (cfg.ranked) {
+        lines.push(`Rank: ${cfg.difficulty} ${cfg.aiRank} | Score: ${rankedScore(cfg)}`);
       }
-      const cheatCount = rankedCheaterModifierCount(cfg);
-      const modText = cheatCount > 0
-        ? ` | Modifiers: ${cfg.cheatFullMapKnowledge ? 'Full Map ' : ''}${cfg.cheat125xResources ? '1.25x Res ' : ''}x${rankedScoreMultiplier(cfg).toFixed(2)}`
-        : ' | Modifiers: none x1.00';
-      ctx.fillText(
-        `Ranked: ${cfg.difficulty} ${cfg.aiRank} | Score: ${rankedScore(cfg)}${modText}`,
-        10, 26,
-      );
     }
+
+    let y = 10;
+    for (const line of lines) {
+      ctx.fillText(line, right, y);
+      y += 16;
+    }
+
+    // Keep both changing values in at least three-digit slots so their labels
+    // stay fixed when a counter crosses from tens into hundreds.
+    const bases = String(this.practiceMode.score.basesDestroyed);
+    const elapsed = String(Math.floor(this.practiceMode.score.timeSurvived));
+    const basesSlotWidth = Math.max(ctx.measureText('000').width, ctx.measureText(bases).width);
+    const elapsedSlotWidth = Math.max(ctx.measureText('000').width, ctx.measureText(elapsed).width);
+    let cursor = right;
+    ctx.fillText('s', cursor, y);
+    cursor -= ctx.measureText('s').width;
+    ctx.fillText(elapsed, cursor, y);
+    cursor -= elapsedSlotWidth;
+    ctx.fillText(' | Time: ', cursor, y);
+    cursor -= ctx.measureText(' | Time: ').width;
+    ctx.fillText(bases, cursor, y);
+    cursor -= basesSlotWidth;
+    ctx.fillText('Bases destroyed: ', cursor, y);
 
     // AI strategy debug info — shown when debug overlay is active.
     if (this.debugOverlay) {

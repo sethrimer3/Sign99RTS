@@ -18,6 +18,7 @@
  */
 
 import { Colors, TextColors, colorToCSS } from './colors.js';
+import { MenuTriangleBackground } from './menuTriangles.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { buildLabel } from './version.js';
@@ -177,6 +178,7 @@ export class MainMenu {
   /** Latched click pulse for visual feedback. */
   private clickPulse: { rect: HitRect; t: number } | null = null;
 
+  private triangleBackground = new MenuTriangleBackground();
   private bgStars: BackgroundStar[] = [];
   private animTime: number = 0;
   private openedAt: number = performance.now() * 0.001;
@@ -360,6 +362,7 @@ export class MainMenu {
 
   update(dt: number, screenW: number, screenH: number): MenuAction {
     this.animTime += dt;
+    this.triangleBackground.update(dt, screenW, screenH, this.state);
 
     // Latch the mouse state *before* Input.update() resets `mousePressed`
     // later this tick. draw() consumes this latched state.
@@ -613,27 +616,8 @@ export class MainMenu {
     ctx.fillRect(0, 0, w, h);
 
     ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
+    this.triangleBackground.draw(ctx);
     const drift = this.animTime * 18;
-    const auroraA = ctx.createLinearGradient(w * 0.08, h * 0.2, w * 0.92, h * 0.82);
-    auroraA.addColorStop(0, MENU_ACCENT_CYAN + '0)');
-    auroraA.addColorStop(0.35, MENU_ACCENT_CYAN + '0.10)');
-    auroraA.addColorStop(0.58, MENU_ACCENT_PINK + '0.08)');
-    auroraA.addColorStop(1, MENU_ACCENT_CYAN + '0)');
-    ctx.fillStyle = auroraA;
-    ctx.beginPath();
-    ctx.ellipse(w * 0.54 + Math.sin(this.animTime * 0.23) * 34, h * 0.56, w * 0.52, h * 0.20, -0.18, 0, Math.PI * 2);
-    ctx.fill();
-
-    const auroraB = ctx.createLinearGradient(w * 0.2, h * 0.84, w * 0.95, h * 0.2);
-    auroraB.addColorStop(0, MENU_ACCENT_GOLD + '0)');
-    auroraB.addColorStop(0.45, MENU_ACCENT_GOLD + '0.07)');
-    auroraB.addColorStop(1, MENU_ACCENT_CYAN + '0)');
-    ctx.fillStyle = auroraB;
-    ctx.beginPath();
-    ctx.ellipse(w * 0.72, h * 0.34 + Math.cos(this.animTime * 0.19) * 18, w * 0.44, h * 0.16, -0.42, 0, Math.PI * 2);
-    ctx.fill();
-
     ctx.globalCompositeOperation = 'source-over';
     ctx.strokeStyle = colorToCSS(Colors.radar_gridlines, 0.055);
     ctx.lineWidth = 1;
@@ -1677,7 +1661,7 @@ export class MainMenu {
       'Cinematic Slider',
       value,
       -3,
-      9,
+      5,
       1,
       (v) => onChange(clampCinematicLevel(v)),
       (v) => String(Math.round(v)),

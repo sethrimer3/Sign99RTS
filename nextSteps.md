@@ -481,3 +481,10 @@ can be removed in a future refactor along with all call-site changes:
 - `src/entities.ts` / other files — any other call sites passing team to these methods
 
 This is low-risk but touches several files; best batched with a broader API cleanup pass.
+
+## Validation blocker: cinematic level changes
+
+- Commands: `npm run typecheck` and `npm run build`.
+- Error: `src/suns.ts(317,23): error TS2367: This comparison appears to be unintentional because the types '-1 | -3 | -2' and '6' have no overlap.`
+- Likely cause: the cinematic level type is being changed in the working tree while the sun renderer still compares against level 6 and higher.
+- Recommended fix: finish reconciling the sun renderer with the intended cinematic level range, then rerun both commands. This overlaps ongoing cinematic edits and was left untouched by the menu animation timing change.
