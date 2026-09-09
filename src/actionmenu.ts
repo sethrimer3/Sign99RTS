@@ -1548,6 +1548,16 @@ class QuickBuildMenu {
   private selectedIndex = 0;
   private readonly iconRects: Array<{ index: number; x: number; y: number; w: number; h: number }> = [];
 
+  cancel(): void {
+    this.open = false;
+    this.touchedThisDrag.clear();
+    this.buildingDragCells.clear();
+    this.buildingDragStartCell = null;
+    this.dragMode = null;
+    this.lastDragCell = null;
+    this.shapeDrawing = false;
+  }
+
   private conduitBrushCells(cx: number, cy: number): Array<{ cx: number; cy: number }> {
     return [
       { cx, cy },
@@ -1582,6 +1592,10 @@ class QuickBuildMenu {
   }
 
   update(state: GameState, camera: Camera): MenuResult {
+    if (!state.player.alive) {
+      this.cancel();
+      return { action: 'none' };
+    }
     const keyDown = Input.isDown('q');
     if (keyDown && !this.open) {
       this.open = true;

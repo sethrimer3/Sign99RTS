@@ -401,6 +401,7 @@ export class MainMenu {
           this.awaitingBinding = null;
           Audio.playSound('menuselection');
         }
+        return 'none';
       }
     }
 
@@ -464,27 +465,27 @@ export class MainMenu {
     const opts = this.currentSimpleOptions();
     if (!opts) return 'none';
 
-    if (Input.wasPressed('ArrowUp')) {
+    if (Input.rawWasPressed('ArrowUp')) {
       this.selectedIndex = (this.selectedIndex - 1 + opts.length) % opts.length;
       Audio.playSound('menucursor');
     }
-    if (Input.wasPressed('ArrowDown')) {
+    if (Input.rawWasPressed('ArrowDown')) {
       this.selectedIndex = (this.selectedIndex + 1) % opts.length;
       Audio.playSound('menucursor');
     }
-    if (Input.wasPressed('Enter') || Input.wasPressed(' ')) {
+    if (Input.rawWasPressed('Enter') || Input.rawWasPressed(' ')) {
       Audio.playSound('menuselection');
       opts[this.selectedIndex].action();
       return this.takePending();
     }
-    if ((this.state === 'pause' || this.state === 'surrender_confirm') && Input.wasPressed('Escape')) {
+    if ((this.state === 'pause' || this.state === 'surrender_confirm') && Input.rawWasPressed('Escape')) {
       Audio.playSound('menuselection');
       if (this.state === 'surrender_confirm') this.setState('pause');
       else this.pendingAction = 'resume';
       return this.takePending();
     }
     if (
-      Input.wasPressed('Escape') &&
+      Input.rawWasPressed('Escape') &&
       (this.state === 'play' ||
         this.state === 'vs_ai_setup' ||
         this.state === 'practice_setup' ||
@@ -1155,7 +1156,9 @@ export class MainMenu {
     const viewportTop = 165;
     const viewportBottom = Math.max(viewportTop + 80, h - 115);
     const viewportH = viewportBottom - viewportTop;
-    const contentBottom = this.settingsTab === 'controls' ? 190 + KEYBIND_DEFINITIONS.length * rowH + 90 : 520;
+    const contentBottom = this.settingsTab === 'controls'
+      ? 190 + KEYBIND_DEFINITIONS.length * rowH + 90
+      : this.settingsTab === 'gameplay' ? 620 : 520;
     const maxScroll = Math.max(0, contentBottom - viewportBottom);
     if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
       this.settingsScroll = Math.max(0, Math.min(maxScroll, this.settingsScroll + this.wheelDeltaLatched * 0.55));
@@ -2487,30 +2490,30 @@ export class MainMenu {
     const text = this.getActiveJoinText();
     const cursor = this.getActiveJoinCursor();
 
-    if (Input.wasPressed('Backspace')) {
+    if (Input.rawWasPressed('Backspace')) {
       if (cursor > 0) {
         this.setActiveJoinText(text.slice(0, cursor - 1) + text.slice(cursor));
         this.setActiveJoinCursor(cursor - 1);
       }
     }
-    if (Input.wasPressed('Delete')) {
+    if (Input.rawWasPressed('Delete')) {
       if (cursor < text.length) {
         this.setActiveJoinText(text.slice(0, cursor) + text.slice(cursor + 1));
       }
     }
-    if (Input.wasPressed('ArrowLeft')) {
+    if (Input.rawWasPressed('ArrowLeft')) {
       this.setActiveJoinCursor(Math.max(0, this.getActiveJoinCursor() - 1));
     }
-    if (Input.wasPressed('ArrowRight')) {
+    if (Input.rawWasPressed('ArrowRight')) {
       this.setActiveJoinCursor(Math.min(this.getActiveJoinText().length, this.getActiveJoinCursor() + 1));
     }
-    if (Input.wasPressed('Home')) {
+    if (Input.rawWasPressed('Home')) {
       this.setActiveJoinCursor(0);
     }
-    if (Input.wasPressed('End')) {
+    if (Input.rawWasPressed('End')) {
       this.setActiveJoinCursor(this.getActiveJoinText().length);
     }
-    if (Input.wasPressed('Tab')) {
+    if (Input.rawWasPressed('Tab')) {
       this._joinActiveField = this._joinActiveField === 'url' ? 'name' : 'url';
       this.clampJoinCursors();
     }

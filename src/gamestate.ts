@@ -1390,6 +1390,31 @@ export class GameState {
     return null;
   }
 
+  /**
+   * Remove construction that has not become operational yet and return its
+   * full purchase price. Used when the player ship enters ghost mode.
+   */
+  cancelPlannedConstruction(team: Team): { buildings: number; conduits: number; refund: number } {
+    let buildings = 0;
+    let refund = 0;
+    for (const building of this.buildings) {
+      if (!building.alive || building.team !== team || building.buildProgress >= 1) continue;
+      if (isSynonymousFaction(this.factionByTeam, team)) {
+        this.synonymous.releaseBuilding(building.id, this.gameTime, { sold: true });
+      } else {
+        refund += building.placementCost ?? buildCostForBuildingType(building.type);
+      }
+      building.destroy();
+      buildings++;
+    }
+
+    const conduits = this.grid.cancelPendingConduits(team);
+    refund += conduits * CONDUIT_COST;
+    if (team === Team.Player && refund > 0) this.resources += refund;
+    if (buildings > 0 || conduits > 0) this.power.markDirty();
+    return { buildings, conduits, refund };
+  }
+
   eraseBlueprintAt(pos: Vec2, team: Team): boolean {
     const px = Math.floor(pos.x / GRID_CELL_SIZE);
     const py = Math.floor(pos.y / GRID_CELL_SIZE);

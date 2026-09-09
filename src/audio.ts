@@ -83,10 +83,12 @@ class AudioManager {
 
   constructor() {
     try {
-      const music = Number(window.localStorage?.getItem('sign99:music-volume'));
-      const sfx = Number(window.localStorage?.getItem('sign99:sfx-volume'));
-      if (Number.isFinite(music)) this.musicVolume = Math.max(0, Math.min(1, music));
-      if (Number.isFinite(sfx)) this.sfxVolume = Math.max(0, Math.min(1, sfx));
+      const musicSaved = window.localStorage?.getItem('sign99:music-volume');
+      const sfxSaved = window.localStorage?.getItem('sign99:sfx-volume');
+      const music = Number(musicSaved);
+      const sfx = Number(sfxSaved);
+      if (musicSaved !== null && musicSaved !== undefined && Number.isFinite(music)) this.musicVolume = Math.max(0, Math.min(1, music));
+      if (sfxSaved !== null && sfxSaved !== undefined && Number.isFinite(sfx)) this.sfxVolume = Math.max(0, Math.min(1, sfx));
     } catch { /* Keep defaults. */ }
   }
 

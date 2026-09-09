@@ -28,6 +28,8 @@ export abstract class BuildingBase extends Entity {
   powered = false;
   buildProgress = 1;
   buildDurationSeconds = 0;
+  /** Exact amount paid when this construction was placed (for full cancellation refunds). */
+  placementCost: number | null = null;
   deletionProgress = 0;
   deletionDurationSeconds = 3;
   deleting = false;

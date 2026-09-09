@@ -1087,6 +1087,7 @@ export class Game {
   }
 
   private placeBuilding(type: string, cellOverride?: { cx: number; cy: number }): void {
+    if (!this.state.player.alive) return;
     const def = getBuildDef(type);
     if (!def) return;
 
@@ -1115,8 +1116,10 @@ export class Game {
         return;
       }
     } else {
+      const placementCost = this.state.getBuildCost(def, Team.Player);
       const conduitRefund = this.state.sellReplaceableConduitsUnderFootprint(def, cell.cx, cell.cy, Team.Player);
-      this.state.resources += conduitRefund - this.state.getBuildCost(def, Team.Player);
+      this.state.resources += conduitRefund - placementCost;
+      building.placementCost = placementCost;
     }
     this.state.addEntity(building);
     this.state.applyConfluencePlacement(Team.Player, worldPos, String(building.id));

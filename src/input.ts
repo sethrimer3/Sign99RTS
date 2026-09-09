@@ -11,6 +11,7 @@ export const KEYBIND_DEFINITIONS = [
   { key: 'Shift', label: 'Boost / Brake' }, { key: 'Tab', label: 'Full-screen Radar' },
   { key: 'c', label: 'Command Mode' }, { key: 'q', label: 'Action Menu' },
   { key: 'z', label: 'Alternate Action' },
+  { key: 'x', label: 'Research Menu' },
   { key: '1', label: 'Command / Build Slot 1' }, { key: '2', label: 'Command / Build Slot 2' },
   { key: '3', label: 'Command / Build Slot 3' }, { key: '4', label: 'Command / Build Slot 4' },
   { key: 'n', label: 'Next Target / Unit' }, { key: 'Escape', label: 'Menu / Pause' },
@@ -79,7 +80,8 @@ class InputManager {
     try {
       const saved = JSON.parse(window.localStorage?.getItem(KEYBIND_STORAGE_KEY) ?? '{}') as Record<string, unknown>;
       for (const item of KEYBIND_DEFINITIONS) {
-        if (typeof saved[item.key] === 'string' && saved[item.key]) this.bindings.set(item.key, this.normalizeKey(saved[item.key]));
+        const value = saved[item.key];
+        if (typeof value === 'string' && value) this.bindings.set(item.key, this.normalizeKey(value));
       }
     } catch { /* Invalid or unavailable storage: defaults remain active. */ }
   }
@@ -106,6 +108,7 @@ class InputManager {
 
   /** Raw physical keys pressed this frame, used by the key-capture settings UI. */
   pressedKeys(): string[] { return [...this.keysPressed]; }
+  rawWasPressed(key: string): boolean { return this.keysPressed.has(this.normalizeKey(key)); }
 
   private clampStickVector(dx: number, dy: number): Vec2 {
     const mag = Math.hypot(dx, dy);
