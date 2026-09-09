@@ -13,7 +13,7 @@ import { HUD } from './hud.js';
 import { MainMenu, MenuAction } from './menu.js';
 import { Colors, colorToCSS } from './colors.js';
 import { Team, EntityType, ShipGroup, Entity } from './entities.js';
-import { DT, WORLD_WIDTH, WORLD_HEIGHT, RESEARCH_COST, RESEARCH_TIME, TICK_RATE, WEAPON_STATS, ACTIVE_RESEARCH_ITEMS, SHIP_STATS, BASELINE_RESOURCE_GAIN, RESOURCE_GAIN_RATE } from './constants.js';
+import { DT, WORLD_WIDTH, WORLD_HEIGHT, RESEARCH_COST, RESEARCH_TIME, RESEARCH_MODE, TICK_RATE, WEAPON_STATS, ACTIVE_RESEARCH_ITEMS, SHIP_STATS, BASELINE_RESOURCE_GAIN, RESOURCE_GAIN_RATE } from './constants.js';
 import { BuildingBase, CommandPost, Factory, ResearchLab, ShieldGenerator } from './building.js';
 import { Shipyard } from './building.js';
 import { EnemyBasePlanner } from './enemybaseplanner.js';
@@ -1153,7 +1153,28 @@ export class Game {
       return;
     }
     if (this.state.researchedItems.has(item) || this.state.hasResearchBuilding(item)) {
-      this.hud.showMessage(`${researchDisplayName(item)} already has a Research Node`, Colors.alert2, 3);
+      this.hud.showMessage(
+        RESEARCH_MODE === 'classic'
+          ? `${researchDisplayName(item)} is already queued`
+          : `${researchDisplayName(item)} already has a Research Node`,
+        Colors.alert2, 3,
+      );
+      return;
+    }
+    if (RESEARCH_MODE === 'classic') {
+      const synonymous = isSynonymousFaction(this.state.factionByTeam, Team.Player);
+      const canAfford = synonymous ? this.state.synonymous.canSpend(Team.Player, cost) : this.state.resources >= cost;
+      if (!canAfford) {
+        this.hud.showMessage(`Need ${cost}${synonymous ? ' ' + SYNONYMOUS_CURRENCY_SYMBOL : ''}`, Colors.alert1, 3);
+        return;
+      }
+      if (synonymous) {
+        this.state.synonymous.spendFreeDrones(Team.Player, cost);
+      } else {
+        this.state.resources -= cost;
+      }
+      this.state.queueResearch(item);
+      this.hud.showMessage(`Researching ${researchDisplayName(item)}…`, Colors.researchlab_detail, 3);
       return;
     }
     this.actionMenu.beginResearchNodePlacement(item);
@@ -1205,8 +1226,15 @@ export class Game {
   }
 
   private cancelQueuedResearch(queueIndex: number): void {
-    const [item] = this.state.researchQueue.splice(queueIndex, 1);
-    if (!item) return;
+    let item: string | undefined;
+    if (queueIndex === -1) {
+      item = this.state.researchProgress.item ?? undefined;
+      if (!item) return;
+      this.state.cancelActiveResearch();
+    } else {
+      [item] = this.state.researchQueue.splice(queueIndex, 1);
+      if (!item) return;
+    }
     const cost = RESEARCH_COST[item as keyof typeof RESEARCH_COST];
     if (cost !== undefined) {
       if (isSynonymousFaction(this.state.factionByTeam, Team.Player)) {

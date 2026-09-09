@@ -63,6 +63,17 @@ export const BUILD_TIME = {
   swarmyard: 540,
 } as const;
 
+// Research mode switch:
+//  - 'classic': research is done at the (single, 9x9) Research Lab. Selecting
+//    an item deducts its cost and starts a timer; once it finishes the player
+//    keeps the upgrade permanently, even if the Research Lab is later
+//    destroyed. Losing the lab only pauses in-progress research and blocks
+//    starting new research until it's rebuilt.
+//  - 'building': each upgrade must be physically built as its own 3x3
+//    Research Node; losing that node revokes the upgrade.
+// Flip this one flag to switch the whole game between the two systems.
+export const RESEARCH_MODE: 'classic' | 'building' = 'classic';
+
 // Research costs
 export const RESEARCH_COST = {
   shipHp1: 220,

@@ -17,7 +17,7 @@ import { WorldGrid, GRID_CELL_SIZE, cellKey, footprintOrigin, footprintCenter } 
 import { PowerGraph } from './power.js';
 import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, CONDUIT_COST, DT } from './constants.js';
 import { findClosestEnemy } from './combatUtils.js';
-import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS } from './constants.js';
+import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS, RESEARCH_MODE, RESEARCH_TIME, TICK_RATE } from './constants.js';
 import { buildCostForBuildingType, type BuildDef } from './builddefs.js';
 import { Colors, colorToCSS } from './colors.js';
 import { teamColor } from './teamutils.js';
@@ -244,6 +244,8 @@ export class GameState {
   researchQueue: string[] = [];
   completedResearchNotifications: string[] = [];
   researchedItems: Set<string> = new Set();
+  /** Classic mode only: seconds accumulated on the currently active research item. */
+  private researchActiveElapsedSeconds = 0;
 
   /**
    * Vs. AI bot-player main ship, when the active mode is `vs_ai`.
@@ -1551,7 +1553,12 @@ export class GameState {
   // -----------------------------------------------------------------------
 
   private tickResearch(dt: number): void {
-    void dt;
+    if (RESEARCH_MODE === 'building') this.tickResearchBuilding();
+    else this.tickResearchClassic(dt);
+  }
+
+  /** Original mode: each upgrade is a physical 3x3 Research Node; losing the node revokes it. */
+  private tickResearchBuilding(): void {
     const completed = new Set<string>();
     let active: ResearchLab | null = null;
     for (const building of this.buildings) {
@@ -1569,22 +1576,73 @@ export class GameState {
         }
       }
       this.researchedItems = completed;
-      this.player.syncResearchUpgrades(completed);
-      const advanced = completed.has('advancedFighters');
-      for (const b of this.buildings) {
-        if (!b.alive || b.team !== Team.Player || !(b instanceof Shipyard) || b.type === EntityType.SwarmYard) continue;
-        b.shipCapacity = advanced ? 7 : 5;
-        b.buildInterval = advanced ? 4 : 5;
-      }
-      for (const f of this.fighters) {
-        if (!f.alive || f.team !== Team.Player) continue;
-        if (advanced) f.upgradeToAdvanced(); else f.downgradeFromAdvanced();
-        if (!completed.has('shipShield1')) f.disableShield();
-      }
+      this.applyResearchSideEffects();
     }
     this.researchProgress = active
       ? { item: active.researchItem, progress: active.buildProgress * active.buildDurationSeconds, timeNeeded: active.buildDurationSeconds }
       : { item: null, progress: 0, timeNeeded: 0 };
+  }
+
+  /**
+   * Classic mode: research is a timer gated on having a finished, powered 9x9
+   * Research Lab. Cost is paid up front when research is queued/started; once
+   * an item finishes, the player keeps it permanently regardless of whether
+   * the lab later gets destroyed. Losing the lab mid-research only pauses the
+   * timer (no progress or resources are lost) until a lab exists again.
+   */
+  private tickResearchClassic(dt: number): void {
+    if (!this.researchProgress.item && this.researchQueue.length > 0) {
+      const next = this.researchQueue.shift()!;
+      this.researchActiveElapsedSeconds = 0;
+      const timeNeeded = (RESEARCH_TIME[next as keyof typeof RESEARCH_TIME] ?? 0) / TICK_RATE;
+      this.researchProgress = { item: next, progress: 0, timeNeeded };
+    }
+    const item = this.researchProgress.item;
+    if (!item || !this.hasResearchLab()) return; // paused: no working Research Lab
+    this.researchActiveElapsedSeconds += dt;
+    const timeNeeded = this.researchProgress.timeNeeded;
+    this.researchProgress = { item, progress: Math.min(this.researchActiveElapsedSeconds, timeNeeded), timeNeeded };
+    if (this.researchActiveElapsedSeconds >= timeNeeded) {
+      this.researchedItems.add(item);
+      this.completedResearchNotifications.push(item);
+      Audio.playSound('researchcomplete');
+      this.applyResearchSideEffects();
+      this.researchProgress = { item: null, progress: 0, timeNeeded: 0 };
+      this.researchActiveElapsedSeconds = 0;
+    }
+  }
+
+  /** Classic mode only: cancel the active research item and refund its cost, no progress kept. */
+  cancelActiveResearch(): void {
+    this.researchProgress = { item: null, progress: 0, timeNeeded: 0 };
+    this.researchActiveElapsedSeconds = 0;
+  }
+
+  /** Classic mode only: start (or enqueue behind the active item) a research item. */
+  queueResearch(item: string): void {
+    if (!this.researchProgress.item) {
+      const timeNeeded = (RESEARCH_TIME[item as keyof typeof RESEARCH_TIME] ?? 0) / TICK_RATE;
+      this.researchActiveElapsedSeconds = 0;
+      this.researchProgress = { item, progress: 0, timeNeeded };
+    } else {
+      this.researchQueue.push(item);
+    }
+  }
+
+  private applyResearchSideEffects(): void {
+    const completed = this.researchedItems;
+    this.player.syncResearchUpgrades(completed);
+    const advanced = completed.has('advancedFighters');
+    for (const b of this.buildings) {
+      if (!b.alive || b.team !== Team.Player || !(b instanceof Shipyard) || b.type === EntityType.SwarmYard) continue;
+      b.shipCapacity = advanced ? 7 : 5;
+      b.buildInterval = advanced ? 4 : 5;
+    }
+    for (const f of this.fighters) {
+      if (!f.alive || f.team !== Team.Player) continue;
+      if (advanced) f.upgradeToAdvanced(); else f.downgradeFromAdvanced();
+      if (!completed.has('shipShield1')) f.disableShield();
+    }
   }
 
   private updateAreaShields(): void {
@@ -1855,7 +1913,16 @@ export class GameState {
     );
   }
 
+  /**
+   * True when `item` is currently occupied/unavailable for (re)selection in
+   * the research menu: in 'building' mode that means a live Research Node
+   * exists for it, in 'classic' mode that it's already the active or a
+   * queued research item.
+   */
   hasResearchBuilding(item: string): boolean {
+    if (RESEARCH_MODE === 'classic') {
+      return this.researchProgress.item === item || this.researchQueue.includes(item);
+    }
     return this.buildings.some(
       (b) => b.alive && b.team === Team.Player && b instanceof ResearchLab && b.researchItem === item,
     );
