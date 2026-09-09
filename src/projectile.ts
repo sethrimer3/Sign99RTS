@@ -9,12 +9,16 @@ import { getCinematicLevel } from './cinematic.js';
 import type { GameState } from './gamestate.js';
 import type { SpaceFluid } from './spacefluid.js';
 import { damageLaserLine } from './combatUtils.js';
+import { isLegacyGraphics } from './graphicsmode.js';
+import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
 
 const BULLET_TRAIL_LIFETIME = 0.12;
 const BULLET_TRAIL_MIN_DISTANCE = 2;
 const GATLING_TRAIL_LIFETIME = 0.04;
 const COMET_TRAIL_LIFETIME = 0.28;
 const COMET_TRAIL_MAX_POINTS = 10;
+/** World-distance in a single sample step beyond which the trail is reset. */
+const TRAIL_TELEPORT_BREAK = 4000;
 
 interface TrailPoint {
   pos: Vec2;
@@ -46,6 +50,15 @@ export abstract class ProjectileBase extends Entity {
   protected trailLifetime = BULLET_TRAIL_LIFETIME;
   protected trailMinDistance = BULLET_TRAIL_MIN_DISTANCE;
   protected trailMaxPoints = 5;
+  /**
+   * When set, this projectile renders its trail through the shared
+   * high-performance {@link renderProjectileTrail} glow-ribbon system instead
+   * of the legacy per-class stroke code.  Enabled for fighter- and ship-fired
+   * projectiles via {@link enableGlowTrail}.  The legacy look is still used
+   * whenever the player has ticked "Legacy Graphics" in graphics settings
+   * (see {@link isLegacyGraphics}).
+   */
+  protected trailStyle: ProjectileTrailStyle | null = null;
   /**
    * When true, enemy projectiles can collide with and destroy this projectile.
    * Used by SwarmMissile to make swarm missiles interceptable by enemy bullets.
@@ -82,8 +95,33 @@ export abstract class ProjectileBase extends Entity {
   protected updateTrail(dt: number): void {
     this.compactTrail(dt, this.trailLifetime);
     const last = this.trail[this.trail.length - 1];
-    if (!last || last.pos.distanceTo(this.position) >= this.trailMinDistance) {
+    if (!last) {
       this.trail.push({ pos: this.position.clone(), age: 0 });
+    } else {
+      const dist = last.pos.distanceTo(this.position);
+      if (dist >= TRAIL_TELEPORT_BREAK) {
+        // Teleport / huge jump: break the trail instead of smearing a ribbon
+        // across the whole map.
+        this.trail.length = 0;
+        this.trail.push({ pos: this.position.clone(), age: 0 });
+      } else if (this.trailStyle && dist > this.trailMinDistance * 6) {
+        // Fast mover: insert a bounded number of intermediate samples so the
+        // ribbon stays continuous rather than showing frame-to-frame gaps.
+        const steps = Math.min(4, Math.floor(dist / this.trailMinDistance));
+        for (let s = 1; s < steps; s++) {
+          const f = s / steps;
+          this.trail.push({
+            pos: new Vec2(
+              last.pos.x + (this.position.x - last.pos.x) * f,
+              last.pos.y + (this.position.y - last.pos.y) * f,
+            ),
+            age: 0,
+          });
+        }
+        this.trail.push({ pos: this.position.clone(), age: 0 });
+      } else if (dist >= this.trailMinDistance) {
+        this.trail.push({ pos: this.position.clone(), age: 0 });
+      }
     }
     while (this.trail.length > this.trailMaxPoints) this.trail.shift();
   }
@@ -105,6 +143,10 @@ export abstract class ProjectileBase extends Entity {
     lifetime: number = BULLET_TRAIL_LIFETIME,
     width: number = 3,
   ): void {
+    if (!isLegacyGraphics() && this.trailStyle) {
+      renderProjectileTrail(ctx, camera, this.trail, this.position, this.trailStyle);
+      return;
+    }
     if (this.trail.length < 2) return;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -139,6 +181,28 @@ export abstract class ProjectileBase extends Entity {
     this.trailMaxPoints = COMET_TRAIL_MAX_POINTS;
   }
 
+  /** True when this projectile was fired by a fighter, bomber, or ship. */
+  protected isShipOrFighterFire(): boolean {
+    const t = this.source?.type;
+    return t === EntityType.PlayerShip || t === EntityType.Fighter || t === EntityType.Bomber;
+  }
+
+  /**
+   * Opt this projectile into the shared glow-ribbon trail renderer.  Also
+   * tunes the position-history sampling so the ribbon stays smooth without
+   * accumulating redundant points.  Falls back to the legacy per-class trail
+   * automatically when Legacy Graphics is enabled.
+   */
+  protected enableGlowTrail(
+    style: ProjectileTrailStyle,
+    opts?: { maxSamples?: number; sampleDistance?: number },
+  ): void {
+    this.trailStyle = style;
+    this.trailMaxPoints = opts?.maxSamples ?? 8;
+    this.trailMinDistance = opts?.sampleDistance ?? 4;
+    this.trailLifetime = style.fadeTime ?? this.trailLifetime;
+  }
+
   protected drawCometTrail(
     ctx: CanvasRenderingContext2D,
     camera: Camera,
@@ -146,6 +210,10 @@ export abstract class ProjectileBase extends Entity {
     coreColor: string = 'rgba(255,255,255,0.92)',
     width: number = 8,
   ): void {
+    if (!isLegacyGraphics() && this.trailStyle) {
+      renderProjectileTrail(ctx, camera, this.trail, this.position, this.trailStyle);
+      return;
+    }
     if (this.trail.length < 2) return;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -293,7 +361,16 @@ export class Bullet extends ProjectileBase {
       source,
     });
     this.targetEntity = target;
-    if (this.isPlayerShipFire()) this.enableCometTrail();
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(this.team === Team.Player ? Colors.bullet_player_cannon : Colors.bullet_enemy_cannon, 0.6),
+        coreColor: 'rgba(255,255,255,0.95)',
+        width: 6.5,
+        fadeTime: 0.26,
+      });
+    } else if (this.isPlayerShipFire()) {
+      this.enableCometTrail();
+    }
   }
 
   update(dt: number): void {
@@ -364,11 +441,20 @@ export class GatlingBullet extends ProjectileBase {
       source,
     });
     this.radius = ENTITY_RADIUS.bullet * 0.75;
-    if (this.isPlayerShipFire()) this.enableCometTrail(4);
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(this.team === Team.Player ? Colors.bullet_player_gatling : Colors.bullet_enemy_gatling, 0.68),
+        coreColor: 'rgba(255,255,220,0.95)',
+        width: 4.5,
+        fadeTime: 0.14,
+      }, { maxSamples: 7, sampleDistance: 3 });
+    } else if (this.isPlayerShipFire()) {
+      this.enableCometTrail(4);
+    }
   }
 
   protected override updateTrail(dt: number): void {
-    if (this.isPlayerShipFire()) {
+    if (this.isShipOrFighterFire()) {
       super.updateTrail(dt);
       return;
     }
@@ -562,7 +648,16 @@ export class GuidedMissile extends ProjectileBase {
     this.health = HP_VALUES.destructibleProjectile;
     this.maxHealth = HP_VALUES.destructibleProjectile;
     this.interceptable = true;
-    if (this.isPlayerShipFire()) this.enableCometTrail(3.5);
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(Colors.alert2, 0.8),
+        coreColor: 'rgba(255,255,255,0.96)',
+        width: 9,
+        fadeTime: 0.3,
+      }, { maxSamples: 9, sampleDistance: 4 });
+    } else if (this.isPlayerShipFire()) {
+      this.enableCometTrail(3.5);
+    }
   }
 
   steerToward(target: Vec2): void {
@@ -644,6 +739,14 @@ export class BomberMissile extends ProjectileBase {
       source,
     });
     this.radius = ENTITY_RADIUS.missile * 1.25;
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(Colors.missile_trail, 0.8),
+        coreColor: 'rgba(255,225,180,0.95)',
+        width: 6,
+        fadeTime: 0.18,
+      }, { maxSamples: 8, sampleDistance: 4 });
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
@@ -1295,7 +1398,16 @@ export class HomingBullet extends ProjectileBase {
     });
     this.radius = ENTITY_RADIUS.bullet * 1.15;
     this.targetEntity = target;
-    if (this.isPlayerShipFire()) this.enableCometTrail();
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(Colors.alliedfire, 0.7),
+        coreColor: 'rgba(235,255,255,0.96)',
+        width: 7,
+        fadeTime: 0.26,
+      });
+    } else if (this.isPlayerShipFire()) {
+      this.enableCometTrail();
+    }
   }
 
   update(dt: number): void {
@@ -1384,6 +1496,14 @@ export class SwarmMissile extends ProjectileBase {
     this.health = HP_VALUES.destructibleProjectile;
     this.maxHealth = HP_VALUES.destructibleProjectile;
     this.interceptable = true; // enemy bullets can destroy swarm missiles
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(Colors.alert2, 0.85),
+        coreColor: 'rgba(255,240,210,0.95)',
+        width: 5,
+        fadeTime: 0.16,
+      }, { maxSamples: 7, sampleDistance: 3 });
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {

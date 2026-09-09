@@ -49,6 +49,8 @@ import {
 import { GlowLayer } from './glowlayer.js';
 import { DEFAULT_VISUAL_QUALITY, VISUAL_QUALITY_PRESETS, type VisualQuality, type VisualQualityPreset, loadVisualQuality, saveVisualQuality } from './visualquality.js';
 import { loadCinematicLevel, saveCinematicLevel, setCinematicLevel, type CinematicLevel } from './cinematic.js';
+import { loadLegacyGraphics, saveLegacyGraphics, setLegacyGraphics } from './graphicsmode.js';
+import { setProjectileTrailLayers } from './projectileTrail.js';
 import {
   drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, type ShipCommandGroup, type WaypointMarker,
 } from './gameRender.js';
@@ -169,6 +171,7 @@ export class Game {
   private starNest: StarNestBackground;
   private visualQuality: VisualQuality = DEFAULT_VISUAL_QUALITY;
   private cinematicLevel: CinematicLevel = 1;
+  private legacyGraphics: boolean = false;
   private visualPreset: VisualQualityPreset = VISUAL_QUALITY_PRESETS[DEFAULT_VISUAL_QUALITY];
   private gameZoom: number = 1.0;
   private uiZoom: number = 1.0;
@@ -312,6 +315,7 @@ export class Game {
     this.spaceFluid.resize(window.innerWidth, window.innerHeight);
     this.applyVisualQuality(loadVisualQuality());
     this.applyCinematicLevel(loadCinematicLevel());
+    this.applyLegacyGraphics(loadLegacyGraphics());
     this.applyZoomSettings(loadZoomSetting(GAME_ZOOM_KEY), loadZoomSetting(UI_ZOOM_KEY));
 
     this.resizeCanvas();
@@ -347,8 +351,15 @@ export class Game {
     );
     this.state?.particles.setParticleScale(this.visualPreset.particleScale);
     this.starfield.setShootingStarsEnabled(this.visualPreset.shootingStarsEnabled);
+    setProjectileTrailLayers(quality === 'high' ? 3 : quality === 'medium' ? 2 : 1);
     this.mainMenu.visualQuality = quality;
     saveVisualQuality(quality);
+  }
+
+  private applyLegacyGraphics(legacy: boolean): void {
+    this.legacyGraphics = setLegacyGraphics(legacy);
+    this.mainMenu.legacyGraphics = this.legacyGraphics;
+    saveLegacyGraphics(this.legacyGraphics);
   }
 
   private applyCinematicLevel(level: CinematicLevel): void {
@@ -455,6 +466,7 @@ export class Game {
       this.applyVisualQuality(this.mainMenu.visualQuality);
     }
     this.syncCinematicLevelFromMenu();
+    this.syncLegacyGraphicsFromMenu();
     this.syncZoomSettingsFromMenu();
     this.handleMenuAction(action);
   }
@@ -465,6 +477,7 @@ export class Game {
       this.applyVisualQuality(this.mainMenu.visualQuality);
     }
     this.syncCinematicLevelFromMenu();
+    this.syncLegacyGraphicsFromMenu();
     this.syncZoomSettingsFromMenu();
     this.handleMenuAction(action);
   }
@@ -472,6 +485,17 @@ export class Game {
   private syncZoomSettingsFromMenu(): void {
     if (this.mainMenu.gameZoom !== this.gameZoom || this.mainMenu.uiZoom !== this.uiZoom) {
       this.applyZoomSettings(this.mainMenu.gameZoom, this.mainMenu.uiZoom);
+    }
+  }
+
+  private syncLegacyGraphicsFromMenu(): void {
+    if (this.mainMenu.legacyGraphics !== this.legacyGraphics) {
+      this.applyLegacyGraphics(this.mainMenu.legacyGraphics);
+      this.hud.showMessage(
+        this.legacyGraphics ? 'Legacy Graphics: ON' : 'Legacy Graphics: OFF',
+        Colors.general_building,
+        2,
+      );
     }
   }
 

@@ -198,6 +198,12 @@ export class MainMenu {
    */
   visualQuality: VisualQuality = DEFAULT_VISUAL_QUALITY;
   cinematicLevel: CinematicLevel = 1;
+  /**
+   * When true, newer visual systems fall back to their original ("legacy")
+   * rendering.  Set externally by game.ts; toggled from the Graphics settings
+   * tab via a checkbox.
+   */
+  legacyGraphics: boolean = false;
   gameZoom: number = 1.0;
   uiZoom: number = 1.0;
 
@@ -1156,7 +1162,7 @@ export class MainMenu {
     const contentBottom = this.settingsTab === 'controls'
       ? 190 + KEYBIND_DEFINITIONS.length * rowH + 90
       : this.settingsTab === 'gameplay' ? (this.languageDropdownOpen ? 620 : 390)
-      : this.settingsTab === 'graphics' ? (this.spaceColorDropdownOpen ? 564 + SPACE_COLOR_OPTIONS.length * 30 : 564)
+      : this.settingsTab === 'graphics' ? (this.spaceColorDropdownOpen ? 608 + SPACE_COLOR_OPTIONS.length * 30 : 608)
       : 520;
     const maxScroll = Math.max(0, contentBottom - viewportBottom);
     if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
@@ -1180,6 +1186,8 @@ export class MainMenu {
       y = this.drawCycleRow(ctx, x, y, rowH, tr('settings.graphicsQuality'), this.visualQuality, qualities,
         (v) => { this.visualQuality = v; }, visualQualityLabel, qualities.indexOf(this.visualQuality) / 3);
       y = this.drawCinematicSliderRow(ctx, x, y, rowH, this.cinematicLevel, (v) => { this.cinematicLevel = v; });
+      y = this.drawCheckboxRow(ctx, x, y, rowH, tr('settings.legacyGraphics'), this.legacyGraphics,
+        (v) => { this.legacyGraphics = v; });
       y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.playerColor'), themeSettings.playerColor, themeSettings.enemyColor, false, (v) => {
         themeSettings.playerColor = v; applyThemeColors(); saveThemeSettings();
       });
