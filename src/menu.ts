@@ -19,13 +19,13 @@
 
 import { Colors, TextColors, colorToCSS } from './colors.js';
 import { MenuTriangleBackground } from './menuTriangles.js';
-import { Input } from './input.js';
+import { Input, KEYBIND_DEFINITIONS, type BindableKey } from './input.js';
 import { Audio } from './audio.js';
 import { buildLabel } from './version.js';
 import { gameFont } from './fonts.js';
 import { drawDecodedText } from './decodeText.js';
 import { t as tr, LOCALES, LOCALE_NAMES, getLocale, setLocale, type Locale } from './i18n.js';
-import { applyThemeColors, cycleThemeColor, themeColor, themeColorLabel, themeSettings, type ThemeColorId } from './theme.js';
+import { applyThemeColors, cycleThemeColor, saveThemeSettings, themeColor, themeColorLabel, themeSettings, type ThemeColorId } from './theme.js';
 import {
   PracticeConfig,
   cloneDefaultPracticeConfig,
@@ -90,6 +90,7 @@ export type MenuState =
   | 'practice_setup'
   | 'settings'
   | 'pause'
+  | 'surrender_confirm'
   | 'lan_type'
   | 'lan_host_lobby'
   | 'lan_browser'
@@ -319,6 +320,10 @@ export class MainMenu {
   private menuInputViewport: HitRect | null = null;
   /** Previewed while dragging so changing UI scale cannot move the slider under the pointer. */
   private pendingUiZoom: number | null = null;
+  private settingsTab: 'gameplay' | 'graphics' | 'audio' | 'controls' = 'gameplay';
+  private settingsOrigin: 'title' | 'pause' = 'title';
+  private languageDropdownOpen = false;
+  private awaitingBinding: BindableKey | null = null;
 
   // Output set by setup screens after the user clicks their start button.
   private pendingAction: MenuAction = 'none';
@@ -335,6 +340,14 @@ export class MainMenu {
   openPause(): void {
     this.state = 'pause';
     this.selectedIndex = 0;
+  }
+
+  private openSettings(origin: 'title' | 'pause'): void {
+    this.settingsOrigin = origin;
+    this.settingsTab = 'gameplay';
+    this.languageDropdownOpen = false;
+    this.awaitingBinding = null;
+    this.setState('settings');
   }
 
   close(): void {
@@ -379,6 +392,17 @@ export class MainMenu {
       this.mouseYLatched = this.mouseY();
     }
     if (Input.wheelDelta !== 0) this.wheelDeltaLatched += Input.wheelDelta;
+    if (this.awaitingBinding) {
+      const pressed = Input.pressedKeys()[0];
+      if (pressed) {
+        if (pressed === 'Escape') this.awaitingBinding = null;
+        else {
+          Input.setBinding(this.awaitingBinding, pressed);
+          this.awaitingBinding = null;
+          Audio.playSound('menuselection');
+        }
+      }
+    }
 
     if (screenW !== this.lastScreenW || screenH !== this.lastScreenH) {
       this.bgStars = createBackgroundStars(screenW, screenH);
@@ -453,9 +477,10 @@ export class MainMenu {
       opts[this.selectedIndex].action();
       return this.takePending();
     }
-    if (this.state === 'pause' && Input.wasPressed('Escape')) {
+    if ((this.state === 'pause' || this.state === 'surrender_confirm') && Input.wasPressed('Escape')) {
       Audio.playSound('menuselection');
-      this.pendingAction = 'resume';
+      if (this.state === 'surrender_confirm') this.setState('pause');
+      else this.pendingAction = 'resume';
       return this.takePending();
     }
     if (
@@ -469,7 +494,8 @@ export class MainMenu {
         this.state === 'online_join')
     ) {
       Audio.playSound('menucursor');
-      this.setState('title');
+      if (this.state === 'settings') this.setState(this.settingsOrigin);
+      else this.setState('title');
     }
 
     return 'none';
@@ -495,7 +521,7 @@ export class MainMenu {
             description: tr('menu.title.practice.desc') },
           { label: tr('menu.title.tutorial'), action: () => { this.pendingAction = 'tutorial'; },
             description: tr('menu.title.tutorial.desc') },
-          { label: tr('menu.title.settings'), action: () => this.setState('settings'),
+          { label: tr('menu.title.settings'), action: () => this.openSettings('title'),
             description: tr('menu.title.settings.desc') },
         ];
       case 'play':
@@ -535,22 +561,13 @@ export class MainMenu {
       case 'pause':
         return [
           { label: tr('menu.pause.resume'), action: () => { this.pendingAction = 'resume'; } },
-          {
-            label: tr('menu.pause.graphics', { value: visualQualityLabel(this.visualQuality) }),
-            action: () => {
-              const next: Record<VisualQuality, VisualQuality> = {
-                ultraLow: 'low',
-                low: 'medium',
-                medium: 'high',
-                high: 'ultraLow',
-              };
-              this.visualQuality = next[this.visualQuality];
-            },
-            description: tr('menu.pause.graphics.desc'),
-          },
-          { label: tr('menu.pause.audio'), action: () => { /* sliders render below */ },
-            description: tr('menu.pause.audio.desc') },
-          { label: tr('menu.pause.quit'), action: () => { this.pendingAction = 'quit_to_menu'; } },
+          { label: tr('menu.title.settings'), action: () => this.openSettings('pause') },
+          { label: tr('menu.pause.quit'), action: () => this.setState('surrender_confirm') },
+        ];
+      case 'surrender_confirm':
+        return [
+          { label: tr('common.back'), action: () => this.setState('pause') },
+          { label: tr('menu.pause.confirmSurrender'), action: () => { this.pendingAction = 'quit_to_menu'; } },
         ];
       default:
         return null;
@@ -577,6 +594,7 @@ export class MainMenu {
       case 'practice_setup':  this.drawPracticeSetup(ctx, screenW, screenH); break;
       case 'settings':        this.drawSettings(ctx, screenW, screenH); break;
       case 'pause':           this.drawPauseMenu(ctx, screenW, screenH); break;
+      case 'surrender_confirm': this.drawSurrenderConfirmation(ctx, screenW, screenH); break;
       case 'lan_type':        this.drawPlayMenu(ctx, screenW, screenH); break; // re-use play menu draw (simple list)
       case 'lan_host_lobby':  this.drawLanHostLobby(ctx, screenW, screenH); break;
       case 'lan_browser':     this.drawLanBrowser(ctx, screenW, screenH); break;
@@ -813,7 +831,7 @@ export class MainMenu {
     ctx.fillRect(0, 0, w, h);
 
     const cx = w * 0.5;
-    const headerY = h * 0.35;
+    const headerY = Math.max(82, h * 0.16);
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -830,23 +848,23 @@ export class MainMenu {
     ctx.lineTo(cx + tw * 0.5, headerY + 22);
     ctx.stroke();
 
-    const settingsX = cx - 220;
-    let y = headerY + 74;
-    const rowH = 34;
-    y = this.drawVolumeSliderRow(ctx, settingsX, y, rowH, 'Music Volume', Audio.getMusicVolume(), (v) => {
-      Audio.setMusicVolume(v);
-    });
-    this.drawVolumeSliderRow(ctx, settingsX, y, rowH, 'SFX Volume', Audio.getSfxVolume(), (v) => {
-      Audio.setSfxVolume(v);
-    });
-
     const opts = this.currentSimpleOptions()!;
-    const menuStartY = h * 0.63;
-    this.drawClickableOptions(ctx, cx, menuStartY, opts.slice(0, 2), 0);
-    this.drawCinematicSliderRow(ctx, settingsX, menuStartY + 108, rowH, this.cinematicLevel, (v) => {
-      this.cinematicLevel = v;
-    });
-    this.drawClickableOptions(ctx, cx, menuStartY + 184, opts.slice(2), 2);
+    this.drawClickableOptions(ctx, cx, headerY + 92, opts);
+  }
+
+  private drawSurrenderConfirmation(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    ctx.fillStyle = 'rgba(0,0,0,0.76)';
+    ctx.fillRect(0, 0, w, h);
+    const cx = w * 0.5;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = gameFont(34);
+    ctx.fillStyle = colorToCSS(TextColors.title);
+    ctx.fillText(tr('menu.pause.surrenderQuestion'), cx, h * 0.34);
+    ctx.font = gameFont(17);
+    ctx.fillStyle = colorToCSS(TextColors.normal, 0.82);
+    ctx.fillText(tr('menu.pause.surrenderWarning'), cx, h * 0.40);
+    this.drawClickableOptions(ctx, cx, h * 0.53, this.currentSimpleOptions()!);
   }
 
   // -------------------------------------------------------------------
@@ -1124,13 +1142,20 @@ export class MainMenu {
     ctx.fillStyle = colorToCSS(TextColors.title);
     ctx.fillText(tr('settings.heading'), cx, 90);
 
+    this.drawButtonRow(ctx, [
+      { label: tr('settings.tab.gameplay'), emphasis: this.settingsTab === 'gameplay', action: () => { this.settingsTab = 'gameplay'; this.settingsScroll = 0; } },
+      { label: tr('settings.tab.graphics'), emphasis: this.settingsTab === 'graphics', action: () => { this.settingsTab = 'graphics'; this.settingsScroll = 0; } },
+      { label: tr('settings.tab.audio'), emphasis: this.settingsTab === 'audio', action: () => { this.settingsTab = 'audio'; this.settingsScroll = 0; } },
+      { label: tr('settings.tab.controls'), emphasis: this.settingsTab === 'controls', action: () => { this.settingsTab = 'controls'; this.settingsScroll = 0; } },
+    ], cx, 130);
+
     const x = cx - 230;
-    let y = 160;
+    let y = 190;
     const rowH = 44;
-    const viewportTop = 125;
+    const viewportTop = 165;
     const viewportBottom = Math.max(viewportTop + 80, h - 115);
     const viewportH = viewportBottom - viewportTop;
-    const contentBottom = 650;
+    const contentBottom = this.settingsTab === 'controls' ? 190 + KEYBIND_DEFINITIONS.length * rowH + 90 : 520;
     const maxScroll = Math.max(0, contentBottom - viewportBottom);
     if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
       this.settingsScroll = Math.max(0, Math.min(maxScroll, this.settingsScroll + this.wheelDeltaLatched * 0.55));
@@ -1145,52 +1170,29 @@ export class MainMenu {
     this.menuInputOffsetY = this.settingsScroll;
     this.menuInputViewport = { x: 0, y: viewportTop, w, h: viewportH };
 
-    const LOCALE_OPTIONS: Locale[] = [...LOCALES];
-    y = this.drawCycleRow<Locale>(
-      ctx, x, y, rowH, tr('settings.language'),
-      getLocale(),
-      LOCALE_OPTIONS,
-      (v) => { setLocale(v); },
-      (v) => LOCALE_NAMES[v],
-    );
-
-    const QUALITY_OPTIONS: VisualQuality[] = ['ultraLow', 'low', 'medium', 'high'];
-    y = this.drawCycleRow<VisualQuality>(
-      ctx, x, y, rowH, tr('settings.graphicsQuality'),
-      this.visualQuality,
-      QUALITY_OPTIONS,
-      (v) => { this.visualQuality = v; },
-      visualQualityLabel,
-      QUALITY_OPTIONS.indexOf(this.visualQuality) / (QUALITY_OPTIONS.length - 1),
-    );
-
-    y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.playerColor'), themeSettings.playerColor, themeSettings.enemyColor, false, (v) => {
-      themeSettings.playerColor = v;
-      applyThemeColors();
-    });
-    y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.enemyColor'), themeSettings.enemyColor, themeSettings.playerColor, true, (v) => {
-      themeSettings.enemyColor = v;
-      applyThemeColors();
-    });
-    y = this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.musicVolume'), Audio.getMusicVolume(), (v) => {
-      Audio.setMusicVolume(v);
-    });
-    y = this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.sfxVolume'), Audio.getSfxVolume(), (v) => {
-      Audio.setSfxVolume(v);
-    });
-    y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.gameZoom'), this.gameZoom, (v) => {
-      this.gameZoom = v;
-    });
-    y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.uiZoom'), this.pendingUiZoom ?? this.uiZoom, (v) => {
-      this.pendingUiZoom = v;
-    });
-
-    ctx.font = gameFont(16);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = colorToCSS(TextColors.normal, 0.75);
-    ctx.fillText(tr('settings.fontNote'), cx, y + 36);
-
-    this.drawDiscordButton(ctx, cx, y + 86);
+    if (this.settingsTab === 'gameplay') {
+      y = this.drawLanguageDropdown(ctx, x, y, rowH);
+      this.drawDiscordButton(ctx, cx, y + 62);
+    } else if (this.settingsTab === 'graphics') {
+      const qualities: VisualQuality[] = ['ultraLow', 'low', 'medium', 'high'];
+      y = this.drawCycleRow(ctx, x, y, rowH, tr('settings.graphicsQuality'), this.visualQuality, qualities,
+        (v) => { this.visualQuality = v; }, visualQualityLabel, qualities.indexOf(this.visualQuality) / 3);
+      y = this.drawCinematicSliderRow(ctx, x, y, rowH, this.cinematicLevel, (v) => { this.cinematicLevel = v; });
+      y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.playerColor'), themeSettings.playerColor, themeSettings.enemyColor, false, (v) => {
+        themeSettings.playerColor = v; applyThemeColors(); saveThemeSettings();
+      });
+      y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.enemyColor'), themeSettings.enemyColor, themeSettings.playerColor, true, (v) => {
+        themeSettings.enemyColor = v; applyThemeColors(); saveThemeSettings();
+      });
+      y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.gameZoom'), this.gameZoom, (v) => { this.gameZoom = v; });
+      this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.uiZoom'), this.pendingUiZoom ?? this.uiZoom, (v) => { this.pendingUiZoom = v; });
+    } else if (this.settingsTab === 'audio') {
+      y = this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.musicVolume'), Audio.getMusicVolume(), (v) => Audio.setMusicVolume(v));
+      this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.sfxVolume'), Audio.getSfxVolume(), (v) => Audio.setSfxVolume(v));
+    } else {
+      for (const binding of KEYBIND_DEFINITIONS) y = this.drawKeybindRow(ctx, x, y, rowH, binding.label, binding.key);
+      this.drawButtonRow(ctx, [{ label: tr('common.resetDefaults'), action: () => Input.resetBindings() }], cx, y + 18);
+    }
 
     this.menuInputOffsetY = 0;
     this.menuInputViewport = null;
@@ -1199,7 +1201,7 @@ export class MainMenu {
     if (maxScroll > 0) this.drawSettingsScrollbar(ctx, w, viewportTop, viewportH, maxScroll);
 
     this.drawButtonRow(ctx, [
-      { label: tr('common.back'), action: () => this.setState('title'), emphasis: true },
+      { label: tr('common.back'), action: () => this.setState(this.settingsOrigin), emphasis: true },
     ], cx, h - 70);
   }
 
@@ -1539,6 +1541,46 @@ export class MainMenu {
       const i = values.indexOf(value);
       onChange(values[(i + 1) % values.length]);
     }
+    return y + h;
+  }
+
+  private drawLanguageDropdown(ctx: CanvasRenderingContext2D, x: number, y: number, h: number): number {
+    this.drawRowLabel(ctx, x, y, tr('settings.language'));
+    const rect: HitRect = { x: x + 200, y: y - 15, w: 240, h: 30 };
+    this.drawControlWell(ctx, rect, pointInRect(this.mouseX(), this.mouseY(), rect), this.languageDropdownOpen ? 1 : 0);
+    ctx.font = gameFont(17);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = colorToCSS(TextColors.normal);
+    ctx.fillText(`${LOCALE_NAMES[getLocale()]}  ▾`, rect.x + rect.w / 2, y);
+    if (this.handleClick(rect)) this.languageDropdownOpen = !this.languageDropdownOpen;
+    if (this.languageDropdownOpen) {
+      let optionY = rect.y + rect.h;
+      for (const locale of LOCALES) {
+        const option: HitRect = { x: rect.x, y: optionY, w: rect.w, h: 30 };
+        this.drawControlWell(ctx, option, pointInRect(this.mouseX(), this.mouseY(), option), locale === getLocale() ? 1 : 0);
+        ctx.fillStyle = colorToCSS(TextColors.normal);
+        ctx.fillText(LOCALE_NAMES[locale], option.x + option.w / 2, option.y + option.h / 2);
+        if (this.handleClick(option)) { setLocale(locale); this.languageDropdownOpen = false; }
+        optionY += option.h;
+      }
+      return y + h + LOCALES.length * 30;
+    }
+    return y + h;
+  }
+
+  private drawKeybindRow(ctx: CanvasRenderingContext2D, x: number, y: number, h: number, label: string, key: BindableKey): number {
+    this.drawRowLabel(ctx, x, y, label);
+    const rect: HitRect = { x: x + 200, y: y - 14, w: 240, h: 28 };
+    const active = this.awaitingBinding === key;
+    this.drawControlWell(ctx, rect, pointInRect(this.mouseX(), this.mouseY(), rect), active ? 1 : 0);
+    ctx.font = gameFont(17);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = colorToCSS(TextColors.normal);
+    const bound = Input.getBinding(key);
+    ctx.fillText(active ? tr('settings.pressKey') : (bound.length === 1 ? bound.toUpperCase() : bound), rect.x + rect.w / 2, y);
+    if (this.handleClick(rect)) this.awaitingBinding = key;
     return y + h;
   }
 

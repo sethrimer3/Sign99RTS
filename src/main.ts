@@ -2,10 +2,11 @@
 
 import { Game } from './game.js';
 import { loadGameFonts } from './fonts.js';
-import { applyThemeColors } from './theme.js';
+import { applyThemeColors, loadThemeSettings } from './theme.js';
 import { installTextOutline } from './textoutline.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
+  loadThemeSettings();
   applyThemeColors();
   await loadGameFonts();
   installTextOutline();

@@ -1233,7 +1233,6 @@ class ShipMenu {
     if (keyDown && !this.open) {
       this.open = true;
       this.openedAt = performance.now() * 0.001;
-      state.player.selectFirstUnlockedWeapon((id) => this.weaponUnlocked(state, id));
       Audio.playSound('menucursor');
     } else if (!keyDown && this.open) {
       this.open = false;

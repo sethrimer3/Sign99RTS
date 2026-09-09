@@ -19,6 +19,20 @@ export const themeSettings: ThemeSettings = {
   playerColor: 'green',
   enemyColor: 'rose',
 };
+const THEME_STORAGE_KEY = 'sign99:theme-colors';
+
+export function loadThemeSettings(): void {
+  try {
+    const saved = JSON.parse(window.localStorage?.getItem(THEME_STORAGE_KEY) ?? '{}') as Partial<ThemeSettings>;
+    const valid = (value: unknown): value is ThemeColorId => THEME_COLOR_OPTIONS.some((option) => option.id === value);
+    if (valid(saved.playerColor)) themeSettings.playerColor = saved.playerColor;
+    if (valid(saved.enemyColor) && saved.enemyColor !== themeSettings.playerColor) themeSettings.enemyColor = saved.enemyColor;
+  } catch { /* Keep defaults. */ }
+}
+
+export function saveThemeSettings(): void {
+  try { window.localStorage?.setItem(THEME_STORAGE_KEY, JSON.stringify(themeSettings)); } catch { /* optional */ }
+}
 
 function cloneColor(color: Color, intensity: number = color.intensity): Color {
   return { r: color.r, g: color.g, b: color.b, intensity };
