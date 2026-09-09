@@ -1823,7 +1823,8 @@ export class GameState {
   /** Check if the player has a research lab. */
   hasResearchLab(): boolean {
     return this.buildings.some(
-      (b) => b.alive && b.type === EntityType.ResearchLab && b.team === Team.Player,
+      (b) => b.alive && b instanceof ResearchLab && b.researchItem === null && b.team === Team.Player
+        && b.buildProgress >= 1 && (isSynonymousFaction(this.factionByTeam, b.team) || b.powered),
     );
   }
 

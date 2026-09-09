@@ -1083,6 +1083,9 @@ export class Game {
       case 'research':
         this.startResearch(result.item);
         break;
+      case 'placeResearchNode':
+        this.placeResearchNode(result.item, result.cell);
+        break;
       case 'cancelResearch':
         this.cancelQueuedResearch(result.queueIndex);
         break;
@@ -1134,6 +1137,10 @@ export class Game {
   }
 
   private startResearch(item: string): void {
+    if (!this.state.hasResearchLab()) {
+      this.hud.showMessage('Build a finished, powered 9x9 Research Lab first!', Colors.alert1, 3);
+      return;
+    }
     const costKey = item as keyof typeof RESEARCH_COST;
     const timeKey = item as keyof typeof RESEARCH_TIME;
     const cost = RESEARCH_COST[costKey];
@@ -1146,21 +1153,31 @@ export class Game {
       return;
     }
     if (this.state.researchedItems.has(item) || this.state.hasResearchBuilding(item)) {
-      this.hud.showMessage(`${researchDisplayName(item)} already has a lab`, Colors.alert2, 3);
+      this.hud.showMessage(`${researchDisplayName(item)} already has a Research Node`, Colors.alert2, 3);
       return;
     }
+    this.actionMenu.beginResearchNodePlacement(item);
+    this.hud.showMessage(`Place the ${researchDisplayName(item)} Research Node`, Colors.researchlab_detail, 3);
+  }
+
+  private placeResearchNode(item: string, cell: { cx: number; cy: number }): void {
+    if (!this.state.hasResearchLab()) {
+      this.hud.showMessage('Research Lab lost — build another before placing Research Nodes.', Colors.alert1, 3);
+      return;
+    }
+    const cost = RESEARCH_COST[item as keyof typeof RESEARCH_COST];
+    const time = RESEARCH_TIME[item as keyof typeof RESEARCH_TIME];
+    if (cost === undefined || time === undefined || this.state.researchedItems.has(item) || this.state.hasResearchBuilding(item)) return;
     const def = {
-      key: `researchlab:${item}`,
-      label: `${researchDisplayName(item)} Lab`,
-      description: 'A physical upgrade lab.',
+      key: `researchnode:${item}`,
+      label: 'Research Node',
+      description: `Houses the ${researchDisplayName(item)} upgrade.`,
       cost,
       footprintCells: 3,
       buildTime: time,
       tier: 'structure' as const,
       factory: (pos: Vec2, team: Team) => new ResearchLab(pos, team, item),
     };
-    const aimWorld = this.camera.screenToWorld(Input.mousePos);
-    const cell = worldToCell(aimWorld);
     const worldPos = footprintCenter(cell.cx, cell.cy, 3);
     const status = this.state.getPlacementStatus(def, cell.cx, cell.cy, Team.Player);
     if (!status.valid) {
@@ -1184,7 +1201,7 @@ export class Game {
     this.state.addEntity(building);
     this.state.applyConfluencePlacement(Team.Player, worldPos, String(building.id));
     Audio.playSound('build');
-    this.hud.showMessage(`Building ${researchDisplayName(item)} Lab…`, Colors.researchlab_detail, 3);
+    this.hud.showMessage(`Building ${researchDisplayName(item)} Research Node…`, Colors.researchlab_detail, 3);
   }
 
   private cancelQueuedResearch(queueIndex: number): void {
@@ -1970,6 +1987,7 @@ export class Game {
         b.powered = sb.powered;
         if (b instanceof ResearchLab) {
           b.researchItem = sb.researchItem ?? null;
+          b.footprintCells = b.researchItem ? 3 : null;
           b.showExactUpgrade = b.team === this.localPlayerTeam();
         }
         if (!sb.alive && b.alive) b.destroy();
@@ -1986,6 +2004,7 @@ export class Game {
           newBuilding.powered = sb.powered;
           if (newBuilding instanceof ResearchLab) {
             newBuilding.researchItem = sb.researchItem ?? null;
+            newBuilding.footprintCells = newBuilding.researchItem ? 3 : null;
             newBuilding.showExactUpgrade = newBuilding.team === this.localPlayerTeam();
           }
           this.state.addEntity(newBuilding);

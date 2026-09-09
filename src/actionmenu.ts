@@ -261,6 +261,7 @@ export type MenuResult =
   | { action: 'build'; buildingType: string; cell?: { cx: number; cy: number } }
   | { action: 'order'; group: ShipGroup | 'all'; order: string }
   | { action: 'research'; item: string }
+  | { action: 'placeResearchNode'; item: string; cell: { cx: number; cy: number } }
   | { action: 'cancelResearch'; item: string; queueIndex: number };
 
 // Re-export kept for convenience so callers don't need to know the origin
@@ -1919,7 +1920,7 @@ class QuickBuildMenu {
     ctx.setLineDash([]);
   }
 
-  private drawBuildingFootprintCursor(
+  drawBuildingFootprintCursor(
     ctx: CanvasRenderingContext2D,
     state: GameState,
     camera: Camera,
@@ -2129,8 +2130,53 @@ export class ActionMenu {
    */
   placementMode = false;
   placementType: string | null = null;
+  private pendingResearchItem: string | null = null;
+
+  beginResearchNodePlacement(item: string): void {
+    this.pendingResearchItem = item;
+    this.placementMode = true;
+    this.placementType = `researchnode:${item}`;
+  }
+
+  private researchNodeDef(item: string): BuildDef {
+    return {
+      key: `researchnode:${item}`,
+      label: 'Research Node',
+      description: 'A 3x3 node that physically houses one upgrade.',
+      cost: RESEARCH_COST[item as keyof typeof RESEARCH_COST] ?? 0,
+      footprintCells: 3,
+      buildTime: 0,
+      tier: 'structure',
+      factory: (pos, team) => getBuildDef('researchlab')!.factory(pos, team),
+    };
+  }
 
   update(state: GameState, camera: Camera): MenuResult {
+    if (this.pendingResearchItem) {
+      this.open = true;
+      this.placementMode = true;
+      this.placementType = `researchnode:${this.pendingResearchItem}`;
+      if (Input.wasPressed('Escape') || Input.mouse2Pressed || !state.hasResearchLab()) {
+        this.pendingResearchItem = null;
+        this.open = false;
+        this.placementMode = false;
+        this.placementType = null;
+        return { action: 'none' };
+      }
+      if (Input.mousePressed) {
+        const item = this.pendingResearchItem;
+        const cell = worldToCell(camera.screenToWorld(Input.mousePos));
+        const status = state.getPlacementStatus(this.researchNodeDef(item), cell.cx, cell.cy, Team.Player);
+        if (status.valid) {
+          this.pendingResearchItem = null;
+          this.open = false;
+          this.placementMode = false;
+          this.placementType = null;
+          return { action: 'placeResearchNode', item, cell };
+        }
+      }
+      return { action: 'none' };
+    }
     // Paint mode runs first so it consumes mouse-down before radial menus see it.
     const paintResult = this.paintMenu.update(state, camera);
     const paintOpen = this.paintMenu.open;
@@ -2167,6 +2213,18 @@ export class ActionMenu {
     this.shipMenu.draw(ctx, state, camera, screenW, screenH);
     this.researchMenu.draw(ctx, state, screenW, screenH);
     this.paintMenu.draw(ctx, state, camera, screenW, screenH);
+    if (this.pendingResearchItem) {
+      const cell = worldToCell(camera.screenToWorld(Input.mousePos));
+      this.paintMenu.drawBuildingFootprintCursor(ctx, state, camera, cell, this.researchNodeDef(this.pendingResearchItem));
+      drawMenuBanner(
+        ctx,
+        screenW,
+        18,
+        `[X] Place ${researchDisplayName(this.pendingResearchItem)} Research Node - LMB place - RMB/Esc cancel`,
+        `Research Node 3x3 - resources: $${Math.floor(state.resources)}`,
+        performance.now() * 0.001,
+      );
+    }
   }
 
 }

@@ -4,10 +4,13 @@ import { PlayerShip } from './ship.js';
 import { Team, EntityType } from './entities.js';
 import { footprintForBuildingType } from './buildingfootprint.js';
 import { researchCategory, researchIcon } from './research.js';
+import { ResearchLab } from './building.js';
+import { footprintForBuilding } from './buildingfootprint.js';
 
 describe('physical upgrade labs', () => {
-  it('uses the requested 3x3 footprint', () => {
-    expect(footprintForBuildingType(EntityType.ResearchLab)).toBe(3);
+  it('keeps the prerequisite lab at 9x9', () => {
+    expect(footprintForBuildingType(EntityType.ResearchLab)).toBe(9);
+    expect(footprintForBuilding(new ResearchLab(new Vec2(0, 0), Team.Player, 'shipDash'))).toBe(3);
   });
 
   it('exposes only the three public categories and keeps exact owner icons distinct', () => {
