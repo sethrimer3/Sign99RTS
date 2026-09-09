@@ -76,6 +76,12 @@ export enum EntityType {
   // Effects
   Explosion,
   SwarmYard,
+  TetherTurret,
+  ShieldGenerator,
+}
+
+export interface AreaShield {
+  absorbDamage(amount: number, source?: Entity): number;
 }
 
 let nextEntityId = 0;
@@ -93,6 +99,25 @@ export abstract class Entity {
   radius: number;
   alive: boolean;
   lastDamageSource: Entity | null = null;
+  /** Assigned each tick while this entity is inside an allied defensive shield. */
+  areaShield: AreaShield | null = null;
+
+  /**
+   * Sum of all active Tether-turret slow fractions applied to this entity this
+   * frame (0 = unaffected, 0.2 per fully-charged Tether, >= 1 = frozen).
+   * Reset to 0 each tick by GameState before Tethers re-accumulate.
+   */
+  tetherSlowFrac = 0;
+  /**
+   * Incremented every time this entity performs a dash. Tether turrets watch
+   * this to detect a dash and halve their hold on the target.
+   */
+  dashCount = 0;
+
+  /** Speed-cap multiplier from Tether turrets. 0 => frozen in place. */
+  tetherSpeedMultiplier(): number {
+    return Math.max(0, 1 - this.tetherSlowFrac);
+  }
 
   constructor(
     type: EntityType,
@@ -119,6 +144,9 @@ export abstract class Entity {
 
   takeDamage(amount: number, _source?: Entity): void {
     if (!this.alive) return;
+    const incomingDamage = amount > 0;
+    if (incomingDamage && this.areaShield) amount = this.areaShield.absorbDamage(amount, _source);
+    if (incomingDamage && amount <= 0) return;
     if (amount > 0 && _source) this.lastDamageSource = _source;
     this.health -= amount;
     if (this.health <= 0) {

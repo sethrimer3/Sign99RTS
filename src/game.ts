@@ -13,8 +13,8 @@ import { HUD } from './hud.js';
 import { MainMenu, MenuAction } from './menu.js';
 import { Colors, colorToCSS } from './colors.js';
 import { Team, EntityType, ShipGroup, Entity } from './entities.js';
-import { DT, WORLD_WIDTH, WORLD_HEIGHT, RESEARCH_COST, RESEARCH_TIME, TICK_RATE, WEAPON_STATS, ACTIVE_RESEARCH_ITEMS, SHIP_STATS, BASELINE_RESOURCE_GAIN, RESOURCE_GAIN_RATE } from './constants.js';
-import { BuildingBase, CommandPost, Factory } from './building.js';
+import { DT, WORLD_WIDTH, WORLD_HEIGHT, RESEARCH_COST, RESEARCH_TIME, RESEARCH_MODE, TICK_RATE, WEAPON_STATS, ACTIVE_RESEARCH_ITEMS, SHIP_STATS, BASELINE_RESOURCE_GAIN, RESOURCE_GAIN_RATE } from './constants.js';
+import { BuildingBase, CommandPost, Factory, ResearchLab, ShieldGenerator } from './building.js';
 import { Shipyard } from './building.js';
 import { EnemyBasePlanner } from './enemybaseplanner.js';
 import { TurretBase } from './turret.js';
@@ -49,6 +49,8 @@ import {
 import { GlowLayer } from './glowlayer.js';
 import { DEFAULT_VISUAL_QUALITY, VISUAL_QUALITY_PRESETS, type VisualQuality, type VisualQualityPreset, loadVisualQuality, saveVisualQuality } from './visualquality.js';
 import { loadCinematicLevel, saveCinematicLevel, setCinematicLevel, type CinematicLevel } from './cinematic.js';
+import { loadLegacyGraphics, saveLegacyGraphics, setLegacyGraphics } from './graphicsmode.js';
+import { setProjectileTrailLayers } from './projectileTrail.js';
 import {
   drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, type ShipCommandGroup, type WaypointMarker,
 } from './gameRender.js';
@@ -62,6 +64,7 @@ import { CrystalNebula } from './crystalnebula.js';
 import { DistantSuns } from './suns.js';
 import { AsteroidField } from './asteroidField.js';
 import { StarNestBackground } from './starNestBackground.js';
+import { activeSpaceColor } from './spaceTheme.js';
 import { fireTurretShots } from './turretCombat.js';
 import { updateFighterWeaponFire } from './fighterCombat.js';
 import { updatePlayerFiring, updateGuidedMissileControl } from './weaponFiring.js';
@@ -168,6 +171,7 @@ export class Game {
   private starNest: StarNestBackground;
   private visualQuality: VisualQuality = DEFAULT_VISUAL_QUALITY;
   private cinematicLevel: CinematicLevel = 1;
+  private legacyGraphics: boolean = false;
   private visualPreset: VisualQualityPreset = VISUAL_QUALITY_PRESETS[DEFAULT_VISUAL_QUALITY];
   private gameZoom: number = 1.0;
   private uiZoom: number = 1.0;
@@ -182,6 +186,7 @@ export class Game {
   private bgGradient: CanvasGradient | null = null;
   private bgGradientW = 0;
   private bgGradientH = 0;
+  private bgGradientKey = '';
 
   private playerRespawn: PlayerRespawnRuntime = createPlayerRespawnRuntime();
   /** Delay (seconds) before the player ship respawns. */
@@ -310,6 +315,7 @@ export class Game {
     this.spaceFluid.resize(window.innerWidth, window.innerHeight);
     this.applyVisualQuality(loadVisualQuality());
     this.applyCinematicLevel(loadCinematicLevel());
+    this.applyLegacyGraphics(loadLegacyGraphics());
     this.applyZoomSettings(loadZoomSetting(GAME_ZOOM_KEY), loadZoomSetting(UI_ZOOM_KEY));
 
     this.resizeCanvas();
@@ -345,8 +351,15 @@ export class Game {
     );
     this.state?.particles.setParticleScale(this.visualPreset.particleScale);
     this.starfield.setShootingStarsEnabled(this.visualPreset.shootingStarsEnabled);
+    setProjectileTrailLayers(quality === 'high' ? 3 : quality === 'medium' ? 2 : 1);
     this.mainMenu.visualQuality = quality;
     saveVisualQuality(quality);
+  }
+
+  private applyLegacyGraphics(legacy: boolean): void {
+    this.legacyGraphics = setLegacyGraphics(legacy);
+    this.mainMenu.legacyGraphics = this.legacyGraphics;
+    saveLegacyGraphics(this.legacyGraphics);
   }
 
   private applyCinematicLevel(level: CinematicLevel): void {
@@ -453,6 +466,7 @@ export class Game {
       this.applyVisualQuality(this.mainMenu.visualQuality);
     }
     this.syncCinematicLevelFromMenu();
+    this.syncLegacyGraphicsFromMenu();
     this.syncZoomSettingsFromMenu();
     this.handleMenuAction(action);
   }
@@ -463,6 +477,7 @@ export class Game {
       this.applyVisualQuality(this.mainMenu.visualQuality);
     }
     this.syncCinematicLevelFromMenu();
+    this.syncLegacyGraphicsFromMenu();
     this.syncZoomSettingsFromMenu();
     this.handleMenuAction(action);
   }
@@ -470,6 +485,17 @@ export class Game {
   private syncZoomSettingsFromMenu(): void {
     if (this.mainMenu.gameZoom !== this.gameZoom || this.mainMenu.uiZoom !== this.uiZoom) {
       this.applyZoomSettings(this.mainMenu.gameZoom, this.mainMenu.uiZoom);
+    }
+  }
+
+  private syncLegacyGraphicsFromMenu(): void {
+    if (this.mainMenu.legacyGraphics !== this.legacyGraphics) {
+      this.applyLegacyGraphics(this.mainMenu.legacyGraphics);
+      this.hud.showMessage(
+        this.legacyGraphics ? 'Legacy Graphics: ON' : 'Legacy Graphics: OFF',
+        Colors.general_building,
+        2,
+      );
     }
   }
 
@@ -972,7 +998,12 @@ export class Game {
   }
 
   private updateGhostSpectator(dt: number): void {
-    updateGhostSpectator(this.state, this.playerRespawn, dt);
+    updateGhostSpectator(
+      this.state,
+      this.playerRespawn,
+      dt,
+      this.camera.screenToWorld(Input.mousePos),
+    );
   }
 
   private updatePlayerShipyards(): void {
@@ -1080,6 +1111,9 @@ export class Game {
       case 'research':
         this.startResearch(result.item);
         break;
+      case 'placeResearchNode':
+        this.placeResearchNode(result.item, result.cell);
+        break;
       case 'cancelResearch':
         this.cancelQueuedResearch(result.queueIndex);
         break;
@@ -1089,6 +1123,7 @@ export class Game {
   }
 
   private placeBuilding(type: string, cellOverride?: { cx: number; cy: number }): void {
+    if (!this.state.player.alive) return;
     const def = getBuildDef(type);
     if (!def) return;
 
@@ -1117,8 +1152,10 @@ export class Game {
         return;
       }
     } else {
+      const placementCost = this.state.getBuildCost(def, Team.Player);
       const conduitRefund = this.state.sellReplaceableConduitsUnderFootprint(def, cell.cx, cell.cy, Team.Player);
-      this.state.resources += conduitRefund - this.state.getBuildCost(def, Team.Player);
+      this.state.resources += conduitRefund - placementCost;
+      building.placementCost = placementCost;
     }
     this.state.addEntity(building);
     this.state.applyConfluencePlacement(Team.Player, worldPos, String(building.id));
@@ -1129,10 +1166,9 @@ export class Game {
 
   private startResearch(item: string): void {
     if (!this.state.hasResearchLab()) {
-      this.hud.showMessage('Build a Research Lab first!', Colors.alert1, 3);
+      this.hud.showMessage('Build a finished, powered 9x9 Research Lab first!', Colors.alert1, 3);
       return;
     }
-
     const costKey = item as keyof typeof RESEARCH_COST;
     const timeKey = item as keyof typeof RESEARCH_TIME;
     const cost = RESEARCH_COST[costKey];
@@ -1144,40 +1180,89 @@ export class Game {
       this.hud.showMessage('Research Regen Turrets first!', Colors.alert1, 3);
       return;
     }
-    if (this.state.researchedItems.has(item) || this.state.researchProgress.item === item || this.state.researchQueue.includes(item)) {
-      this.hud.showMessage(`${researchDisplayName(item)} is already queued or complete`, Colors.alert2, 3);
+    if (this.state.researchedItems.has(item) || this.state.hasResearchBuilding(item)) {
+      this.hud.showMessage(
+        RESEARCH_MODE === 'classic'
+          ? `${researchDisplayName(item)} is already queued`
+          : `${researchDisplayName(item)} already has a Research Node`,
+        Colors.alert2, 3,
+      );
       return;
     }
+    if (RESEARCH_MODE === 'classic') {
+      const synonymous = isSynonymousFaction(this.state.factionByTeam, Team.Player);
+      const canAfford = synonymous ? this.state.synonymous.canSpend(Team.Player, cost) : this.state.resources >= cost;
+      if (!canAfford) {
+        this.hud.showMessage(`Need ${cost}${synonymous ? ' ' + SYNONYMOUS_CURRENCY_SYMBOL : ''}`, Colors.alert1, 3);
+        return;
+      }
+      if (synonymous) {
+        this.state.synonymous.spendFreeDrones(Team.Player, cost);
+      } else {
+        this.state.resources -= cost;
+      }
+      this.state.queueResearch(item);
+      this.hud.showMessage(`Researching ${researchDisplayName(item)}…`, Colors.researchlab_detail, 3);
+      return;
+    }
+    this.actionMenu.beginResearchNodePlacement(item);
+    this.hud.showMessage(`Place the ${researchDisplayName(item)} Research Node`, Colors.researchlab_detail, 3);
+  }
 
-    if (isSynonymousFaction(this.state.factionByTeam, Team.Player)) {
-      if (!this.state.synonymous.canSpend(Team.Player, cost)) {
-        this.hud.showMessage(`Need ${cost} ${SYNONYMOUS_CURRENCY_SYMBOL} for research!`, Colors.alert1, 3);
-        return;
-      }
-      this.state.synonymous.spendFreeDrones(Team.Player, cost, this.state.player.position);
-    } else {
-      if (this.state.resources < cost) {
-        this.hud.showMessage('Not enough resources for research!', Colors.alert1, 3);
-        return;
-      }
-      this.state.resources -= cost;
-    }
-    if (this.state.researchProgress.item) {
-      this.state.researchQueue.push(item);
-      this.hud.showMessage(`Queued research: ${researchDisplayName(item)}`, Colors.researchlab_detail, 3);
+  private placeResearchNode(item: string, cell: { cx: number; cy: number }): void {
+    if (!this.state.hasResearchLab()) {
+      this.hud.showMessage('Research Lab lost — build another before placing Research Nodes.', Colors.alert1, 3);
       return;
     }
-    this.state.researchProgress = {
-      item,
-      progress: 0,
-      timeNeeded: time / TICK_RATE,
+    const cost = RESEARCH_COST[item as keyof typeof RESEARCH_COST];
+    const time = RESEARCH_TIME[item as keyof typeof RESEARCH_TIME];
+    if (cost === undefined || time === undefined || this.state.researchedItems.has(item) || this.state.hasResearchBuilding(item)) return;
+    const def = {
+      key: `researchnode:${item}`,
+      label: 'Research Node',
+      description: `Houses the ${researchDisplayName(item)} upgrade.`,
+      cost,
+      footprintCells: 3,
+      buildTime: time,
+      tier: 'structure' as const,
+      factory: (pos: Vec2, team: Team) => new ResearchLab(pos, team, item),
     };
-    this.hud.showMessage(`Researching: ${researchDisplayName(item)}`, Colors.researchlab_detail, 3);
+    const worldPos = footprintCenter(cell.cx, cell.cy, 3);
+    const status = this.state.getPlacementStatus(def, cell.cx, cell.cy, Team.Player);
+    if (!status.valid) {
+      this.hud.showMessage(status.reason, Colors.alert1, 3);
+      return;
+    }
+    const building = new ResearchLab(worldPos, Team.Player, item);
+    building.buildDurationSeconds = time / TICK_RATE;
+    building.buildProgress = 0;
+    building.placementCost = cost;
+    if (isSynonymousFaction(this.state.factionByTeam, Team.Player)) {
+      building.synonymousVisualKind = 'researchlab';
+      if (!this.state.synonymous.allocateToBuilding(Team.Player, building.id, 'researchlab', worldPos, cost, this.state.gameTime)) {
+        this.hud.showMessage(`Need ${cost} ${SYNONYMOUS_CURRENCY_SYMBOL}`, Colors.alert1, 3);
+        return;
+      }
+    } else {
+      const refund = this.state.sellReplaceableConduitsUnderFootprint(def, cell.cx, cell.cy, Team.Player);
+      this.state.resources += refund - cost;
+    }
+    this.state.addEntity(building);
+    this.state.applyConfluencePlacement(Team.Player, worldPos, String(building.id));
+    Audio.playSound('build');
+    this.hud.showMessage(`Building ${researchDisplayName(item)} Research Node…`, Colors.researchlab_detail, 3);
   }
 
   private cancelQueuedResearch(queueIndex: number): void {
-    const [item] = this.state.researchQueue.splice(queueIndex, 1);
-    if (!item) return;
+    let item: string | undefined;
+    if (queueIndex === -1) {
+      item = this.state.researchProgress.item ?? undefined;
+      if (!item) return;
+      this.state.cancelActiveResearch();
+    } else {
+      [item] = this.state.researchQueue.splice(queueIndex, 1);
+      if (!item) return;
+    }
     const cost = RESEARCH_COST[item as keyof typeof RESEARCH_COST];
     if (cost !== undefined) {
       if (isSynonymousFaction(this.state.factionByTeam, Team.Player)) {
@@ -1964,6 +2049,15 @@ export class Game {
         b.health = sb.health;
         b.buildProgress = sb.buildProgress;
         b.powered = sb.powered;
+        if (b instanceof ResearchLab) {
+          b.researchItem = sb.researchItem ?? null;
+          b.footprintCells = b.researchItem ? 3 : null;
+          b.showExactUpgrade = b.team === this.localPlayerTeam();
+        }
+        if (b instanceof ShieldGenerator) {
+          b.shield = sb.shield ?? b.shield;
+          b.restartDelay = sb.shieldRestartDelay ?? b.restartDelay;
+        }
         if (!sb.alive && b.alive) b.destroy();
       } else if (sb.alive) {
         // Building not known locally — create it from snapshot so remote clients
@@ -1976,6 +2070,15 @@ export class Game {
           newBuilding.health = sb.health;
           newBuilding.buildProgress = sb.buildProgress;
           newBuilding.powered = sb.powered;
+          if (newBuilding instanceof ResearchLab) {
+            newBuilding.researchItem = sb.researchItem ?? null;
+            newBuilding.footprintCells = newBuilding.researchItem ? 3 : null;
+            newBuilding.showExactUpgrade = newBuilding.team === this.localPlayerTeam();
+          }
+          if (newBuilding instanceof ShieldGenerator) {
+            newBuilding.shield = sb.shield ?? newBuilding.shield;
+            newBuilding.restartDelay = sb.shieldRestartDelay ?? newBuilding.restartDelay;
+          }
           this.state.addEntity(newBuilding);
           this.state.power.markDirty();
         }
@@ -2136,6 +2239,9 @@ export class Game {
         buildProgress: b.buildProgress,
         powered: b.powered,
         alive: b.alive,
+        researchItem: b instanceof ResearchLab ? b.researchItem ?? undefined : undefined,
+        shield: b instanceof ShieldGenerator ? b.shield : undefined,
+        shieldRestartDelay: b instanceof ShieldGenerator ? b.restartDelay : undefined,
       });
     }
 
@@ -2303,23 +2409,26 @@ export class Game {
     ctx.globalCompositeOperation = 'source-over';
     ctx.font = gameFont(12);
 
-    // Clear with solid very-dark-blue, then overlay a cinematic blue→purple gradient
-    // so the space background has subtle depth without washing out gameplay objects.
-    ctx.fillStyle = this.cinematicLevel <= -2 ? '#000000' : colorToCSS(Colors.friendly_background);
+    // Clear with the selected space colour's solid fill, then overlay its
+    // radial depth gradient so the background has subtle depth without washing
+    // out gameplay objects.
+    const space = activeSpaceColor();
+    ctx.fillStyle = this.cinematicLevel <= -2 ? '#000000' : space.gameFill;
     ctx.fillRect(0, 0, w, h);
 
-    // Rebuild the background gradient when the canvas size changes.
-    if (this.bgGradient === null || this.bgGradientW !== w || this.bgGradientH !== h) {
+    // Rebuild the background gradient when the canvas size or space colour changes.
+    if (
+      space.gameGradient !== null &&
+      (this.bgGradient === null || this.bgGradientW !== w || this.bgGradientH !== h || this.bgGradientKey !== space.id)
+    ) {
       this.bgGradientW = w;
       this.bgGradientH = h;
+      this.bgGradientKey = space.id;
       const grad = ctx.createRadialGradient(w * 0.35, h * 0.25, 0, w * 0.5, h * 0.5, Math.hypot(w, h) * 0.72);
-      grad.addColorStop(0.00, 'rgba(0, 1, 4, 0.24)');    // darker centre while preserving subtle depth
-      grad.addColorStop(0.35, 'rgba(1, 1, 8, 0.66)');    // deep indigo tint
-      grad.addColorStop(0.68, 'rgba(3, 1, 10, 0.78)');   // dark violet
-      grad.addColorStop(1.00, 'rgba(1, 0, 5, 0.88)');    // near-black periphery
+      for (const [offset, colour] of space.gameGradient) grad.addColorStop(offset, colour);
       this.bgGradient = grad;
     }
-    if (this.cinematicLevel > -2) {
+    if (this.cinematicLevel > -2 && space.gameGradient !== null && this.bgGradient !== null) {
       ctx.fillStyle = this.bgGradient;
       ctx.fillRect(0, 0, w, h);
     }
@@ -2341,7 +2450,7 @@ export class Game {
     // Draw game world
     // Layer 1: distant suns / solar glow (deepest parallax background)
     this.distantSuns.draw(ctx, this.camera, w, h);
-    if (this.cinematicLevel > -2) this.nebula.draw(ctx, this.camera, w, h);
+    if (this.cinematicLevel > -2 && space.nebula) this.nebula.draw(ctx, this.camera, w, h);
     // Base territory glow — faint team-coloured halos that grow with the base.
     // Drawn before the starfield so the stars appear on top of the tinted space.
     drawBaseTerritoryGlow(ctx, this.camera, this.state, w, h);
@@ -2349,7 +2458,7 @@ export class Game {
     // Layer 2: asteroid field (disabled via asteroidFieldLayers:0; kept for code stability)
     if (this.cinematicLevel > -2) this.asteroidField.draw(ctx, this.camera, w, h);
     // Crystal nebula clouds — behind gameplay entities, in front of starfield.
-    if (this.cinematicLevel > -2) this.crystalNebula.draw(ctx, this.camera, this.glowLayer, this.visualPreset);
+    if (this.cinematicLevel >= -2) this.crystalNebula.draw(ctx, this.camera, this.glowLayer, this.visualPreset);
     // Advance the fluid simulation by the frame delta and draw it under the game world.
     this.spaceFluid.step(this.lastFrameMs);
     this.spaceFluid.render(ctx);
@@ -2375,8 +2484,11 @@ export class Game {
       );
     }
     this.state.drawEntities(ctx, this.camera);
-    drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn.ghostPos);
+    drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn);
     drawWaypointMarkers(ctx, this.camera, this.state, this.waypointMarkers);
+    drawGlowLayer(this.glowLayer, this.camera, this.state, this.visualPreset, renderBudget.renderLoadScale);
+    this.glowLayer.compositeTo(ctx);
+    // Keep command selections and the live drag box crisp above world glows.
     drawCommandModeOverlay(
       ctx,
       w,
@@ -2387,8 +2499,6 @@ export class Game {
       this.commandModeState.dragStart,
       this.commandModeState.dragCurrent,
     );
-    drawGlowLayer(this.glowLayer, this.camera, this.state, this.visualPreset, renderBudget.renderLoadScale);
-    this.glowLayer.compositeTo(ctx);
 
     // Edge indicators (always)
     drawEdgeIndicators(ctx, this.camera, this.state, w, h);
@@ -2410,7 +2520,7 @@ export class Game {
       this.hud.drawAIChat(ctx, uiW, uiH);
       this.fighterGroupStatus.draw(ctx, this.state, uiW, uiH, this.state.gameTime);
     });
-    drawBuildingHoverHitpoints(ctx, this.camera, this.state);
+    drawBuildingHoverHitpoints(ctx, this.camera, this.state, this.lastFrameMs / 1000);
     ctx.save();
     ctx.scale(this.uiZoom, this.uiZoom);
     const synonymousPlayer = isSynonymousFaction(this.state.factionByTeam, Team.Player);
@@ -2498,34 +2608,59 @@ export class Game {
     ctx.restore();
   }
 
-  private drawPracticeHUD(ctx: CanvasRenderingContext2D, _w: number, h: number): void {
+  private drawPracticeHUD(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     ctx.font = '12px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
-    ctx.textAlign = 'left';
+    ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     ctx.fillStyle = colorToCSS(Colors.general_building, 0.7);
-    ctx.fillText(
-      `Bases destroyed: ${this.practiceMode.score.basesDestroyed} | Time: ${Math.floor(this.practiceMode.score.timeSurvived)}s`,
-      10, 10,
-    );
+    const right = w - 12;
+    const lines: string[] = [];
     const cfg = this.mainMenu.vsAIConfig;
-    if (this.state.gameMode === 'vs_ai' && cfg.ranked) {
-      if (cfg.mode === 'survival') {
+    if (this.state.gameMode === 'practice') {
+      lines.push('Game mode: Practice');
+      lines.push('Modifiers: none');
+    } else {
+      const modeName = cfg.mode === 'survival' ? 'Survival' : 'Vs. AI';
+      lines.push(`Game mode: ${cfg.ranked ? `Ranked ${modeName}` : modeName}`);
+
+      const modifiers: string[] = [];
+      if (cfg.cheatFullMapKnowledge) modifiers.push('Full Map');
+      if (cfg.cheat125xResources) modifiers.push('1.25x Res');
+      const multiplier = cfg.ranked ? ` x${rankedScoreMultiplier(cfg).toFixed(2)}` : '';
+      lines.push(`Modifiers: ${modifiers.length > 0 ? modifiers.join(', ') : 'none'}${multiplier}`);
+
+      if (cfg.ranked && cfg.mode === 'survival') {
         const survivalScore = this.currentRankedSurvivalScoreBreakdown();
-        ctx.fillText(
+        lines.push(
           `Time survived ${survivalScore.timeSeconds}s x${survivalScore.difficultyMultiplier.toFixed(2)} = ${survivalScore.score}`,
-          10, 26,
         );
-        return;
+      } else if (cfg.ranked) {
+        lines.push(`Rank: ${cfg.difficulty} ${cfg.aiRank} | Score: ${rankedScore(cfg)}`);
       }
-      const cheatCount = rankedCheaterModifierCount(cfg);
-      const modText = cheatCount > 0
-        ? ` | Modifiers: ${cfg.cheatFullMapKnowledge ? 'Full Map ' : ''}${cfg.cheat125xResources ? '1.25x Res ' : ''}x${rankedScoreMultiplier(cfg).toFixed(2)}`
-        : ' | Modifiers: none x1.00';
-      ctx.fillText(
-        `Ranked: ${cfg.difficulty} ${cfg.aiRank} | Score: ${rankedScore(cfg)}${modText}`,
-        10, 26,
-      );
     }
+
+    let y = 10;
+    for (const line of lines) {
+      ctx.fillText(line, right, y);
+      y += 16;
+    }
+
+    // Keep both changing values in at least three-digit slots so their labels
+    // stay fixed when a counter crosses from tens into hundreds.
+    const bases = String(this.practiceMode.score.basesDestroyed);
+    const elapsed = String(Math.floor(this.practiceMode.score.timeSurvived));
+    const basesSlotWidth = Math.max(ctx.measureText('000').width, ctx.measureText(bases).width);
+    const elapsedSlotWidth = Math.max(ctx.measureText('000').width, ctx.measureText(elapsed).width);
+    let cursor = right;
+    ctx.fillText('s', cursor, y);
+    cursor -= ctx.measureText('s').width;
+    ctx.fillText(elapsed, cursor, y);
+    cursor -= elapsedSlotWidth;
+    ctx.fillText(' | Time: ', cursor, y);
+    cursor -= ctx.measureText(' | Time: ').width;
+    ctx.fillText(bases, cursor, y);
+    cursor -= basesSlotWidth;
+    ctx.fillText('Bases destroyed: ', cursor, y);
 
     // AI strategy debug info — shown when debug overlay is active.
     if (this.debugOverlay) {

@@ -189,6 +189,10 @@ export interface SerializedBuilding {
   buildProgress: number;
   powered: boolean;
   alive: boolean;
+  /** Upgrade housed by a physical research lab; absent for ordinary structures. */
+  researchItem?: string;
+  shield?: number;
+  shieldRestartDelay?: number;
 }
 
 // ---------------------------------------------------------------------------

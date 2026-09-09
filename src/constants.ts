@@ -26,13 +26,15 @@ export const BUILDING_COST = {
   factory: 50,
   researchlab: 150,
   powergenerator: 40,
-  wall: 20,
+  wall: 8,
+  shieldgenerator: 120,
   gatlingturret: 70,
   missileturret: 80,
   synonymousminelayer: 90,
   exciterturret: 100,
-  massdriverturret: 90,
+  massdriverturret: 220,
   regenturret: 110,
+  tetherturret: 60,
   timebomb: 60,
   signalstation: 70,
   fighteryard: 200,
@@ -46,18 +48,31 @@ export const BUILD_TIME = {
   researchlab: 360,
   powergenerator: 240,
   wall: 120,
+  shieldgenerator: 300,
   gatlingturret: 170,
   missileturret: 180,
   synonymousminelayer: 210,
   exciterturret: 210,
   massdriverturret: 200,
   regenturret: 220,
+  tetherturret: 190,
   timebomb: 120,
   signalstation: 150,
   fighteryard: 420,
   bomberyard: 480,
   swarmyard: 540,
 } as const;
+
+// Research mode switch:
+//  - 'classic': research is done at the (single, 9x9) Research Lab. Selecting
+//    an item deducts its cost and starts a timer; once it finishes the player
+//    keeps the upgrade permanently, even if the Research Lab is later
+//    destroyed. Losing the lab only pauses in-progress research and blocks
+//    starting new research until it's rebuilt.
+//  - 'building': each upgrade must be physically built as its own 3x3
+//    Research Node; losing that node revokes the upgrade.
+// Flip this one flag to switch the whole game between the two systems.
+export const RESEARCH_MODE: 'classic' | 'building' = 'classic';
 
 // Research costs
 export const RESEARCH_COST = {
@@ -163,6 +178,7 @@ export const HP_VALUES = {
   builderDrone: 10,
   commandPost: 200,
   powerGenerator: 40,
+  shieldGenerator: 50,
   wall: 80,
   factory: 40,
   researchLab: 40,

@@ -26,7 +26,7 @@ import { Team, EntityType } from './entities.js';
 import type { GameState } from './gamestate.js';
 import { cellKey } from './grid.js';
 import type { BuildingBase } from './building.js';
-import { footprintForBuildingType } from './buildingfootprint.js';
+import { footprintForBuilding } from './buildingfootprint.js';
 import { isSynonymousFaction } from './confluence.js';
 import { buildingFootprintOrigin } from './buildingCollision.js';
 
@@ -119,7 +119,7 @@ export class PowerGraph {
         arr = [];
         sourceCells.set(b.team, arr);
       }
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const origin = buildingFootprintOrigin(b);
       for (let y = origin.cy; y < origin.cy + size; y++) {
         for (let x = origin.cx; x < origin.cx + size; x++) {
@@ -234,7 +234,7 @@ export class PowerGraph {
   private buildingIsEnergized(b: BuildingBase): boolean {
     const set = this.snapshot.energized.get(b.team);
     if (!set || set.size === 0) return false;
-    const size = footprintForBuildingType(b.type);
+    const size = footprintForBuilding(b);
     const origin = buildingFootprintOrigin(b);
     for (let y = origin.cy - 1; y <= origin.cy + size; y++) {
       for (let x = origin.cx - 1; x <= origin.cx + size; x++) {

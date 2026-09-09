@@ -6,6 +6,8 @@ export function footprintForBuildingType(type: EntityType): number {
       return 6;
     case EntityType.Wall:
       return 2;
+    case EntityType.ShieldGenerator:
+      return 3;
     case EntityType.FighterYard:
       return 5;
     case EntityType.BomberYard:
@@ -16,9 +18,17 @@ export function footprintForBuildingType(type: EntityType): number {
       return 4;
     case EntityType.ExciterTurret:
       return 4;
+    case EntityType.TetherTurret:
+      return 4;
+    case EntityType.MassDriverTurret:
+      return 6;
     case EntityType.ResearchLab:
       return 9;
     default:
       return 3;
   }
+}
+
+export function footprintForBuilding(building: { type: EntityType; footprintCells?: number | null }): number {
+  return building.footprintCells ?? footprintForBuildingType(building.type);
 }

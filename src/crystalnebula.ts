@@ -92,6 +92,8 @@ interface CrystalMote {
   sparkleRate: number;  // oscillation frequency (rad / s)
   activity: number;     // 0 = calm, 1 = fully disturbed; decays each tick
   shine: number;        // 0 = calm, 1 = bright refractive flare
+  /** Skip GlowLayer routing for this mote (set for dense clump dust to keep fill cheap). */
+  noGlow: boolean;
   /** Pre-computed CSS color prefix: "rgba(r,g,b," — append alpha and ")" */
   colorPrefix: string;
   /**
@@ -127,6 +129,14 @@ interface Disturbance {
 interface Cloud {
   def: CloudDef;
   particles: CrystalMote[];
+  /**
+   * True for a dense "nebula clump" — a very tight cluster spawned only on the
+   * top graphics tier and only drawn/simulated at Cinematic level 2+.
+   * Clumps skip the O(n²) gentle-separation pass (overlap is desired) and use
+   * a slightly stiffer spring so a swarm knocked loose by an explosion settles
+   * back quickly without a lingering per-frame cost.
+   */
+  isClump: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +145,11 @@ interface Cloud {
 
 /** Spring-back constant (larger = snappier return to home). */
 const SPRING_K = 1.6;
+/** Stiffer spring for clump motes so a scattered swarm re-forms quickly. */
+const CLUMP_SPRING_K = 2.4;
+/** Mote count range for each dense nebula clump on the top tier. */
+const CLUMP_MIN_COUNT = 50;
+const CLUMP_MAX_COUNT = 300;
 /** Per-frame velocity damping exponent base (applied as pow(DAMPING, dt*60)). */
 const DAMPING = 0.90;
 /** Per-frame angular velocity damping. */
@@ -170,6 +185,7 @@ export class CrystalNebula {
   private glowEnabled = false;
   private interactionScale = 1.0;
   private densityScale = 1.0;
+  private clumpsEnabled = false;
 
   private screenW = 800;
   private screenH = 600;
@@ -189,10 +205,15 @@ export class CrystalNebula {
   configure(preset: VisualQualityPreset): void {
     const newEnabled = preset.crystalNebulaEnabled;
     const newDensity = preset.crystalNebulaDensityScale;
-    const changed = newEnabled !== this.enabled || Math.abs(newDensity - this.densityScale) > 0.01;
+    const newClumps = preset.crystalNebulaClumps;
+    const changed =
+      newEnabled !== this.enabled ||
+      newClumps !== this.clumpsEnabled ||
+      Math.abs(newDensity - this.densityScale) > 0.01;
 
     this.enabled = newEnabled;
     this.densityScale = newDensity;
+    this.clumpsEnabled = newClumps;
     this.glowEnabled = preset.crystalNebulaGlow;
     this.interactionScale = preset.crystalNebulaInteractionScale;
 
@@ -277,7 +298,7 @@ export class CrystalNebula {
       return;
     }
 
-    const springK    = SPRING_K;
+    const clumpsActive = getCinematicLevel() >= 2;
     const damping    = Math.pow(DAMPING, dt * 60);
     const angDamping = Math.pow(ANGULAR_DAMPING, dt * 60);
     const actDecay   = Math.exp(-ACTIVITY_DECAY * dt);
@@ -288,10 +309,16 @@ export class CrystalNebula {
 
     for (const cloud of this.clouds) {
       if (cloud.particles.length === 0) continue;
+      // Dormant clumps: no physics until the cinematic tier turns them on.
+      if (cloud.isClump && !clumpsActive) continue;
 
-      // Pre-compute cloud outer radius squared for disturbance proximity check.
+      const springK = cloud.isClump ? CLUMP_SPRING_K : SPRING_K;
+
+      // Pre-compute cloud outer radius for disturbance proximity check.
+      // Clumps are small, so also fold in each disturbance's own radius —
+      // otherwise a wide explosion whose centre lands just outside the tight
+      // clump bound would wrongly skip it.
       const cloudRTest = cloud.def.radius * 1.6;
-      const cloudRTest2 = cloudRTest * cloudRTest;
       const ccx = cloud.def.cx;
       const ccy = cloud.def.cy;
 
@@ -302,7 +329,8 @@ export class CrystalNebula {
         const dist = dists[di];
         const ddx = dist.x - ccx;
         const ddy = dist.y - ccy;
-        if (ddx * ddx + ddy * ddy <= cloudRTest2) {
+        const reach = cloudRTest + dist.radius;
+        if (ddx * ddx + ddy * ddy <= reach * reach) {
           CrystalNebula.copyDisturbance(this.nearDistBuf[nearDistCount], dist);
           nearDistCount++;
         }
@@ -370,7 +398,9 @@ export class CrystalNebula {
         p.sparklePhase += p.sparkleRate * dt;
       }
 
-      this.applyGentleSeparation(particles, dt);
+      // Clumps deliberately overlap, so skip the O(n²) separation pass — this
+      // is what keeps hundreds of clump motes cheap while being knocked around.
+      if (!cloud.isClump) this.applyGentleSeparation(particles, dt);
     }
 
     // Clear disturbances for next tick
@@ -420,6 +450,7 @@ export class CrystalNebula {
     let visCount = 0;
 
     for (const cloud of this.clouds) {
+      if (cloud.isClump && cinematicLevel < 2) continue;
       const cd = cloud.def;
       // Cull entire cloud if its bounding circle doesn't overlap the viewport
       if (
@@ -522,134 +553,6 @@ export class CrystalNebula {
             }
           }
 
-          // Level 6: faint six-spoke caustic crown around the diamond halo.
-          if (cinematicLevel >= 6 && velocityGlow > 0.64) {
-            const crownPhase = (time * 0.7 + p.sparklePhase * 1.4) % 1;
-            const crownLen = sr * (4.8 + crownPhase * 2.0);
-            const crownAlpha = velocityGlow * 0.10 * (1 - crownPhase * 0.6);
-            if (crownAlpha > 0.005) {
-              const spokeCount = 6;
-              ctx.strokeStyle = p.colorPrefix + crownAlpha.toFixed(3) + ')';
-              ctx.lineWidth = Math.max(0.2, sr * 0.18);
-              ctx.beginPath();
-              for (let sp = 0; sp < spokeCount; sp++) {
-                const angle = p.angle + crownPhase * Math.PI + (sp / spokeCount) * Math.PI * 2;
-                const ix = sx + Math.cos(angle) * crownLen * 0.32;
-                const iy = sy + Math.sin(angle) * crownLen * 0.32;
-                const ox = sx + Math.cos(angle) * crownLen;
-                const oy = sy + Math.sin(angle) * crownLen;
-                ctx.moveTo(ix, iy);
-                ctx.lineTo(ox, oy);
-              }
-              ctx.stroke();
-            }
-          }
-
-          // Level 7: prismatic micro-tail — a short arc of faint color-decomposed
-          // ghost images trailing behind high-velocity motes, simulating chromatic
-          // dispersion as the crystal fragment tears through the nebula medium.
-          if (cinematicLevel >= 7 && velocityGlow > 0.45) {
-            const tailSteps = 4;
-            const tailLen = sr * (6.0 + velocityGlow * 4.0);
-            const trailAlpha = velocityGlow * 0.12;
-            const vx = p.vx;
-            const vy = p.vy;
-            const vlen = Math.hypot(vx, vy) || 1;
-            const tnx = -vx / vlen;
-            const tny = -vy / vlen;
-            // Slight perpendicular dispersion offsets for R/G/B channels.
-            const dispMult = sr * 0.55;
-            const pnx = -tny;
-            const pny =  tnx;
-            ctx.lineWidth = Math.max(0.3, sr * 0.28);
-            for (let step = 1; step <= tailSteps; step++) {
-              const frac = step / tailSteps;
-              const tx = sx + tnx * tailLen * frac;
-              const ty = sy + tny * tailLen * frac;
-              const stepAlpha = trailAlpha * (1 - frac) * (1 - frac);
-              if (stepAlpha < 0.004) continue;
-              // Red ghost — offset in +perpendicular.
-              ctx.strokeStyle = `rgba(255,80,60,${stepAlpha.toFixed(3)})`;
-              ctx.beginPath();
-              ctx.moveTo(sx + pnx * dispMult * frac, sy + pny * dispMult * frac);
-              ctx.lineTo(tx + pnx * dispMult * frac, ty + pny * dispMult * frac);
-              ctx.stroke();
-              // Blue-violet ghost — offset in −perpendicular.
-              ctx.strokeStyle = `rgba(120,80,255,${stepAlpha.toFixed(3)})`;
-              ctx.beginPath();
-              ctx.moveTo(sx - pnx * dispMult * frac, sy - pny * dispMult * frac);
-              ctx.lineTo(tx - pnx * dispMult * frac, ty - pny * dispMult * frac);
-              ctx.stroke();
-            }
-          }
-
-          // Level 8: spectral corona — a rainbow arc halo that encircles high-
-          // velocity crystal motes, banding ROYGBIV around the glint like light
-          // through a prism.  Distinct from level-7's prismatic micro-tail which
-          // trails behind; this corona is a static ring around the mote itself.
-          if (cinematicLevel >= 8 && velocityGlow > 0.55) {
-            const coronaR = sr * (2.2 + velocityGlow * 1.8);
-            const coronaAlpha = velocityGlow * 0.10;
-            // Draw six thin arcs in ROYGBV hue order.
-            const hues = [
-              'rgba(255,80,60,',    // R
-              'rgba(255,165,30,',   // O
-              'rgba(255,235,50,',   // Y
-              'rgba(60,220,80,',    // G
-              'rgba(60,140,255,',   // B
-              'rgba(140,60,255,',   // V
-            ];
-            const arcSpan = (Math.PI * 2) / hues.length;
-            ctx.lineWidth = Math.max(0.3, sr * 0.30);
-            ctx.lineCap = 'butt';
-            for (let h = 0; h < hues.length; h++) {
-              const a0 = h * arcSpan + p.angle;
-              const a1 = a0 + arcSpan * 0.82;
-              ctx.strokeStyle = hues[h] + (coronaAlpha * (0.70 + 0.30 * Math.sin(p.angle * 3 + h))).toFixed(3) + ')';
-              ctx.beginPath();
-              ctx.arc(sx, sy, coronaR, a0, a1);
-              ctx.stroke();
-            }
-          }
-
-          // Level 9: Cherenkov radiation cone — very high-velocity crystal motes
-          // emit a narrow blue light cone pointing forward in their direction of
-          // travel, like Cherenkov radiation from a particle exceeding the local
-          // phase velocity of light in the nebula medium.  Distinct from the
-          // level-8 spectral corona ring; this cone is directional and trail-facing.
-          if (cinematicLevel >= 9 && velocityGlow > 0.70) {
-            const vx9 = p.vx;
-            const vy9 = p.vy;
-            const vmag9 = Math.hypot(vx9, vy9);
-            if (vmag9 > 0.01) {
-              const coneAngle = Math.atan2(vy9, vx9);
-              const halfCone  = 0.30;  // ~17° half-angle
-              const coneLen   = sr * (4.0 + velocityGlow * 3.2);
-              const coneAlpha = (velocityGlow - 0.70) / 0.30 * 0.16;
-
-              ctx.save();
-              ctx.globalCompositeOperation = 'screen';
-              ctx.translate(sx, sy);
-              ctx.rotate(coneAngle);
-
-              const cGrad = ctx.createLinearGradient(0, 0, coneLen, 0);
-              cGrad.addColorStop(0.00, `rgba(190,245,255,${(coneAlpha * 0.75).toFixed(3)})`);
-              cGrad.addColorStop(0.38, `rgba(130,210,255,${coneAlpha.toFixed(3)})`);
-              cGrad.addColorStop(0.72, `rgba(80,170,255,${(coneAlpha * 0.55).toFixed(3)})`);
-              cGrad.addColorStop(1.00, 'rgba(0,0,0,0)');
-
-              ctx.fillStyle = cGrad;
-              ctx.beginPath();
-              ctx.moveTo(0, 0);
-              ctx.lineTo(coneLen * Math.cos(halfCone), coneLen * Math.sin(halfCone));
-              ctx.lineTo(coneLen * Math.cos(-halfCone), coneLen * Math.sin(-halfCone));
-              ctx.closePath();
-              ctx.fill();
-
-              ctx.restore();
-            }
-          }
-
           // Route brightest glints into the glow layer
           if (glowCtx && (alpha > 0.50 || hotAlpha > 0.18 || velocityGlow > 0.16)) {
             glowCtx.fillStyle = p.colorPrefix + Math.min(cinematicLevel >= 2 ? 0.72 : 0.52, alpha * 0.18 + hotAlpha * 0.30 + velocityGlow * (cinematicLevel >= 2 ? 0.30 : 0.18)).toFixed(3) + ')';
@@ -671,7 +574,7 @@ export class CrystalNebula {
           ctx.closePath();
           ctx.fill();
 
-          if (hotAlpha > 0.10) {
+          if (hotAlpha > 0.10 && !p.noGlow) {
             const edgeAlpha = Math.min(0.95, hotAlpha * 0.85);
             const lineAlpha = Math.min(0.70, hotAlpha * 0.55);
             ctx.fillStyle = `rgba(255,255,255,${edgeAlpha.toFixed(3)})`;
@@ -691,7 +594,7 @@ export class CrystalNebula {
           }
 
           // Route fast-moving diamonds into glow.
-          if (glowCtx && velocityGlow > 0.12 && alpha > 0.30) {
+          if (glowCtx && !p.noGlow && velocityGlow > 0.12 && alpha > 0.30) {
             const ga = Math.min(0.54, hotAlpha * 0.34 + velocityGlow * 0.24);
             glowCtx.fillStyle = p.colorPrefix + ga.toFixed(3) + ')';
             glowCtx.beginPath();
@@ -748,10 +651,52 @@ export class CrystalNebula {
     }
   }
 
+  /**
+   * Create one crystal mote at (homeX, homeY) tinted around the given base
+   * colour. `sizeBase`/`sizeSpan` set the half-size range in world units;
+   * the maximum is capped at 40 % of the historical value so motes read as
+   * fine dust rather than shards.
+   */
+  private static makeMote(
+    rng: () => number,
+    homeX: number,
+    homeY: number,
+    baseR: number,
+    baseG: number,
+    baseB: number,
+    sizeBase: number,
+    sizeSpan: number,
+  ): CrystalMote {
+    const shape: 0 | 1 = rng() < 0.68 ? 0 : 1;
+    const cr = Math.min(255, Math.max(0, baseR + Math.round((rng() - 0.5) * 60)));
+    const cg = Math.min(255, Math.max(0, baseG + Math.round((rng() - 0.5) * 60)));
+    const cb = Math.min(255, Math.max(0, baseB + Math.round((rng() - 0.5) * 60)));
+    return {
+      x: homeX, y: homeY,
+      homeX, homeY,
+      vx: 0, vy: 0,
+      angle:        rng() * Math.PI * 2,
+      angularVel:   0,
+      size:         sizeBase + rng() * sizeSpan,
+      brightness:   0.28 + rng() * 0.58,
+      sparklePhase: rng() * Math.PI * 2,
+      sparkleRate:  0.8 + rng() * 4.0,
+      activity:     0,
+      shine:        0,
+      noGlow:       false,
+      colorPrefix:  `rgba(${cr},${cg},${cb},`,
+      shape,
+    };
+  }
+
   private buildClouds(densityScale: number): void {
     // Use a fixed seed so the cloud layout is identical between sessions.
     const rng = mulberry32(0xc0ffee42);
     this.clouds = [];
+
+    // Half-size range: 0.36–1.32 world units — 40 % of the original 0.9–3.3.
+    const SIZE_BASE = 0.36;
+    const SIZE_SPAN = 0.96;
 
     for (const def of CLOUD_DEFS) {
       const count = Math.max(0, Math.round(def.baseCount * densityScale));
@@ -761,36 +706,82 @@ export class CrystalNebula {
         // Scatter within cloud using polar with square-root bias toward center.
         const r     = def.radius * Math.sqrt(rng());
         const theta = rng() * Math.PI * 2;
-        const homeX = def.cx + Math.cos(theta) * r;
-        const homeY = def.cy + Math.sin(theta) * r;
-
-        // Shape distribution: diamond 68%, rhombus 32%.
-        const shapeRoll = rng();
-        const shape: 0 | 1 = shapeRoll < 0.68 ? 0 : 1;
-
-        // Color variation (±30) around cloud base tint, clamped to 0–255
-        const cr = Math.min(255, Math.max(0, def.r + Math.round((rng() - 0.5) * 60)));
-        const cg = Math.min(255, Math.max(0, def.g + Math.round((rng() - 0.5) * 60)));
-        const cb = Math.min(255, Math.max(0, def.b + Math.round((rng() - 0.5) * 60)));
-
-        particles.push({
-          x: homeX, y: homeY,
-          homeX, homeY,
-          vx: 0, vy: 0,
-          angle:        rng() * Math.PI * 2,
-          angularVel:   0,
-          size:         0.9 + rng() * 2.4,
-          brightness:   0.28 + rng() * 0.58,
-          sparklePhase: rng() * Math.PI * 2,
-          sparkleRate:  0.8 + rng() * 4.0,
-          activity:     0,
-          shine:        0,
-          colorPrefix:  `rgba(${cr},${cg},${cb},`,
-          shape,
-        });
+        particles.push(CrystalNebula.makeMote(
+          rng,
+          def.cx + Math.cos(theta) * r,
+          def.cy + Math.sin(theta) * r,
+          def.r, def.g, def.b,
+          SIZE_BASE, SIZE_SPAN,
+        ));
       }
 
-      this.clouds.push({ def, particles });
+      this.clouds.push({ def, particles, isClump: false });
+    }
+
+    if (this.clumpsEnabled && densityScale > 0) {
+      this.buildClumps(rng, SIZE_BASE, SIZE_SPAN);
+    }
+  }
+
+  /**
+   * Spawn dense, very tight clusters of motes seeded from the diffuse cloud
+   * regions. Each clump is one Cloud object with a small bounding radius, so
+   * the existing cloud-level viewport and disturbance culling keeps it cheap:
+   * off-screen clumps cost nothing, and only a clump within a disturbance's
+   * reach iterates its motes. Clumps also skip the separation pass entirely
+   * (see update()), so an explosion can scatter every mote in a 300-strong
+   * clump with only the linear spring/integrate cost per frame.
+   */
+  private buildClumps(rng: () => number, sizeBase: number, sizeSpan: number): void {
+    for (const src of CLOUD_DEFS) {
+      // 1–2 clumps per region, each anchored somewhere inside that region.
+      const clumpCount = 1 + Math.floor(rng() * 2);
+      for (let c = 0; c < clumpCount; c++) {
+        const anchorR = src.radius * 0.85 * Math.sqrt(rng());
+        const anchorA = rng() * Math.PI * 2;
+        const cx = src.cx + Math.cos(anchorA) * anchorR;
+        const cy = src.cy + Math.sin(anchorA) * anchorR;
+        // Very tight: 34–90 world-unit core, a fraction of a cloud radius.
+        const clumpRadius = 34 + rng() * 56;
+        const moteCount = CLUMP_MIN_COUNT + Math.floor(rng() * (CLUMP_MAX_COUNT - CLUMP_MIN_COUNT + 1));
+
+        const particles: CrystalMote[] = new Array(moteCount);
+        // 1–2 offset sub-lobes give the clump an organic, non-circular core.
+        const lobes = 1 + Math.floor(rng() * 2);
+        const lobeX: number[] = [];
+        const lobeY: number[] = [];
+        for (let l = 0; l < lobes; l++) {
+          const la = rng() * Math.PI * 2;
+          const ld = rng() * clumpRadius * 0.5;
+          lobeX.push(Math.cos(la) * ld);
+          lobeY.push(Math.sin(la) * ld);
+        }
+
+        for (let i = 0; i < moteCount; i++) {
+          const lobe = i % lobes;
+          // pow bias 2.2 packs most motes toward the lobe centre — "very tight".
+          const rr = clumpRadius * Math.pow(rng(), 2.2);
+          const ra = rng() * Math.PI * 2;
+          const m = CrystalNebula.makeMote(
+            rng,
+            cx + lobeX[lobe] + Math.cos(ra) * rr,
+            cy + lobeY[lobe] + Math.sin(ra) * rr,
+            src.r, src.g, src.b,
+            sizeBase, sizeSpan,
+          );
+          // Dense dust: pure fill, no per-mote halo, and slightly dimmer so a
+          // packed clump doesn't blow out under additive blending.
+          m.noGlow = true;
+          m.brightness *= 0.8;
+          particles[i] = m;
+        }
+
+        this.clouds.push({
+          def: { cx, cy, radius: clumpRadius * 1.6, baseCount: moteCount, r: src.r, g: src.g, b: src.b },
+          particles,
+          isClump: true,
+        });
+      }
     }
   }
 }

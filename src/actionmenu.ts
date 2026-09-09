@@ -17,7 +17,7 @@ import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { GameState } from './gamestate.js';
 import { ShipGroup, TacticalOrder, Team } from './entities.js';
-import { RESEARCH_COST, CONDUIT_COST, ACTIVE_RESEARCH_ITEMS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
+import { RESEARCH_COST, RESEARCH_MODE, CONDUIT_COST, ACTIVE_RESEARCH_ITEMS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
 import { SHIP_WEAPON_OPTIONS, type ShipWeaponId, SHIP_HP_MAX_LEVEL, SHIP_SPEED_ENERGY_MAX_LEVEL, SHIP_SHIELD_MAX_LEVEL } from './ship.js';
 import { worldToCell, cellKey, cellCenter, footprintCenter, footprintOrigin, GRID_CELL_SIZE } from './grid.js';
 import { defsByTier, BuildDef, getBuildDef } from './builddefs.js';
@@ -73,12 +73,12 @@ const RESEARCH_DESCRIPTIONS: Record<string, string> = {
   weaponLaser:          'Unlocks the Laser: slow-firing beam that pierces all targets.',
   weaponGuidedMissile:  'Unlocks the Guided Missile: steerable heavy explosive.',
   weaponCannon:         'Unlocks Cannon V.2 with improved homing shells.',
-  missileturret:        'Unlocks construction of Missile Turrets. Guided-missile defense.',
+  missileturret:        'Unlocks construction of Missile turrets. Guided-missile defense.',
   synonymousminelayer:  'Unlocks construction of Mine Layer turrets.',
-  exciterturret:        'Unlocks construction of Exciter Turrets. Sustained-beam defense.',
-  massdriverturret:     'Unlocks construction of Mass Driver Turrets. Extreme-range kinetics.',
-  regenturret:          'Unlocks construction of Regen Turrets. Heals nearby structures.',
-  advancedRegenTurrets: 'Regen Turrets rebuild destroyed conduits for free.',
+  exciterturret:        'Unlocks construction of Prism turrets. Sustained-beam defense.',
+  massdriverturret:     'Unlocks construction of Singularity turrets. First blast drags in nearby ships.',
+  regenturret:          'Unlocks construction of Repair turrets. Heals nearby structures.',
+  advancedRegenTurrets: 'Repair turrets rebuild destroyed conduits for free.',
   bomberyard:           'Unlocks construction of Bomber Yards for nova bombers.',
   fighterTargeting:     'Smarter fighter AI: dodges hazards and prioritizes turrets as targets.',
   fighterWeapon1:       'Fighters deal 50% more weapon damage and gain 8% more range.',
@@ -269,6 +269,7 @@ export type MenuResult =
   | { action: 'build'; buildingType: string; cell?: { cx: number; cy: number } }
   | { action: 'order'; group: ShipGroup | 'all'; order: string }
   | { action: 'research'; item: string }
+  | { action: 'placeResearchNode'; item: string; cell: { cx: number; cy: number } }
   | { action: 'cancelResearch'; item: string; queueIndex: number };
 
 // Re-export kept for convenience so callers don't need to know the origin
@@ -324,13 +325,13 @@ const RESEARCH_LABELS: Record<string, string> = {
   weaponLaser: 'Laser',
   weaponGuidedMissile: 'Guided\nMissile',
   weaponCannon: 'Cannon V.2',
-  missileturret: 'Missile\nTurret',
-  gatlingturret: 'Gatling\nTurret',
+  missileturret: 'Missile',
+  gatlingturret: 'Gatling',
   synonymousminelayer: 'Mine\nLayer',
-  exciterturret: 'Exciter\nTurret',
-  massdriverturret: 'Mass Driver\nTurret',
-  regenturret: 'Regen\nTurret',
-  advancedRegenTurrets: 'Advanced\nRegen Turrets',
+  exciterturret: 'Prism',
+  massdriverturret: 'Singularity',
+  regenturret: 'Repair',
+  advancedRegenTurrets: 'Advanced\nRepair',
   bomberyard: 'Bomber\nYard',
   swarmyard: 'Swarm\nYard',
   fighterTargeting: 'Fighter\nTargeting',
@@ -430,6 +431,8 @@ function placementRangeForBuildDef(def: BuildDef): number {
       return 720;
     case 'massdriverturret':
       return 500;
+    case 'tetherturret':
+      return 420;
     case 'regenturret':
       return 300;
     case 'commandpost':
@@ -457,6 +460,7 @@ const SYNONYMOUS_BUILD_KEYS = new Set([
   'exciterturret',
   'massdriverturret',
   'regenturret',
+  'tetherturret',
   'fighteryard',
   'bomberyard',
 ]);
@@ -521,8 +525,7 @@ function buildBuildRoot(state: GameState): RadialItem[] {
 function buildResearchRoot(state: GameState): RadialItem[] {
   const makeResearchItem = (key: string): RadialItem | null => {
     if (state.researchedItems.has(key)) return null;
-    if (state.researchProgress.item === key) return null;
-    if (state.researchQueue.includes(key)) return null;
+    if (state.hasResearchBuilding(key)) return null;
     if (!(ACTIVE_RESEARCH_ITEMS as readonly string[]).includes(key)) return null;
     if (key === 'advancedRegenTurrets' && !state.researchedItems.has('regenturret')) return null;
     if (key === 'fighterWeapon2' && !state.researchedItems.has('fighterWeapon1')) return null;
@@ -552,8 +555,15 @@ function buildResearchRoot(state: GameState): RadialItem[] {
       ? categories
       : [{ label: 'ALL RESEARCH COMPLETE', disabled: true, infoOnly: true }];
   };
+  const firstMissing = (prefix: string, max: number): string => {
+    for (let level = 1; level <= max; level++) {
+      const key = `${prefix}${level}`;
+      if (!state.researchedItems.has(key) && !state.hasResearchBuilding(key)) return key;
+    }
+    return `${prefix}${max}`;
+  };
   if (isPlayerSynonymous(state)) {
-    const nextFireSpeed = `synonymousFireSpeed${Math.min(4, state.player.synonymousFireSpeedLevel + 1)}`;
+    const nextFireSpeed = firstMissing('synonymousFireSpeed', 4);
     return visibleCategories([
       category('Main Ship', ['synonymousSpeed', 'synonymousVitality']),
       category('Weapons', ['synonymousPierce', nextFireSpeed]),
@@ -564,9 +574,9 @@ function buildResearchRoot(state: GameState): RadialItem[] {
       category('Defensive Turrets', ['synonymousminelayer', 'exciterturret', 'massdriverturret', 'regenturret']),
     ]);
   }
-  const nextHp = `shipHp${Math.min(SHIP_HP_MAX_LEVEL, state.player.hpLevel + 1)}`;
-  const nextSpeedEnergy = `shipSpeedEnergy${Math.min(SHIP_SPEED_ENERGY_MAX_LEVEL, state.player.speedEnergyLevel + 1)}`;
-  const nextShield = `shipShield${Math.min(SHIP_SHIELD_MAX_LEVEL, state.player.shieldLevel + 1)}`;
+  const nextHp = firstMissing('shipHp', SHIP_HP_MAX_LEVEL);
+  const nextSpeedEnergy = firstMissing('shipSpeedEnergy', SHIP_SPEED_ENERGY_MAX_LEVEL);
+  const nextShield = firstMissing('shipShield', SHIP_SHIELD_MAX_LEVEL);
   return visibleCategories([
     category('Defensive Turrets', ['missileturret', 'exciterturret', 'massdriverturret', 'regenturret', 'advancedRegenTurrets']),
     category('Main Ship', [nextHp, nextSpeedEnergy, nextShield, 'shipDash']),
@@ -1202,8 +1212,10 @@ class LeftHoldMenu {
       const rowY = y + 54 + i * (rowH + gap);
       const hovered = Input.mousePos.x >= x + 10 && Input.mousePos.x <= x + w - 10 &&
         Input.mousePos.y >= rowY && Input.mousePos.y <= rowY + rowH;
-      if (!entry.active) this.queueRects.push({ index: i - (state.researchProgress.item ? 1 : 0), item: entry.item, x: x + 10, y: rowY, w: w - 20, h: rowH });
-      drawMenuRow(ctx, x + 10, rowY, w - 20, rowH, hovered && !entry.active, false);
+      // Classic mode lets the player cancel the in-progress item too (full refund, no partial progress kept).
+      const cancelable = !entry.active || RESEARCH_MODE === 'classic';
+      if (cancelable) this.queueRects.push({ index: entry.active ? -1 : i - (state.researchProgress.item ? 1 : 0), item: entry.item, x: x + 10, y: rowY, w: w - 20, h: rowH });
+      drawMenuRow(ctx, x + 10, rowY, w - 20, rowH, hovered && cancelable, false);
       ctx.fillStyle = colorToCSS(Colors.general_building, 0.88);
       const queueNumber = state.researchProgress.item ? i : i + 1;
       const prefix = entry.active ? 'Now' : `${queueNumber}.`;
@@ -1212,7 +1224,7 @@ class LeftHoldMenu {
       ctx.textBaseline = 'middle';
       ctx.fillStyle = colorToCSS(Colors.radar_gridlines, 0.62);
       ctx.font = '15px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
-      ctx.fillText(entry.active ? 'active' : 'cancel', x + w - 18, rowY + rowH * 0.5);
+      ctx.fillText(cancelable ? 'cancel' : 'active', x + w - 18, rowY + rowH * 0.5);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
     }
@@ -1251,13 +1263,14 @@ class ShipMenu {
   open = false;
   private openedAt = 0;
   private readonly weaponRects: Array<{ id: ShipWeaponId; x: number; y: number; w: number; h: number }> = [];
+  private readonly wheelRects: Array<{ id: ShipWeaponId; x: number; y: number; r: number }> = [];
+  private panelRect: { x: number; y: number; w: number; h: number } | null = null;
 
-  update(state: GameState): boolean {
+  update(state: GameState, camera: Camera): boolean {
     const keyDown = Input.isDown('z');
     if (keyDown && !this.open) {
       this.open = true;
       this.openedAt = performance.now() * 0.001;
-      state.player.selectFirstUnlockedWeapon((id) => this.weaponUnlocked(state, id));
       Audio.playSound('menucursor');
     } else if (!keyDown && this.open) {
       this.open = false;
@@ -1283,33 +1296,67 @@ class ShipMenu {
     }
 
     if (Input.mousePressed) {
+      let handled = false;
+      for (const option of this.wheelRects) {
+        if (Math.hypot(Input.mousePos.x - option.x, Input.mousePos.y - option.y) <= option.r) {
+          this.selectWeapon(state, option.id);
+          handled = true;
+          break;
+        }
+      }
       for (const rect of this.weaponRects) {
+        if (handled) break;
         if (
           Input.mousePos.x >= rect.x && Input.mousePos.x <= rect.x + rect.w &&
           Input.mousePos.y >= rect.y && Input.mousePos.y <= rect.y + rect.h
         ) {
           if (this.weaponUnlocked(state, rect.id) && state.player.canSwitchWeapon()) {
-            state.player.selectPrimaryWeapon(rect.id);
-            Audio.playSound('menuselection');
+            this.selectWeapon(state, rect.id);
           } else {
             Audio.playSound('menucursor');
           }
-          Input.consumeMouseButton(0);
+          handled = true;
           break;
         }
       }
+      // A click anywhere in game space chooses the wheel option nearest the
+      // click's direction from the ship. The information panel is excluded so
+      // its non-weapon rows remain inert.
+      if (!handled && !this.pointInPanel(Input.mousePos.x, Input.mousePos.y)) {
+        const options = this.unlockedWeapons(state);
+        const shipScreen = camera.worldToScreen(state.player.position);
+        if (options.length > 0 && Math.hypot(Input.mousePos.x - shipScreen.x, Input.mousePos.y - shipScreen.y) > 1) {
+          const clickAngle = Math.atan2(Input.mousePos.y - shipScreen.y, Input.mousePos.x - shipScreen.x);
+          let closest = options[0];
+          let closestDelta = Infinity;
+          for (let i = 0; i < options.length; i++) {
+            const optionAngle = -Math.PI / 2 + i * Math.PI * 2 / options.length;
+            const delta = Math.abs(Math.atan2(Math.sin(clickAngle - optionAngle), Math.cos(clickAngle - optionAngle)));
+            if (delta < closestDelta) {
+              closest = options[i];
+              closestDelta = delta;
+            }
+          }
+          this.selectWeapon(state, closest.id);
+          handled = true;
+        }
+      }
+      if (handled) Input.consumeMouseButton(0);
     }
 
     return true;
   }
 
-  draw(ctx: CanvasRenderingContext2D, state: GameState, screenW: number, screenH: number): void {
+  draw(ctx: CanvasRenderingContext2D, state: GameState, camera: Camera, screenW: number, screenH: number): void {
     if (!this.open) return;
     this.weaponRects.length = 0;
+    this.wheelRects.length = 0;
     const panelW = Math.min(360, Math.max(300, screenW - 24));
     const x = 12;
     const panelH = Math.min(screenH - 150, Math.max(440, screenH - 190));
     const y = Math.max(10, Math.min(48, (screenH - panelH) * 0.5 - 18));
+    this.panelRect = { x, y, w: panelW, h: panelH };
+    this.drawWeaponWheel(ctx, state, camera);
     ctx.save();
     fillMenuPanel(ctx, x, y, panelW, panelH);
 
@@ -1432,6 +1479,92 @@ class ShipMenu {
     const weapon = SHIP_WEAPON_OPTIONS.find((item) => item.id === id);
     return !weapon?.researchKey || state.researchedItems.has(weapon.researchKey);
   }
+
+  private unlockedWeapons(state: GameState): typeof SHIP_WEAPON_OPTIONS[number][] {
+    return SHIP_WEAPON_OPTIONS
+      .filter((weapon) => this.weaponUnlocked(state, weapon.id))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  private pointInPanel(x: number, y: number): boolean {
+    const panel = this.panelRect;
+    return !!panel && x >= panel.x && x <= panel.x + panel.w && y >= panel.y && y <= panel.y + panel.h;
+  }
+
+  private selectWeapon(state: GameState, id: ShipWeaponId): void {
+    if (state.player.canSwitchWeapon()) {
+      state.player.selectPrimaryWeapon(id);
+      Audio.playSound('menuselection');
+    } else {
+      Audio.playSound('menucursor');
+    }
+  }
+
+  private drawWeaponWheel(ctx: CanvasRenderingContext2D, state: GameState, camera: Camera): void {
+    const options = this.unlockedWeapons(state);
+    if (options.length === 0) return;
+    const center = camera.worldToScreen(state.player.position);
+    const radius = 112;
+    const optionRadius = 30;
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < options.length; i++) {
+      const weapon = options[i];
+      const angle = -Math.PI / 2 + i * Math.PI * 2 / options.length;
+      const x = center.x + Math.cos(angle) * radius;
+      const y = center.y + Math.sin(angle) * radius;
+      const selected = state.player.primaryWeaponId === weapon.id;
+      this.wheelRects.push({ id: weapon.id, x, y, r: optionRadius });
+
+      ctx.beginPath();
+      ctx.moveTo(center.x + Math.cos(angle) * 42, center.y + Math.sin(angle) * 42);
+      ctx.lineTo(x - Math.cos(angle) * optionRadius, y - Math.sin(angle) * optionRadius);
+      ctx.strokeStyle = selected ? UI_GOLD + '0.64)' : UI_CYAN + '0.24)';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, optionRadius, 0, Math.PI * 2);
+      ctx.fillStyle = selected ? UI_GOLD + '0.25)' : UI_PANEL_DARK + '0.88)';
+      ctx.strokeStyle = selected ? UI_GOLD + '0.96)' : UI_CYAN + '0.72)';
+      ctx.fill();
+      ctx.stroke();
+      this.drawWeaponStubIcon(ctx, state, weapon.id, x, y - 4);
+      ctx.font = '11px "Poiret One", "Segoe UI", sans-serif';
+      ctx.fillStyle = selected ? UI_GOLD + '1)' : UI_CYAN + '0.95)';
+      const label = weapon.id === 'cannon'
+        ? (state.researchedItems.has('weaponCannon') ? 'Cannon V2' : 'Cannon V1')
+        : weapon.label;
+      ctx.fillText(label, x, y + 17);
+    }
+    ctx.restore();
+  }
+
+  private drawWeaponStubIcon(ctx: CanvasRenderingContext2D, state: GameState, id: ShipWeaponId, x: number, y: number): void {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.strokeStyle = UI_CYAN + '0.95)';
+    ctx.fillStyle = UI_CYAN + '0.26)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (id === 'cannon') {
+      const v2 = state.researchedItems.has('weaponCannon');
+      ctx.rect(-10, -5, 13, 10);
+      ctx.moveTo(3, 0); ctx.lineTo(13, 0);
+      if (v2) { ctx.moveTo(-7, -8); ctx.lineTo(8, -8); ctx.lineTo(12, -4); }
+    } else if (id === 'gatling') {
+      ctx.rect(-10, -5, 9, 10);
+      for (let n = -1; n <= 1; n++) { ctx.moveTo(-1, n * 4); ctx.lineTo(13, n * 4); }
+    } else if (id === 'guidedmissile') {
+      ctx.moveTo(-12, 5); ctx.lineTo(7, -7); ctx.lineTo(13, 0); ctx.lineTo(7, 7); ctx.closePath();
+    } else {
+      ctx.moveTo(-13, 0); ctx.lineTo(13, 0);
+      ctx.moveTo(-7, -5); ctx.lineTo(7, 5);
+    }
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 type QuickPaletteItem =
@@ -1452,6 +1585,16 @@ class QuickBuildMenu {
   private shapeDrawing = false;
   private selectedIndex = 0;
   private readonly iconRects: Array<{ index: number; x: number; y: number; w: number; h: number }> = [];
+
+  cancel(): void {
+    this.open = false;
+    this.touchedThisDrag.clear();
+    this.buildingDragCells.clear();
+    this.buildingDragStartCell = null;
+    this.dragMode = null;
+    this.lastDragCell = null;
+    this.shapeDrawing = false;
+  }
 
   private conduitBrushCells(cx: number, cy: number): Array<{ cx: number; cy: number }> {
     return [
@@ -1487,6 +1630,10 @@ class QuickBuildMenu {
   }
 
   update(state: GameState, camera: Camera): MenuResult {
+    if (!state.player.alive) {
+      this.cancel();
+      return { action: 'none' };
+    }
     const keyDown = Input.isDown('q');
     if (keyDown && !this.open) {
       this.open = true;
@@ -1801,7 +1948,7 @@ class QuickBuildMenu {
     ctx.setLineDash([]);
   }
 
-  private drawBuildingFootprintCursor(
+  drawBuildingFootprintCursor(
     ctx: CanvasRenderingContext2D,
     state: GameState,
     camera: Camera,
@@ -2011,8 +2158,53 @@ export class ActionMenu {
    */
   placementMode = false;
   placementType: string | null = null;
+  private pendingResearchItem: string | null = null;
+
+  beginResearchNodePlacement(item: string): void {
+    this.pendingResearchItem = item;
+    this.placementMode = true;
+    this.placementType = `researchnode:${item}`;
+  }
+
+  private researchNodeDef(item: string): BuildDef {
+    return {
+      key: `researchnode:${item}`,
+      label: 'Research Node',
+      description: 'A 3x3 node that physically houses one upgrade.',
+      cost: RESEARCH_COST[item as keyof typeof RESEARCH_COST] ?? 0,
+      footprintCells: 3,
+      buildTime: 0,
+      tier: 'structure',
+      factory: (pos, team) => getBuildDef('researchlab')!.factory(pos, team),
+    };
+  }
 
   update(state: GameState, camera: Camera): MenuResult {
+    if (this.pendingResearchItem) {
+      this.open = true;
+      this.placementMode = true;
+      this.placementType = `researchnode:${this.pendingResearchItem}`;
+      if (Input.wasPressed('Escape') || Input.mouse2Pressed || !state.hasResearchLab()) {
+        this.pendingResearchItem = null;
+        this.open = false;
+        this.placementMode = false;
+        this.placementType = null;
+        return { action: 'none' };
+      }
+      if (Input.mousePressed) {
+        const item = this.pendingResearchItem;
+        const cell = worldToCell(camera.screenToWorld(Input.mousePos));
+        const status = state.getPlacementStatus(this.researchNodeDef(item), cell.cx, cell.cy, Team.Player);
+        if (status.valid) {
+          this.pendingResearchItem = null;
+          this.open = false;
+          this.placementMode = false;
+          this.placementType = null;
+          return { action: 'placeResearchNode', item, cell };
+        }
+      }
+      return { action: 'none' };
+    }
     // Paint mode runs first so it consumes mouse-down before radial menus see it.
     const paintResult = this.paintMenu.update(state, camera);
     const paintOpen = this.paintMenu.open;
@@ -2024,7 +2216,7 @@ export class ActionMenu {
     let rr: MenuResult = { action: 'none' };
     let shipOpen = false;
     if (!paintOpen) {
-      shipOpen = this.shipMenu.update(state);
+      shipOpen = this.shipMenu.update(state, camera);
       rr = this.researchMenu.update(state, camera);
     }
 
@@ -2046,9 +2238,21 @@ export class ActionMenu {
     screenW: number,
     screenH: number,
   ): void {
-    this.shipMenu.draw(ctx, state, screenW, screenH);
+    this.shipMenu.draw(ctx, state, camera, screenW, screenH);
     this.researchMenu.draw(ctx, state, screenW, screenH);
     this.paintMenu.draw(ctx, state, camera, screenW, screenH);
+    if (this.pendingResearchItem) {
+      const cell = worldToCell(camera.screenToWorld(Input.mousePos));
+      this.paintMenu.drawBuildingFootprintCursor(ctx, state, camera, cell, this.researchNodeDef(this.pendingResearchItem));
+      drawMenuBanner(
+        ctx,
+        screenW,
+        18,
+        `[X] Place ${researchDisplayName(this.pendingResearchItem)} Research Node - LMB place - RMB/Esc cancel`,
+        `Research Node 3x3 - resources: $${Math.floor(state.resources)}`,
+        performance.now() * 0.001,
+      );
+    }
   }
 
 }

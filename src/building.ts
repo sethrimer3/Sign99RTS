@@ -3,7 +3,7 @@
 import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
 import { Entity, EntityType, ShipGroup, Team } from './entities.js';
-import { Colors, colorToCSS } from './colors.js';
+import { Colors, colorToCSS, type Color } from './colors.js';
 import {
   ENTITY_RADIUS,
   COMMANDPOST_BUILD_RADIUS,
@@ -11,11 +11,12 @@ import {
   HP_VALUES,
 } from './constants.js';
 import { GRID_CELL_SIZE } from './grid.js';
-import { footprintForBuildingType } from './buildingfootprint.js';
+import { footprintForBuilding } from './buildingfootprint.js';
 import { teamColor } from './teamutils.js';
 import { getDistantSunScreenPosition } from './suns.js';
 import { Input } from './input.js';
 import { getCinematicLevel } from './cinematic.js';
+import { researchCategory, researchIcon } from './research.js';
 
 interface BaseVisual {
   side: number;
@@ -24,10 +25,20 @@ interface BaseVisual {
   powerAlpha: number;
 }
 
+const SHIP_GROUP_LABEL_COLORS: Record<ShipGroup, Color> = {
+  [ShipGroup.Red]: { r: 233, g: 51, b: 77, intensity: 1 },
+  [ShipGroup.Green]: { r: 51, g: 192, b: 104, intensity: 1 },
+  [ShipGroup.Blue]: { r: 51, g: 77, b: 192, intensity: 1 },
+};
+
 export abstract class BuildingBase extends Entity {
   powered = false;
   buildProgress = 1;
   buildDurationSeconds = 0;
+  /** Instance override used by 3x3 Research Nodes sharing the lab entity type. */
+  footprintCells: number | null = null;
+  /** Exact amount paid when this construction was placed (for full cancellation refunds). */
+  placementCost: number | null = null;
   deletionProgress = 0;
   deletionDurationSeconds = 3;
   deleting = false;
@@ -47,7 +58,12 @@ export abstract class BuildingBase extends Entity {
   update(dt: number): void {
     if (!this.alive) return;
     this.animationTime += dt;
-    if (this.buildProgress < 1) {
+    // Construction consumes power just like a completed building's active
+    // behavior. Power sources and walls are self-powered by PowerGraph, while
+    // Synonymous structures are marked powered by their faction rules.
+    // Therefore an ordinary Terran structure pauses here whenever its conduit
+    // connection is interrupted, and resumes from the same progress later.
+    if (this.buildProgress < 1 && this.powered) {
       this.buildProgress = this.buildDurationSeconds <= 0 ? 1 : Math.min(1, this.buildProgress + dt / this.buildDurationSeconds);
       if (this.buildProgress >= 1) {
         this.completionEffectPending = true;
@@ -58,7 +74,7 @@ export abstract class BuildingBase extends Entity {
   startDeleting(): void { if (!this.deleting) { this.deleting = true; this.deletionProgress = 0; } }
 
   protected getBaseVisual(camera: Camera): BaseVisual {
-    const side = footprintForBuildingType(this.type) * GRID_CELL_SIZE * camera.zoom;
+    const side = footprintForBuilding(this) * GRID_CELL_SIZE * camera.zoom;
     return { side, half: side * 0.5, simple: side < 22, powerAlpha: this.powered ? 1 : 0.3 };
   }
 
@@ -92,7 +108,7 @@ export abstract class BuildingBase extends Entity {
     this.drawUnpoweredWarning(ctx, x, y, v.side);
     if (this.powered && this.buildProgress >= 1 && !v.simple) this.drawPoweredScanLine(ctx, x, y, v.side);
     if (getCinematicLevel() >= 2 && this.buildProgress >= 1) this.drawCinematicBloom(ctx, x, y, v.side, camera);
-    if (this.buildProgress < 1) this.drawConstructionOverlay(ctx, x, y, v.side);
+    if (this.buildProgress < 1 && !this.synonymousVisualKind) this.drawConstructionOverlay(ctx, x, y, v.side);
     if (this.deleting) this.drawDeletionOverlay(ctx, x, y, v.side);
     ctx.restore();
     return v;
@@ -261,7 +277,6 @@ export abstract class BuildingBase extends Entity {
     const x = screen.x - v.half;
     const y = screen.y - v.half;
     this.drawSquareHealthFrame(ctx, x, y, v.side);
-    if (this.buildProgress < 1) this.drawConstructionOverlay(ctx, x, y, v.side);
     if (this.deleting) this.drawDeletionOverlay(ctx, x, y, v.side);
     ctx.restore();
   }
@@ -392,153 +407,6 @@ export abstract class BuildingBase extends Entity {
       ctx.restore();
     }
 
-    // Level 6: inner edge prismatic conduit lines with traveling charge nodes.
-    if (getCinematicLevel() >= 6) {
-      const pulse = (this.animationTime * 0.52 + this.id * 0.21) % 1;
-      const pad = s * 0.14;
-      const left = x + pad;
-      const right = x + s - pad;
-      const top = y + pad;
-      const bottom = y + s - pad;
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.lineWidth = Math.max(0.8, s * 0.010);
-      ctx.strokeStyle = 'rgba(170,220,255,0.20)';
-      ctx.beginPath();
-      ctx.moveTo(left, top);
-      ctx.lineTo(right, top);
-      ctx.lineTo(right, bottom);
-      ctx.lineTo(left, bottom);
-      ctx.closePath();
-      ctx.stroke();
-
-      const nodeT = pulse * 4;
-      const edge = Math.floor(nodeT) % 4;
-      const edgeFrac = nodeT % 1;
-      const px = edge === 0 ? left + (right - left) * edgeFrac
-        : edge === 1 ? right
-          : edge === 2 ? right - (right - left) * edgeFrac
-            : left;
-      const py = edge === 0 ? top
-        : edge === 1 ? top + (bottom - top) * edgeFrac
-          : edge === 2 ? bottom
-            : bottom - (bottom - top) * edgeFrac;
-      const nodeAlpha = 0.22 + 0.12 * Math.sin(this.animationTime * 3.8 + this.id);
-      ctx.fillStyle = `rgba(255,240,200,${nodeAlpha.toFixed(3)})`;
-      ctx.beginPath();
-      ctx.arc(px, py, Math.max(0.9, s * 0.020), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
-
-    // Level 7: spectral resonance pulses — concentric expanding square rings
-    // that periodically emanate outward from the building, like sonar pings.
-    // Distinct from level-6 conduit lines in both shape (expanding outward beyond
-    // the building border) and color (violet-white rather than blue).
-    if (getCinematicLevel() >= 7) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.lineWidth = Math.max(0.5, s * 0.007);
-      const ringPeriod = 2.4;
-      for (let ring = 0; ring < 2; ring++) {
-        const tRaw = (this.animationTime * (1 / ringPeriod) + this.id * 0.17 + ring * 0.5) % 1;
-        const expand = tRaw;
-        // Ring starts at building edges and expands to ~1.9× building size, fading out.
-        const pad = s * (-0.02 + expand * 0.95);
-        const alpha = (1 - expand) * (1 - expand) * 0.32;
-        if (alpha < 0.008) continue;
-        const rl = x - pad;
-        const rt = y - pad;
-        const rr = x + s + pad;
-        const rb = y + s + pad;
-        ctx.strokeStyle = `rgba(220,185,255,${alpha.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.moveTo(rl, rt);
-        ctx.lineTo(rr, rt);
-        ctx.lineTo(rr, rb);
-        ctx.lineTo(rl, rb);
-        ctx.closePath();
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // Level 8: energy circuit trace — an animated glowing spark that travels
-    // clockwise around the building perimeter, leaving a short bright tail.
-    // Distinct from level-7's expanding square rings: this trace stays tight
-    // to the building border and moves continuously rather than expanding outward.
-    if (getCinematicLevel() >= 8) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      const perimeter = (s + s) * 2;
-      const traceSpeed = 0.55 + 0.12 * Math.sin(this.animationTime * 0.8 + this.id * 0.44);
-      const traceFrac = ((this.animationTime * traceSpeed + this.id * 0.29) % 1);
-      const traceDist = traceFrac * perimeter;
-      const tailLen = perimeter * 0.18;
-
-      // Helper: world pos at distance d along CW perimeter (starting top-left corner).
-      const perimPos = (d: number): { px: number; py: number } => {
-        const pd = ((d % perimeter) + perimeter) % perimeter;
-        if (pd < s)         return { px: x + pd,     py: y };
-        if (pd < s + s)     return { px: x + s,       py: y + (pd - s) };
-        if (pd < s + s + s) return { px: x + s - (pd - s - s), py: y + s };
-        return              { px: x,                  py: y + s - (pd - s - s - s) };
-      };
-
-      const steps = 12;
-      for (let i = 0; i <= steps; i++) {
-        const frac = i / steps;
-        const d = traceDist - tailLen * frac;
-        const dp = traceDist - tailLen * (frac + 1 / steps);
-        const { px: ax, py: ay } = perimPos(d);
-        const { px: bx, py: by } = perimPos(dp);
-        const headAlpha = (1 - frac) * (1 - frac) * 0.72;
-        if (headAlpha < 0.008) continue;
-        ctx.strokeStyle = `rgba(140,255,220,${headAlpha.toFixed(3)})`;
-        ctx.lineWidth = Math.max(0.6, s * (0.025 + 0.015 * (1 - frac)));
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.lineTo(bx, by);
-        ctx.stroke();
-      }
-      // Bright head spark.
-      const { px: hx, py: hy } = perimPos(traceDist);
-      const sparkSize = Math.max(1.0, s * 0.045);
-      ctx.fillStyle = 'rgba(200,255,245,0.90)';
-      ctx.beginPath();
-      ctx.arc(hx, hy, sparkSize, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.restore();
-    }
-
-    // Level 9: data burst pulse rings — a diamond-shaped ring erupts from the
-    // building centre every ~2.6 s and rapidly expands outward while fading,
-    // like a data packet being broadcast.  The 45° rotation of the square
-    // creates a diamond outline that harmonises with the building's geometry.
-    if (getCinematicLevel() >= 9) {
-      const burstPeriod = 2.6;
-      const burstDur    = 0.85;
-      const rawFrac = ((this.animationTime + this.id * 0.83) % burstPeriod) / burstPeriod;
-      const burstFrac = rawFrac * burstPeriod / burstDur;
-      if (burstFrac < 1.0) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'screen';
-        const ringHalf = (s * 0.50 + s * 2.80 * burstFrac) * 0.707; // half-side → half-diagonal
-        const alpha9 = (1 - burstFrac) * (1 - burstFrac) * 0.52;
-        const r9 = Math.round(100 + 155 * burstFrac);
-        const g9 = Math.round(210 - 60 * burstFrac);
-        ctx.strokeStyle = `rgba(${r9},${g9},255,${alpha9.toFixed(3)})`;
-        ctx.lineWidth = Math.max(0.4, s * 0.026 * (1 - burstFrac * 0.55));
-        ctx.lineJoin = 'miter';
-        ctx.translate(x + s * 0.5, y + s * 0.5);
-        ctx.rotate(Math.PI / 4);
-        ctx.strokeRect(-ringHalf, -ringHalf, ringHalf * 2, ringHalf * 2);
-        ctx.restore();
-      }
-    }
-
     ctx.restore();
   }
   private drawUnpoweredWarning(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): void {
@@ -578,14 +446,41 @@ export abstract class BuildingBase extends Entity {
     }
     ctx.restore();
   }
-  private drawConstructionOverlay(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): void {
-    const t = this.buildProgress; const arm = s * 0.22;
-    ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.6); ctx.lineWidth = 1.2; ctx.beginPath();
-    ctx.moveTo(x, y + arm); ctx.lineTo(x, y); ctx.lineTo(x + arm, y);
-    ctx.moveTo(x + s, y + arm); ctx.lineTo(x + s, y); ctx.lineTo(x + s - arm, y);
-    ctx.moveTo(x, y + s - arm); ctx.lineTo(x, y + s); ctx.lineTo(x + arm, y + s);
-    ctx.moveTo(x + s, y + s - arm); ctx.lineTo(x + s, y + s); ctx.lineTo(x + s - arm, y + s); ctx.stroke();
-    const sy = y + s * (1 - t); ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.4); ctx.beginPath(); ctx.moveTo(x, sy); ctx.lineTo(x + s, sy); ctx.stroke();
+  protected drawConstructionOverlay(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): void {
+    const progress = Math.max(0, Math.min(1, this.buildProgress));
+    const points = [
+      { x: x + s * 0.5, y },
+      { x: x + s, y },
+      { x: x + s, y: y + s },
+      { x, y: y + s },
+      { x, y },
+      { x: x + s * 0.5, y },
+    ];
+
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = colorToCSS(Colors.radar_gridlines, 0.42);
+    ctx.lineWidth = Math.max(1.2, s * 0.025);
+    ctx.strokeRect(x, y, s, s);
+
+    let remaining = progress * s * 4;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length && remaining > 0; i++) {
+      const from = points[i - 1];
+      const to = points[i];
+      const length = Math.hypot(to.x - from.x, to.y - from.y);
+      const drawn = Math.min(length, remaining);
+      const ratio = length > 0 ? drawn / length : 0;
+      ctx.lineTo(from.x + (to.x - from.x) * ratio, from.y + (to.y - from.y) * ratio);
+      remaining -= drawn;
+    }
+    ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, this.powered ? 0.95 : 0.62);
+    ctx.lineWidth = Math.max(2, s * 0.045);
+    ctx.stroke();
+    ctx.restore();
   }
   private drawDeletionOverlay(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): void {
     const t = this.deletionProgress;
@@ -705,17 +600,85 @@ export class PowerGenerator extends BuildingBase {
 
 export class Wall extends BuildingBase { shield=0; maxShield=0; private shieldRegenDelay=0; poweredWallUpgrade=false; constructor(position: Vec2, team: Team){ super(EntityType.Wall, team, position, HP_VALUES.wall); this.powered=true; } enablePoweredWall():void{this.poweredWallUpgrade=true;this.maxShield=20;this.shield=this.maxShield;this.shieldRegenDelay=0;} override update(dt:number):void{super.update(dt); if(this.poweredWallUpgrade&&this.alive){this.shieldRegenDelay=Math.max(0,this.shieldRegenDelay-dt); if(this.shieldRegenDelay<=0&&this.shield<this.maxShield)this.shield=Math.min(this.maxShield,this.shield+5*dt);}} override takeDamage(amount:number,source?:Entity):void{if(amount>0&&this.poweredWallUpgrade&&this.shield>0){this.shieldRegenDelay=5;const absorbed=Math.min(this.shield,amount);this.shield-=absorbed;amount-=absorbed;if(amount<=0)return;}super.takeDamage(amount,source);} draw(ctx:CanvasRenderingContext2D,camera:Camera):void{ const screen=camera.worldToScreen(this.position); const v=this.drawBuildingBase(ctx,screen,colorToCSS(Colors.advanced_building),camera); const x=screen.x-v.half,y=screen.y-v.half; const pulse=0.55+0.35*Math.sin(this.animationTime*4); ctx.save(); if(this.poweredWallUpgrade){ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(Colors.radar_friendly_status,0.22+0.28*(this.shield/Math.max(1,this.maxShield)));ctx.lineWidth=Math.max(2,v.side*0.06);ctx.strokeRect(x+2,y+2,v.side-4,v.side-4);} ctx.globalCompositeOperation='source-over'; ctx.strokeStyle=colorToCSS(Colors.powergenerator_detail,0.68+0.22*pulse); ctx.lineWidth=Math.max(2,v.side*0.05); ctx.beginPath(); ctx.moveTo(x+v.side*0.15,y+v.side*0.5); ctx.lineTo(x+v.side*0.85,y+v.side*0.5); ctx.moveTo(x+v.side*0.5,y+v.side*0.15); ctx.lineTo(x+v.side*0.5,y+v.side*0.85); ctx.stroke(); ctx.restore(); }}
 
+export class ShieldGenerator extends BuildingBase {
+  static readonly FIELD_CELLS = 9;
+  readonly maxShield = 90;
+  shield = this.maxShield;
+  restartDelay = 0;
+
+  constructor(position: Vec2, team: Team) {
+    super(EntityType.ShieldGenerator, team, position, HP_VALUES.shieldGenerator);
+  }
+
+  get fieldActive(): boolean {
+    return this.alive && this.powered && this.buildProgress >= 1 && this.shield > 0;
+  }
+
+  contains(pos: Vec2): boolean {
+    const half = ShieldGenerator.FIELD_CELLS * GRID_CELL_SIZE * 0.5;
+    return Math.abs(pos.x - this.position.x) <= half && Math.abs(pos.y - this.position.y) <= half;
+  }
+
+  absorbDamage(amount: number, source?: Entity): number {
+    if (!this.fieldActive || amount <= 0) return amount;
+    const absorbed = Math.min(this.shield, amount);
+    this.shield -= absorbed;
+    if (source) this.lastDamageSource = source;
+    if (this.shield <= 0) {
+      this.shield = 0;
+      this.restartDelay = 5;
+    }
+    return amount - absorbed;
+  }
+
+  override update(dt: number): void {
+    super.update(dt);
+    if (!this.alive || !this.powered || this.buildProgress < 1 || this.shield >= this.maxShield) return;
+    if (this.shield <= 0 && this.restartDelay > 0) {
+      this.restartDelay = Math.max(0, this.restartDelay - dt);
+      if (this.restartDelay > 0) return;
+    }
+    this.shield = Math.min(this.maxShield, this.shield + 5 * dt);
+  }
+
+  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+    const screen = camera.worldToScreen(this.position);
+    const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.radar_friendly_status), camera);
+    const ratio = this.shield / this.maxShield;
+    ctx.save();
+    const fieldSide = ShieldGenerator.FIELD_CELLS * GRID_CELL_SIZE * camera.zoom;
+    if (this.buildProgress >= 1 && this.powered) {
+      ctx.fillStyle = colorToCSS(Colors.radar_friendly_status, 0.025 + ratio * 0.035);
+      ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.18 + ratio * 0.42);
+      ctx.lineWidth = Math.max(1.5, 2.5 * camera.zoom);
+      ctx.fillRect(screen.x - fieldSide / 2, screen.y - fieldSide / 2, fieldSide, fieldSide);
+      ctx.strokeRect(screen.x - fieldSide / 2, screen.y - fieldSide / 2, fieldSide, fieldSide);
+    }
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.45 + ratio * 0.45);
+    ctx.lineWidth = Math.max(2, v.side * 0.045);
+    ctx.strokeRect(screen.x - v.side * 0.28, screen.y - v.side * 0.28, v.side * 0.56, v.side * 0.56);
+    ctx.restore();
+  }
+}
+
 export class Shipyard extends BuildingBase { shipCapacity=5; activeShips=0; buildTimer=0; buildInterval=5; assignedGroup: ShipGroup=ShipGroup.Red; holdDocked=false; dockedShips=0; fightersReleased=false; launchFlashTimer=0;
 constructor(type:EntityType.FighterYard|EntityType.BomberYard|EntityType.SwarmYard,position:Vec2,team:Team){super(type, team, position, type===EntityType.FighterYard ? HP_VALUES.fighterYard : type===EntityType.SwarmYard ? HP_VALUES.swarmYard : HP_VALUES.bomberYard);this.powered=false;if(type===EntityType.SwarmYard){this.shipCapacity=20;this.buildInterval=0.65;}} update(dt:number):void{super.update(dt);if(this.buildProgress>=1&&this.powered&&this.activeShips<this.shipCapacity)this.buildTimer-=dt;if(this.launchFlashTimer>0)this.launchFlashTimer=Math.max(0,this.launchFlashTimer-dt);} shouldSpawnShip():boolean{if(!this.alive||!this.powered||this.buildProgress<1)return false;if(this.buildTimer<=0&&this.activeShips<this.shipCapacity){this.buildTimer=this.buildInterval;this.launchFlashTimer=0.55;return true;}return false;} bayPosition():Vec2{return this.position.add(new Vec2(0, GRID_CELL_SIZE*1.15));} draw(ctx:CanvasRenderingContext2D,camera:Camera):void{ const screen=camera.worldToScreen(this.position); const isF=this.type===EntityType.FighterYard; const isSwarm=this.type===EntityType.SwarmYard; const detail=isF?Colors.fighteryard_detail:isSwarm?Colors.particles_switch:Colors.bomberyard_detail; if(this.synonymousVisualKind==='shipyard'){this.drawSynonymousShipyard(ctx,camera,screen);return;} const v=this.drawBuildingBase(ctx,screen,colorToCSS(detail),camera); const bayW=v.side*0.55,bayH=v.side*0.18; ctx.fillStyle=colorToCSS(Colors.enemy_background,0.8); ctx.fillRect(screen.x-bayW*0.5,screen.y+v.side*0.2,bayW,bayH); for(let i=0;i<Math.min(this.dockedShips,this.shipCapacity);i++){const col=i%5,row=Math.floor(i/5);const sx=screen.x-v.side*0.32+col*v.side*0.16;const sy=screen.y-v.side*0.23+row*v.side*0.115; ctx.strokeStyle=colorToCSS(detail, this.powered?0.9:0.45); ctx.beginPath(); if(isSwarm){ctx.arc(sx,sy,Math.max(1.2,v.side*0.025),0,Math.PI*2);} else if(isF){ctx.moveTo(sx+4,sy);ctx.lineTo(sx-3,sy-2);ctx.lineTo(sx-3,sy+2);} else {ctx.moveTo(sx+4,sy);ctx.lineTo(sx,sy-3);ctx.lineTo(sx-4,sy);ctx.lineTo(sx,sy+3);} ctx.closePath();ctx.stroke(); }
 if(this.launchFlashTimer>0){const f=this.launchFlashTimer/0.55;ctx.save();ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(detail,f*0.80);ctx.lineWidth=Math.max(1,v.side*0.042);ctx.strokeRect(screen.x-bayW*0.5-1,screen.y+v.side*0.19,bayW+2,bayH+2);ctx.fillStyle=colorToCSS(detail,f*0.22);ctx.fillRect(screen.x-bayW*0.5-1,screen.y+v.side*0.19,bayW+2,bayH+2);ctx.restore();}
 this.drawAssignedGroupLabel(ctx, screen, v); }
 private drawSynonymousShipyard(ctx:CanvasRenderingContext2D,camera:Camera,screen:Vec2):void{const v=this.getBaseVisual(camera);const color=teamColor(this.team);const nodeR=Math.max(2,v.side*0.055);const r=v.side*0.44;ctx.save();ctx.globalAlpha=Math.max(0.18,this.buildProgress);ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(color,this.powered?0.42:0.18);ctx.lineWidth=Math.max(1,v.side*0.016);ctx.beginPath();const nodes:Array<{x:number;y:number}>=[];for(let i=0;i<11;i++){const a=-Math.PI*0.92+i*(Math.PI*1.84/10);const x=screen.x+Math.cos(a)*r;const y=screen.y+Math.sin(a)*r;nodes.push({x,y});if(i>0){ctx.moveTo(nodes[i-1].x,nodes[i-1].y);ctx.lineTo(x,y);}if(i%2===0){ctx.moveTo(screen.x,screen.y-v.side*0.05);ctx.lineTo(x,y);}}ctx.stroke();ctx.strokeStyle=colorToCSS(Colors.particles_switch,this.powered?0.22:0.10);ctx.beginPath();ctx.arc(screen.x,screen.y-v.side*0.02,r*0.62,Math.PI*1.08,Math.PI*1.92);ctx.stroke();ctx.fillStyle='rgba(4,8,10,0.88)';ctx.beginPath();ctx.ellipse(screen.x,screen.y+r*0.72,v.side*0.24,v.side*0.10,0,0,Math.PI*2);ctx.fill();for(const n of nodes){ctx.fillStyle=colorToCSS(color,this.powered?0.82:0.38);ctx.beginPath();ctx.arc(n.x,n.y,nodeR,0,Math.PI*2);ctx.fill();}const shown=Math.min(this.dockedShips,this.shipCapacity);for(let i=0;i<shown;i++){const x=screen.x-v.side*0.23+(i%5)*v.side*0.115;const y=screen.y+v.side*0.24+Math.floor(i/5)*v.side*0.10;ctx.strokeStyle=colorToCSS(color,0.72);ctx.beginPath();ctx.moveTo(x,y-v.side*0.028);ctx.lineTo(x-v.side*0.032,y+v.side*0.028);ctx.lineTo(x+v.side*0.032,y+v.side*0.028);ctx.closePath();ctx.stroke();}this.drawAssignedGroupLabel(ctx, screen, v);ctx.restore();}
-private drawAssignedGroupLabel(ctx:CanvasRenderingContext2D,screen:Vec2,v:BaseVisual):void{if(this.team!==Team.Player)return;const label=`${this.assignedGroup+1}`;const showLarge=Input.isDown('c')||Input.isDown('1')||Input.isDown('2')||Input.isDown('3')||Input.isDown('4');ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';if(showLarge){ctx.font=`bold ${Math.max(24,v.side*0.72)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;ctx.lineWidth=Math.max(3,v.side*0.075);ctx.strokeStyle='rgba(2,4,6,0.88)';ctx.strokeText(label,screen.x,screen.y);ctx.fillStyle=colorToCSS(Colors.alert2,0.92);ctx.fillText(label,screen.x,screen.y);}else{ctx.fillStyle=colorToCSS(Colors.alert2,0.9);ctx.font=`bold ${Math.max(10,v.side*0.15)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;ctx.fillText(label,screen.x+v.side*0.3,screen.y-v.side*0.32);}ctx.restore();}}
+private drawAssignedGroupLabel(ctx:CanvasRenderingContext2D,screen:Vec2,v:BaseVisual):void{if(this.team!==Team.Player)return;const label=`${this.assignedGroup+1}`;const labelColor=SHIP_GROUP_LABEL_COLORS[this.assignedGroup];const showLarge=Input.isDown('c')||Input.isDown('1')||Input.isDown('2')||Input.isDown('3')||Input.isDown('4');ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';if(showLarge){ctx.font=`bold ${Math.max(24,v.side*0.72)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;ctx.lineWidth=Math.max(3,v.side*0.075);ctx.strokeStyle='rgba(2,4,6,0.88)';ctx.strokeText(label,screen.x,screen.y);ctx.fillStyle=colorToCSS(labelColor,0.92);ctx.fillText(label,screen.x,screen.y);}else{ctx.fillStyle=colorToCSS(labelColor,0.9);ctx.font=`bold ${Math.max(10,v.side*0.15)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;ctx.fillText(label,screen.x+v.side*0.3,screen.y-v.side*0.32);}ctx.restore();}}
 
 export class ResearchLab extends BuildingBase {
   private spinPhase = 0;
-  constructor(position: Vec2, team: Team) {
+  researchItem: string | null;
+  /** Rendering permission set from the local viewer's team on network clients. */
+  showExactUpgrade: boolean;
+  constructor(position: Vec2, team: Team, researchItem: string | null = null) {
     super(EntityType.ResearchLab, team, position, HP_VALUES.researchLab);
+    this.researchItem = researchItem;
+    this.footprintCells = researchItem ? 3 : null;
+    this.showExactUpgrade = team === Team.Player;
   }
   update(dt: number): void { super.update(dt); this.spinPhase += this.powered ? dt * 2 : dt * 0.35; }
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
@@ -726,6 +689,25 @@ export class ResearchLab extends BuildingBase {
     const ringA = this.powered ? 0.85 : 0.45;
     ctx.save();
     ctx.translate(screen.x, screen.y);
+    if (this.researchItem) {
+      const category = researchCategory(this.researchItem);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `bold ${Math.max(13, v.side * 0.25)}px "Segoe UI", sans-serif`;
+      ctx.lineWidth = Math.max(2, v.side * 0.035);
+      ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+      ctx.strokeText(category, 0, 0);
+      ctx.fillStyle = colorToCSS(Colors.researchlab_detail, 1);
+      ctx.fillText(category, 0, 0);
+      // Exact technology is friendly-only; opponents see the category letter alone.
+      if (this.showExactUpgrade) {
+        const icon = researchIcon(this.researchItem);
+        ctx.font = `bold ${Math.max(8, v.side * 0.115)}px "Segoe UI", sans-serif`;
+        ctx.strokeText(icon, 0, v.side * 0.27);
+        ctx.fillStyle = colorToCSS(Colors.building_glow_research, 0.95);
+        ctx.fillText(icon, 0, v.side * 0.27);
+      }
+    }
     // Three spinning elliptical rings
     ctx.strokeStyle = colorToCSS(Colors.researchlab_detail, ringA);
     ctx.lineWidth = Math.max(0.8, v.side * 0.018);

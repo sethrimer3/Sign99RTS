@@ -36,6 +36,32 @@ export function applyFighterResearchUpgrade(fighter: FighterShip, key: string): 
   }
 }
 
+/** Revoke a single fighter-upgrade research key's effect on one fighter. No-op for unrecognized keys. */
+function revokeFighterResearchUpgrade(fighter: FighterShip, key: string): void {
+  switch (key) {
+    case 'fighterTargeting': fighter.downgradeTargeting(); break;
+    case 'fighterWeapon1': fighter.downgradeWeaponDamage(); break;
+    case 'fighterWeapon2': fighter.downgradeWeaponFireRate(); break;
+    case 'fighterSpeed1': fighter.downgradeSpeed(); break;
+    case 'fighterSpeed2': fighter.downgradeDash(); break;
+    case 'fighterHp1': fighter.downgradeHp(); break;
+    case 'fighterHp2': fighter.downgradeShield(); break;
+    default: break;
+  }
+}
+
+/**
+ * Reconcile one fighter's independent upgrade flags against the full set of
+ * currently-completed research (supports 'building' research mode, where an
+ * upgrade can be revoked by destroying its Research Node).
+ */
+export function syncFighterResearchUpgrades(fighter: FighterShip, completed: ReadonlySet<string>): void {
+  for (const key of FIGHTER_UPGRADE_RESEARCH_KEYS) {
+    if (completed.has(key)) applyFighterResearchUpgrade(fighter, key);
+    else revokeFighterResearchUpgrade(fighter, key);
+  }
+}
+
 const GROUP_COLORS: Record<ShipGroup, Color> = {
   [ShipGroup.Red]: Colors.redgroup,
   [ShipGroup.Green]: Colors.greengroup,
@@ -60,6 +86,33 @@ const DASH_TRAIL_MAX_POINTS = 18;
 interface TrailPoint {
   pos: Vec2;
   age: number;
+}
+
+/** Canonical Terran fighter hull, shared by gameplay and miniature UI previews. */
+export function drawTerranFighterHull(
+  ctx: CanvasRenderingContext2D,
+  r: number,
+  color: Color,
+  hostile: boolean,
+  alpha: number = 0.72,
+): void {
+  ctx.strokeStyle = colorToCSS(color, alpha);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  if (hostile) {
+    ctx.moveTo(-r * 0.18, -r * 0.12);
+    ctx.lineTo(-r * 1.0, -r * 0.92);
+    ctx.lineTo(-r * 0.58, -r * 0.30);
+    ctx.moveTo(-r * 0.18, r * 0.12);
+    ctx.lineTo(-r * 1.0, r * 0.92);
+    ctx.lineTo(-r * 0.58, r * 0.30);
+  }
+  ctx.moveTo(r * 1.2, 0);
+  ctx.lineTo(-r * 0.6, -r * 0.6);
+  ctx.lineTo(-r * 0.3, 0);
+  ctx.lineTo(-r * 0.6, r * 0.6);
+  ctx.closePath();
+  ctx.stroke();
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +144,8 @@ export class FighterShip extends Entity {
   private avoidVelocity: Vec2 = new Vec2(0, 0);
   private trail: TrailPoint[] = [];
   shieldUnlocked = false;
+  /** True while this fighter's own fighterHp2 research grants it a standing shield (independent of the player's escort aura). */
+  protected hpShieldResearched = false;
   shield: number = 0;
   maxShield: number = 0;
   shieldRegenRate: number = SHIELD_REGEN_RATE;
@@ -260,8 +315,9 @@ export class FighterShip extends Entity {
     this.avoidVelocity = this.avoidVelocity.scale(0.65);
     this.velocity = this.velocity.scale(1 / (1 + this.friction * dt));
     const speed = this.velocity.length();
-    if (speed > this.maxSpeed) {
-      this.velocity = this.velocity.normalize().scale(this.maxSpeed);
+    const cap = this.maxSpeed * this.tetherSpeedMultiplier();
+    if (speed > cap) {
+      this.velocity = cap <= 0 ? new Vec2(0, 0) : this.velocity.normalize().scale(cap);
     }
     this.position = this.position.add(this.velocity.scale(dt));
   }
@@ -312,6 +368,7 @@ export class FighterShip extends Entity {
 
   /** Second HP tier: unlocks a shield equal to 50% of max HP. */
   upgradeShield(): void {
+    this.hpShieldResearched = true;
     this.shieldUnlocked = true;
     this.maxShield = this.maxHealth * 0.5;
     this.shield = this.maxShield;
@@ -364,6 +421,72 @@ export class FighterShip extends Entity {
     ];
   }
 
+  /** Reverses upgradeToAdvanced() (used for LAN client mirroring). */
+  downgradeFromAdvanced(): void {
+    if (!this.advancedTier) return;
+    this.advancedTier = false;
+    this.downgradeTargeting();
+    this.downgradeHp();
+    this.downgradeShield();
+    this.downgradeSpeed();
+    this.downgradeDash();
+    this.downgradeWeaponDamage();
+    this.downgradeWeaponFireRate();
+  }
+
+  /** Reverses upgradeTargeting(). */
+  downgradeTargeting(): void {
+    this.targetingUpgraded = false;
+  }
+
+  /** Reverses upgradeHp(). */
+  downgradeHp(): void {
+    if (!this.hpUpgraded) return;
+    const healthFraction = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+    this.hpUpgraded = false;
+    this.maxHealth /= 1.5;
+    this.health = Math.max(1, this.maxHealth * healthFraction);
+    if (this.shieldUnlocked) this.maxShield = this.maxHealth * 0.5;
+  }
+
+  /** Reverses upgradeShield(). Leaves an escort-granted shield (from the player's aura) untouched. */
+  downgradeShield(): void {
+    if (!this.hpShieldResearched) return;
+    this.hpShieldResearched = false;
+    this.shieldUnlocked = false;
+    this.maxShield = 0;
+    this.shield = 0;
+  }
+
+  /** Reverses upgradeSpeed(). */
+  downgradeSpeed(): void {
+    if (!this.speedUpgraded) return;
+    this.speedUpgraded = false;
+    this.thrustPower /= 1.5;
+    this.maxSpeed /= 1.5;
+    this.turnRate /= 1.2;
+  }
+
+  /** Reverses upgradeDash(). */
+  downgradeDash(): void {
+    this.dashUnlocked = false;
+  }
+
+  /** Reverses upgradeWeaponDamage(). */
+  downgradeWeaponDamage(): void {
+    if (!this.weaponDamageUpgraded) return;
+    this.weaponDamageUpgraded = false;
+    this.weaponDamage /= 1.5;
+    this.weaponRange /= 1.08;
+  }
+
+  /** Reverses upgradeWeaponFireRate(). */
+  downgradeWeaponFireRate(): void {
+    if (!this.weaponFireRateUpgraded) return;
+    this.weaponFireRateUpgraded = false;
+    this.fireRate *= 1.5;
+  }
+
   avoidHazard(center: Vec2, radius: number, dt: number): void {
     if (!this.alive || this.docked || radius <= 0) return;
     const offset = this.position.sub(center);
@@ -406,7 +529,9 @@ export class FighterShip extends Entity {
     }
   }
 
+  /** Turns off an escort-granted shield. A no-op while fighterHp2 grants this fighter its own standing shield. */
   disableShield(): void {
+    if (this.hpShieldResearched) return;
     this.shieldUnlocked = false;
     this.shield = 0;
     this.shieldRegenDelay = 0;
@@ -550,24 +675,7 @@ export class FighterShip extends Entity {
     ctx.translate(screen.x, screen.y);
     ctx.rotate(this.angle + twistOffset);
 
-    // Ship body: small triangle, team-colored outline
-    ctx.strokeStyle = colorToCSS(teamColor(this.team), outlineAlpha);
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    if (this.team !== Team.Player) {
-      ctx.moveTo(-r * 0.18, -r * 0.12);
-      ctx.lineTo(-r * 1.0, -r * 0.92);
-      ctx.lineTo(-r * 0.58, -r * 0.30);
-      ctx.moveTo(-r * 0.18, r * 0.12);
-      ctx.lineTo(-r * 1.0, r * 0.92);
-      ctx.lineTo(-r * 0.58, r * 0.30);
-    }
-    ctx.moveTo(r * 1.2, 0);
-    ctx.lineTo(-r * 0.6, -r * 0.6);
-    ctx.lineTo(-r * 0.3, 0);
-    ctx.lineTo(-r * 0.6, r * 0.6);
-    ctx.closePath();
-    ctx.stroke();
+    drawTerranFighterHull(ctx, r, coreColor, this.team !== Team.Player, outlineAlpha);
 
     ctx.restore();
 
@@ -991,6 +1099,11 @@ export class SwarmShip extends FighterShip {
 
   /** Swarm ships never gain a shield — the HP tier-2 upgrade is a no-op for them. */
   override upgradeShield(): void {
+    this.maxShield = 0;
+    this.shield = 0;
+  }
+
+  override downgradeShield(): void {
     this.maxShield = 0;
     this.shield = 0;
   }

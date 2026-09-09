@@ -13,7 +13,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 
 - WASD moves the player ship. Mouse aims. Left mouse fires the primary weapon.
 - Shift boosts the player ship only while it has at least 10% energy. After Main Ship Dash research, first pressing Shift while above 75% energy spends 25% maximum energy and bursts the ship forward in its facing direction with a bright trail for roughly 1.6 seconds. Passive hull regeneration is doubled while the energy bar is full.
-- Right mouse fires the equipped special. Cannon drops a cross-laser mine, Gatling triggers overdrive, Laser charges a burst, and Guided Missile fires a missile swarm.
+- Right mouse fires the equipped special. Cannon drops a cross-laser mine, Gatling triggers overdrive, Laser charges a deterministic vermiculate burst (one piercing worm laser per complete 10 energy spent), and Guided Missile fires a missile swarm.
 - Hold Q for the build menu, choose a building from the left palette, then left click or drag over valid footprints to place it. Right mouse deletes player buildings.
 - Hold Z for the ship menu, view ship stats/upgrades, and select the active primary weapon by clicking or using the mouse wheel.
 - Hold Q for the quick-build palette. Conduit is first; mouse wheel or clicking a left-side palette icon selects what to place. With Conduit selected, left mouse queues player conduits with a 2x2 brush and right mouse erases with the same brush. With a building selected, left mouse places that building.
@@ -41,7 +41,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 ## Building Placement
 
 - The grid cell size is one third of the original port grid.
-- Buildings snap to grid footprints: most buildings are 3x3, Factories and Research Labs are 4x4, and Command Posts are 6x6.
+- Buildings snap to grid footprints: Research Labs are 9x9, upgrade Research Nodes and Shield Generators are 3x3, Factories are 4x4, and Command Posts are 6x6.
 - Placement requires enough resources, an empty cell, world bounds, and adjacency to the player power network.
 - Concentroid placement instead requires the building footprint to sit on the race's frontier band.
 - Synonymous placement is freeform and does not require grid power or frontier bands, but the player must have enough free nanobots for the selected structure.
@@ -63,6 +63,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 - Fighter Yards produce fighters. Bomber Yards produce bombers after Bomber Yard research and are capped at 3 player yards. Swarm Yards are Terran-only 7x7 shipyards unlocked through Fighters research; each fields up to 20 tiny 5 HP Swarm ships with short-range instant lasers that linger visibly for 0.5 seconds. Swarm ships auto-break from waypoint/protect/idle movement toward nearby hostile ships, fighters, and buildings so they can close to laser range, and the player can place up to 5 Swarm Yards.
 - Shipyards only produce while finished, powered, and below capacity.
 - Fighter Yard research is split into independent upgrades: Yard Speed (faster production) and Yard Capacity (+2 ship cap, requires Yard Speed), plus per-ship upgrades — Targeting (AI hazard avoidance and turret-priority targeting), Weapon Damage and Weapon Fire Rate (requires Weapon Damage), Speed and Dash (requires Speed, dashes ships forward on new move orders), and HP and Shield (requires HP, unlocks a 50%-of-max-HP shield).
+- Completing Shield I unlocks the 3x3 Shield Generator. A finished powered generator projects a square 9x9 field with one shared 90 HP pool; it regenerates 5 HP per second, and a fully depleted field waits 5 seconds before restarting regeneration.
 - C-menu orders are active: Protect Base defends the player Command Post, Set Waypoint uses the cursor location, Follow Player follows the player ship, and Dock returns ships to their home yard. While holding C or a number key, player shipyards show a large group number.
 
 ## Enemy AI
@@ -78,8 +79,9 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 
 ## Research
 
-- Research requires at least one powered, finished Research Lab to progress.
-- One active research item can run at a time.
+- `RESEARCH_MODE` selects between two research systems: 'classic' (research runs as a timer at a powered, finished Research Lab; the upgrade is kept permanently once it completes) and 'building' (each upgrade is a dedicated 3x3 Research Node placed like any other building; only a completed, living node grants its upgrade, and destroying or selling it immediately revokes that upgrade and makes it available to build again).
+- Classic mode: research requires at least one powered, finished Research Lab to progress, and one active research item can run at a time.
+- Building mode: a finished, powered 9x9 Research Lab is required to begin placing Research Nodes, and losing the Lab prevents new nodes from being placed. Enemy Research Nodes reveal only S (ship), F (fighter), D (defense/turret), or W (weapon); the owner also sees the exact upgrade icon.
 - Active research items are turret unlocks, Bomber Yard, the individual Fighter/Fighter-Yard upgrades, and Main Ship upgrades including Dash.
 - Mine Layer research and construction are exclusive to The Synonymous faction; Terran players do not see or unlock Mine Layers.
 - Completed research is hidden from the research menu and summarized on the HUD.

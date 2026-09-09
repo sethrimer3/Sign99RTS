@@ -1,4 +1,4 @@
-export type CinematicLevel = -3 | -2 | -1 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+export type CinematicLevel = -3 | -2 | -1 | 0 | 1 | 2 | 3 | 4 | 5;
 
 const CINEMATIC_LEVEL_STORAGE_KEY = 'sign99_cinematic_level';
 
@@ -16,7 +16,7 @@ export function setCinematicLevel(level: number): CinematicLevel {
 export function loadCinematicLevel(): CinematicLevel {
   try {
     const raw = Number(window.localStorage?.getItem(CINEMATIC_LEVEL_STORAGE_KEY));
-    if (Number.isInteger(raw) && raw >= -3 && raw <= 9) {
+    if (Number.isInteger(raw) && raw >= -3 && raw <= 5) {
       cinematicLevel = raw as CinematicLevel;
       return cinematicLevel;
     }
@@ -37,5 +37,5 @@ export function saveCinematicLevel(level: CinematicLevel): void {
 }
 
 export function clampCinematicLevel(level: number): CinematicLevel {
-  return Math.max(-3, Math.min(9, Math.round(level))) as CinematicLevel;
+  return Math.max(-3, Math.min(5, Math.round(level))) as CinematicLevel;
 }

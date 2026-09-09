@@ -6,12 +6,19 @@ import { Entity, EntityType, Team } from './entities.js';
 import { Colors, colorToCSS } from './colors.js';
 import { ENTITY_RADIUS, HP_VALUES, WEAPON_STATS, SWARM_MISSILE_DAMAGE_MULTIPLIER } from './constants.js';
 import { getCinematicLevel } from './cinematic.js';
+import type { GameState } from './gamestate.js';
+import type { SpaceFluid } from './spacefluid.js';
+import { damageLaserLine } from './combatUtils.js';
+import { isLegacyGraphics } from './graphicsmode.js';
+import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
 
 const BULLET_TRAIL_LIFETIME = 0.12;
 const BULLET_TRAIL_MIN_DISTANCE = 2;
 const GATLING_TRAIL_LIFETIME = 0.04;
 const COMET_TRAIL_LIFETIME = 0.28;
 const COMET_TRAIL_MAX_POINTS = 10;
+/** World-distance in a single sample step beyond which the trail is reset. */
+const TRAIL_TELEPORT_BREAK = 4000;
 
 interface TrailPoint {
   pos: Vec2;
@@ -43,6 +50,15 @@ export abstract class ProjectileBase extends Entity {
   protected trailLifetime = BULLET_TRAIL_LIFETIME;
   protected trailMinDistance = BULLET_TRAIL_MIN_DISTANCE;
   protected trailMaxPoints = 5;
+  /**
+   * When set, this projectile renders its trail through the shared
+   * high-performance {@link renderProjectileTrail} glow-ribbon system instead
+   * of the legacy per-class stroke code.  Enabled for fighter- and ship-fired
+   * projectiles via {@link enableGlowTrail}.  The legacy look is still used
+   * whenever the player has ticked "Legacy Graphics" in graphics settings
+   * (see {@link isLegacyGraphics}).
+   */
+  protected trailStyle: ProjectileTrailStyle | null = null;
   /**
    * When true, enemy projectiles can collide with and destroy this projectile.
    * Used by SwarmMissile to make swarm missiles interceptable by enemy bullets.
@@ -79,8 +95,33 @@ export abstract class ProjectileBase extends Entity {
   protected updateTrail(dt: number): void {
     this.compactTrail(dt, this.trailLifetime);
     const last = this.trail[this.trail.length - 1];
-    if (!last || last.pos.distanceTo(this.position) >= this.trailMinDistance) {
+    if (!last) {
       this.trail.push({ pos: this.position.clone(), age: 0 });
+    } else {
+      const dist = last.pos.distanceTo(this.position);
+      if (dist >= TRAIL_TELEPORT_BREAK) {
+        // Teleport / huge jump: break the trail instead of smearing a ribbon
+        // across the whole map.
+        this.trail.length = 0;
+        this.trail.push({ pos: this.position.clone(), age: 0 });
+      } else if (this.trailStyle && dist > this.trailMinDistance * 6) {
+        // Fast mover: insert a bounded number of intermediate samples so the
+        // ribbon stays continuous rather than showing frame-to-frame gaps.
+        const steps = Math.min(4, Math.floor(dist / this.trailMinDistance));
+        for (let s = 1; s < steps; s++) {
+          const f = s / steps;
+          this.trail.push({
+            pos: new Vec2(
+              last.pos.x + (this.position.x - last.pos.x) * f,
+              last.pos.y + (this.position.y - last.pos.y) * f,
+            ),
+            age: 0,
+          });
+        }
+        this.trail.push({ pos: this.position.clone(), age: 0 });
+      } else if (dist >= this.trailMinDistance) {
+        this.trail.push({ pos: this.position.clone(), age: 0 });
+      }
     }
     while (this.trail.length > this.trailMaxPoints) this.trail.shift();
   }
@@ -102,6 +143,10 @@ export abstract class ProjectileBase extends Entity {
     lifetime: number = BULLET_TRAIL_LIFETIME,
     width: number = 3,
   ): void {
+    if (!isLegacyGraphics() && this.trailStyle) {
+      renderProjectileTrail(ctx, camera, this.trail, this.position, this.trailStyle);
+      return;
+    }
     if (this.trail.length < 2) return;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -136,6 +181,28 @@ export abstract class ProjectileBase extends Entity {
     this.trailMaxPoints = COMET_TRAIL_MAX_POINTS;
   }
 
+  /** True when this projectile was fired by a fighter, bomber, or ship. */
+  protected isShipOrFighterFire(): boolean {
+    const t = this.source?.type;
+    return t === EntityType.PlayerShip || t === EntityType.Fighter || t === EntityType.Bomber;
+  }
+
+  /**
+   * Opt this projectile into the shared glow-ribbon trail renderer.  Also
+   * tunes the position-history sampling so the ribbon stays smooth without
+   * accumulating redundant points.  Falls back to the legacy per-class trail
+   * automatically when Legacy Graphics is enabled.
+   */
+  protected enableGlowTrail(
+    style: ProjectileTrailStyle,
+    opts?: { maxSamples?: number; sampleDistance?: number },
+  ): void {
+    this.trailStyle = style;
+    this.trailMaxPoints = opts?.maxSamples ?? 8;
+    this.trailMinDistance = opts?.sampleDistance ?? 4;
+    this.trailLifetime = style.fadeTime ?? this.trailLifetime;
+  }
+
   protected drawCometTrail(
     ctx: CanvasRenderingContext2D,
     camera: Camera,
@@ -143,6 +210,10 @@ export abstract class ProjectileBase extends Entity {
     coreColor: string = 'rgba(255,255,255,0.92)',
     width: number = 8,
   ): void {
+    if (!isLegacyGraphics() && this.trailStyle) {
+      renderProjectileTrail(ctx, camera, this.trail, this.position, this.trailStyle);
+      return;
+    }
     if (this.trail.length < 2) return;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -261,149 +332,6 @@ export abstract class ProjectileBase extends Entity {
       ctx.restore();
     }
 
-    // Level 6: ion knot sparks zig-zagging through the centerline.
-    if (cinematicLevel >= 6 && this.trail.length >= 6) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.lineWidth = Math.max(0.45, width * camera.zoom * 0.10);
-      for (let i = 2; i < this.trail.length; i += 3) {
-        const a = this.trail[i - 1];
-        const b = this.trail[i];
-        const fade = 1 - ((a.age + b.age) * 0.5) / this.trailLifetime;
-        if (fade <= 0) continue;
-        const from = camera.worldToScreen(a.pos);
-        const to = camera.worldToScreen(b.pos);
-        const mx = (from.x + to.x) * 0.5;
-        const my = (from.y + to.y) * 0.5;
-        const tdx = to.x - from.x;
-        const tdy = to.y - from.y;
-        const tlen = Math.hypot(tdx, tdy) || 1;
-        const px = tdy / tlen;
-        const py = -tdx / tlen;
-        const sparkLen = Math.max(0.9, width * camera.zoom * 0.30);
-        const sparkAlpha = Math.min(0.26, fade * 0.22);
-        ctx.strokeStyle = `rgba(215,245,255,${sparkAlpha.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.moveTo(mx - px * sparkLen, my - py * sparkLen);
-        ctx.lineTo(mx + px * sparkLen, my + py * sparkLen);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // Level 7: chromatic dispersion wake — red and blue ghost trails offset
-    // perpendicularly from the main trail, simulating prismatic light separation
-    // as the comet punches through the nebula medium.
-    if (cinematicLevel >= 7 && this.trail.length >= 4) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      const dispOffset = Math.max(0.8, width * camera.zoom * 0.32);
-      ctx.lineWidth = Math.max(0.35, width * camera.zoom * 0.50);
-      for (let i = 1; i < this.trail.length; i++) {
-        const a = this.trail[i - 1];
-        const b = this.trail[i];
-        const fade = 1 - ((a.age + b.age) * 0.5) / this.trailLifetime;
-        if (fade <= 0.06) continue;
-        const from = camera.worldToScreen(a.pos);
-        const to = camera.worldToScreen(b.pos);
-        const tdx = to.x - from.x;
-        const tdy = to.y - from.y;
-        const tlen = Math.hypot(tdx, tdy) || 1;
-        const px = tdy / tlen;
-        const py = -tdx / tlen;
-        const ra = Math.min(0.14, fade * 0.11);
-        const ba = Math.min(0.14, fade * 0.11);
-        // Red channel shifted one side.
-        ctx.strokeStyle = `rgba(255,60,40,${ra.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.moveTo(from.x + px * dispOffset, from.y + py * dispOffset);
-        ctx.lineTo(to.x   + px * dispOffset, to.y   + py * dispOffset);
-        ctx.stroke();
-        // Blue channel shifted the other side.
-        ctx.strokeStyle = `rgba(40,140,255,${ba.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.moveTo(from.x - px * dispOffset, from.y - py * dispOffset);
-        ctx.lineTo(to.x   - px * dispOffset, to.y   - py * dispOffset);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // Level 8: spacetime micro-ripples — concentric expanding rings that radiate
-    // outward from the head of the comet trail, simulating gravitational waves
-    // left in the wake as the projectile displaces the local spacetime fabric.
-    // Distinct from level-7's chromatic dispersion wake which follows the trail
-    // path; these rings propagate perpendicularly outward from a fixed emission
-    // point near the comet head.
-    if (cinematicLevel >= 8 && this.trail.length >= 2) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      const head = camera.worldToScreen(this.trail[0].pos);
-      const rippleCount = 3;
-      const ripplePeriod = 0.55;  // seconds per ring cycle
-      const maxRippleR = width * camera.zoom * 9.0;
-
-      for (let ring = 0; ring < rippleCount; ring++) {
-        // Stagger each ring by 1/3 of the period.
-        const phase = (performance.now() / 1000 / ripplePeriod + ring / rippleCount) % 1;
-        const ringR = phase * maxRippleR;
-        const alpha = (1 - phase) * (1 - phase) * 0.18;
-        if (alpha < 0.005) continue;
-        ctx.strokeStyle = `rgba(180,240,255,${alpha.toFixed(3)})`;
-        ctx.lineWidth = Math.max(0.4, width * camera.zoom * 0.55 * (1 - phase));
-        ctx.beginPath();
-        ctx.arc(head.x, head.y, Math.max(0.5, ringR), 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // Level 9: quantum fluctuation sparks — tiny cross-shaped sparks that
-    // appear and vanish at random positions along the comet trail, simulating
-    // vacuum energy fluctuations in the high-energy wake.  Each spark is a
-    // short ×-shaped cross with a brief lifetime, distinct from the level-8
-    // concentric ripple rings which expand outward from the trail head.
-    if (cinematicLevel >= 9 && this.trail.length >= 3) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      ctx.lineCap = 'round';
-      const now9 = performance.now();
-      const sparkSlots = Math.min(6, Math.floor(this.trail.length * 0.7));
-
-      for (let i = 0; i < sparkSlots; i++) {
-        // Use a time-quantised seed so each slot has a stable location within
-        // its half-second window before it jumps to a new random position.
-        const windowMs  = 480;
-        const windowIdx = Math.floor(now9 / windowMs + i * 3.71);
-        const localPhase = (now9 % windowMs) / windowMs;
-        if (localPhase > 0.55) continue;  // spark only active for first 55% of window
-
-        // Deterministic trail index from the window seed.
-        const trailIdx = ((windowIdx * 7 + i * 13) >>> 0) % this.trail.length;
-        const tPos = camera.worldToScreen(this.trail[trailIdx].pos);
-
-        const sparkAlpha = (1 - localPhase / 0.55) * (1 - localPhase / 0.55) * 0.60;
-        const sparkLen   = Math.max(1.2, width * camera.zoom * 2.0);
-        // Rotate the cross by a pseudo-random angle per window.
-        const sparkAngle = (windowIdx * 2.414 + i * 1.618) % Math.PI;
-        const ca = Math.cos(sparkAngle);
-        const sa = Math.sin(sparkAngle);
-
-        ctx.strokeStyle = `rgba(210,245,255,${sparkAlpha.toFixed(3)})`;
-        ctx.lineWidth   = Math.max(0.3, width * camera.zoom * 0.28);
-        ctx.beginPath();
-        // Arm 1
-        ctx.moveTo(tPos.x - ca * sparkLen, tPos.y - sa * sparkLen);
-        ctx.lineTo(tPos.x + ca * sparkLen, tPos.y + sa * sparkLen);
-        // Arm 2 (perpendicular)
-        ctx.moveTo(tPos.x + sa * sparkLen * 0.65, tPos.y - ca * sparkLen * 0.65);
-        ctx.lineTo(tPos.x - sa * sparkLen * 0.65, tPos.y + ca * sparkLen * 0.65);
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-
     ctx.restore();
   }
 }
@@ -433,7 +361,16 @@ export class Bullet extends ProjectileBase {
       source,
     });
     this.targetEntity = target;
-    if (this.isPlayerShipFire()) this.enableCometTrail();
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(this.team === Team.Player ? Colors.bullet_player_cannon : Colors.bullet_enemy_cannon, 0.6),
+        coreColor: 'rgba(255,255,255,0.95)',
+        width: 6.5,
+        fadeTime: 0.26,
+      });
+    } else if (this.isPlayerShipFire()) {
+      this.enableCometTrail();
+    }
   }
 
   update(dt: number): void {
@@ -504,11 +441,20 @@ export class GatlingBullet extends ProjectileBase {
       source,
     });
     this.radius = ENTITY_RADIUS.bullet * 0.75;
-    if (this.isPlayerShipFire()) this.enableCometTrail(4);
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(this.team === Team.Player ? Colors.bullet_player_gatling : Colors.bullet_enemy_gatling, 0.68),
+        coreColor: 'rgba(255,255,220,0.95)',
+        width: 4.5,
+        fadeTime: 0.14,
+      }, { maxSamples: 7, sampleDistance: 3 });
+    } else if (this.isPlayerShipFire()) {
+      this.enableCometTrail(4);
+    }
   }
 
   protected override updateTrail(dt: number): void {
-    if (this.isPlayerShipFire()) {
+    if (this.isShipOrFighterFire()) {
       super.updateTrail(dt);
       return;
     }
@@ -702,7 +648,16 @@ export class GuidedMissile extends ProjectileBase {
     this.health = HP_VALUES.destructibleProjectile;
     this.maxHealth = HP_VALUES.destructibleProjectile;
     this.interceptable = true;
-    if (this.isPlayerShipFire()) this.enableCometTrail(3.5);
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(Colors.alert2, 0.8),
+        coreColor: 'rgba(255,255,255,0.96)',
+        width: 9,
+        fadeTime: 0.3,
+      }, { maxSamples: 9, sampleDistance: 4 });
+    } else if (this.isPlayerShipFire()) {
+      this.enableCometTrail(3.5);
+    }
   }
 
   steerToward(target: Vec2): void {
@@ -784,6 +739,14 @@ export class BomberMissile extends ProjectileBase {
       source,
     });
     this.radius = ENTITY_RADIUS.missile * 1.25;
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(Colors.missile_trail, 0.8),
+        coreColor: 'rgba(255,225,180,0.95)',
+        width: 6,
+        fadeTime: 0.18,
+      }, { maxSamples: 8, sampleDistance: 4 });
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
@@ -1276,6 +1239,11 @@ export class MassDriverBullet extends ProjectileBase {
     return this.bursting;
   }
 
+  /** How many damage pulses have been consumed so far (1 == the first blast). */
+  get pulsesFired(): number {
+    return this.burstPulseIndex;
+  }
+
   private currentBlastRadius(): number {
     const grow = Math.min(1, this.burstElapsed / this.expansionDuration);
     const eased = 1 - Math.pow(1 - grow, 3);
@@ -1430,7 +1398,16 @@ export class HomingBullet extends ProjectileBase {
     });
     this.radius = ENTITY_RADIUS.bullet * 1.15;
     this.targetEntity = target;
-    if (this.isPlayerShipFire()) this.enableCometTrail();
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(Colors.alliedfire, 0.7),
+        coreColor: 'rgba(235,255,255,0.96)',
+        width: 7,
+        fadeTime: 0.26,
+      });
+    } else if (this.isPlayerShipFire()) {
+      this.enableCometTrail();
+    }
   }
 
   update(dt: number): void {
@@ -1519,6 +1496,14 @@ export class SwarmMissile extends ProjectileBase {
     this.health = HP_VALUES.destructibleProjectile;
     this.maxHealth = HP_VALUES.destructibleProjectile;
     this.interceptable = true; // enemy bullets can destroy swarm missiles
+    if (this.isShipOrFighterFire()) {
+      this.enableGlowTrail({
+        color: colorToCSS(Colors.alert2, 0.85),
+        coreColor: 'rgba(255,240,210,0.95)',
+        width: 5,
+        fadeTime: 0.16,
+      }, { maxSamples: 7, sampleDistance: 3 });
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
@@ -1547,20 +1532,26 @@ export class SwarmMissile extends ProjectileBase {
 }
 
 // ---------------------------------------------------------------------------
-// ChargedLaserBurst – laser special: wide, bright charged energy beam (visual)
+// ChargedLaserBurst – traveling vermiculate laser special
 // ---------------------------------------------------------------------------
 
 /**
- * Visual entity for the charged laser burst (RMB ability for the laser weapon).
- * Damage is applied immediately by damageLaserLine() in game.ts before this
- * entity is spawned; this class only provides the visual effect that persists
- * for a short time so the burst feels impactful.
+ * A seeded, worm-like piercing laser. It sweeps damage along every movement
+ * segment and remembers hit entity IDs so a given laser damages each target
+ * at most once while passing through it.
  *
  * chargeFraction ∈ [0, 1] controls width and brightness.
  */
 export class ChargedLaserBurst extends ProjectileBase {
   targetPos: Vec2;
   readonly chargeFraction: number;
+  private readonly state: GameState;
+  private readonly spaceFluid: SpaceFluid | null;
+  private readonly hitIds = new Set<number>();
+  private randomState: number;
+  private turnTimer = 0;
+  private targetTurn = 0;
+  private turnVelocity = 0;
 
   constructor(
     team: Team,
@@ -1568,6 +1559,9 @@ export class ChargedLaserBurst extends ProjectileBase {
     targetPos: Vec2,
     source: Entity | null = null,
     chargeFraction: number = 1.0,
+    state: GameState,
+    spaceFluid: SpaceFluid | null,
+    seed: number = 1,
   ) {
     const angle = startPos.angleTo(targetPos);
     super({
@@ -1576,36 +1570,65 @@ export class ChargedLaserBurst extends ProjectileBase {
       position: startPos,
       angle,
       damage: 0, // damage handled externally by damageLaserLine()
-      speed: 0,
-      lifetime: 0.28,
+      speed: 570,
+      lifetime: 2.15,
       source,
     });
-    this.targetPos = targetPos.clone();
-    this.velocity.set(0, 0);
+    this.targetPos = startPos.clone();
     this.chargeFraction = Math.max(0, Math.min(1, chargeFraction));
+    this.state = state;
+    this.spaceFluid = spaceFluid;
+    this.randomState = seed || 1;
+    this.radius = 4 + this.chargeFraction * 2;
+    this.trailLifetime = 0.72;
+    this.trailMinDistance = 5;
+    this.trailMaxPoints = 54;
+    this.chooseTurn();
   }
 
   update(dt: number): void {
     if (!this.alive) return;
-    this.lifetime -= dt;
-    if (this.lifetime <= 0) this.destroy();
+    const previous = this.position.clone();
+    this.turnTimer -= dt;
+    if (this.turnTimer <= 0) this.chooseTurn();
+    // Smooth but emphatic deterministic steering produces broad, vermiculate loops.
+    this.turnVelocity += (this.targetTurn - this.turnVelocity) * Math.min(1, dt * 7.5);
+    this.angle = wrapAngle(this.angle + this.turnVelocity * dt);
+    this.velocity.set(Math.cos(this.angle) * this.speed, Math.sin(this.angle) * this.speed);
+    super.update(dt);
+    this.targetPos = previous;
+    damageLaserLine(this.state, this.spaceFluid, this.source ?? this, previous, this.position, this.damage, this.radius, this.hitIds);
+  }
+
+  private random(): number {
+    let x = this.randomState | 0;
+    x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    this.randomState = x >>> 0;
+    return this.randomState / 0x100000000;
+  }
+
+  private chooseTurn(): void {
+    this.turnTimer += 0.055 + this.random() * 0.16;
+    const direction = this.random() < 0.5 ? -1 : 1;
+    this.targetTurn = direction * (1.4 + this.random() * 6.2);
   }
 
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const from = camera.worldToScreen(this.position);
     const to = camera.worldToScreen(this.targetPos);
-    const fade = this.lifetime / 0.28; // 1 at spawn, 0 at expiry
-    const beamWidth = (3 + this.chargeFraction * 7) * camera.zoom * fade;
+    const fade = Math.min(1, this.lifetime / 0.32);
+    const beamWidth = (2.2 + this.chargeFraction * 2.3) * camera.zoom;
     const burstColor = this.team === Team.Player ? Colors.friendlyfire : Colors.enemyfire;
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
 
-    // Outer glow
+    // Lightweight additive glow over the fading worm trail.
+    this.drawTrail(ctx, camera, colorToCSS(burstColor, 0.8), this.trailLifetime, 11);
     ctx.strokeStyle = colorToCSS(burstColor, 0.28 * fade);
-    ctx.lineWidth = beamWidth * 4.2;
+    ctx.lineWidth = beamWidth * 3.4;
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
     ctx.lineTo(to.x, to.y);
@@ -1619,16 +1642,6 @@ export class ChargedLaserBurst extends ProjectileBase {
     ctx.lineTo(to.x, to.y);
     ctx.stroke();
 
-    ctx.setLineDash([14, 12]);
-    ctx.lineDashOffset = -this.lifetime * 90;
-    ctx.strokeStyle = colorToCSS(Colors.particles_switch, 0.32 * fade);
-    ctx.lineWidth = beamWidth * 0.55;
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
     // Bright white core
     ctx.strokeStyle = `rgba(255,255,255,${0.65 * fade})`;
     ctx.lineWidth = beamWidth * 0.35;
@@ -1640,7 +1653,7 @@ export class ChargedLaserBurst extends ProjectileBase {
     ctx.strokeStyle = colorToCSS(burstColor, 0.38 * fade);
     ctx.lineWidth = Math.max(1, 2 * camera.zoom);
     ctx.beginPath();
-    ctx.arc(to.x, to.y, (10 + this.chargeFraction * 12) * camera.zoom * fade, 0, Math.PI * 2);
+    ctx.arc(from.x, from.y, (7 + this.chargeFraction * 5) * camera.zoom * fade, 0, Math.PI * 2);
     ctx.stroke();
 
     ctx.restore();

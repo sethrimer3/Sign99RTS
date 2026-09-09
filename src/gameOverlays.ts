@@ -1,9 +1,8 @@
 /**
  * Overlay and glow-layer drawing helpers extracted from game.ts.
  *
- * All functions are stateless except for drawScreenOverlays, which updates the
- * mutable OverlayCache so the caller can re-use cached canvas gradients across
- * frames.
+ * Most functions are stateless. drawScreenOverlays updates its mutable cache,
+ * and drawBuildingHoverHitpoints retains per-building textbox fade values.
  */
 
 import { Vec2 } from './math.js';
@@ -17,13 +16,15 @@ import { TurretBase } from './turret.js';
 import { FighterShip, BomberShip, SynonymousNovaBomberShip } from './fighter.js';
 import { Laser, ChargedLaserBurst, GuidedMissile, BomberMissile, SwarmMissile, MassDriverBullet, GatlingBullet, GatlingTurretBullet } from './projectile.js';
 import { GlowLayer } from './glowlayer.js';
-import { footprintForBuildingType } from './buildingfootprint.js';
+import { footprintForBuilding, footprintForBuildingType } from './buildingfootprint.js';
 import { SHIP_STATS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
 import { GRID_CELL_SIZE } from './grid.js';
 import { WORLD_WIDTH } from './constants.js';
 import type { VisualQualityPreset } from './visualquality.js';
 import { buildingBlocksShips, buildingFootprintOrigin } from './buildingCollision.js';
 import { t } from './i18n.js';
+import type { PlayerRespawnRuntime } from './respawnRuntime.js';
+import { teamColor } from './teamutils.js';
 
 // ---------------------------------------------------------------------------
 // Overlay cache — holds canvas gradients/patterns that are rebuilt only when
@@ -67,7 +68,16 @@ function fighterMaxSpeed(fighter: FighterShip): number {
     : SHIP_STATS.fighter.speed;
 }
 
-let ghostLensCanvas: HTMLCanvasElement | null = null;
+interface BuildingHealthTextFade {
+  alpha: number;
+  startAlpha: number;
+  elapsed: number;
+  directlyHovered: boolean;
+}
+
+const buildingHealthTextFades = new Map<number, BuildingHealthTextFade>();
+const BUILDING_HEALTH_HOVER_ALPHA = 0.8;
+const BUILDING_HEALTH_HOVER_FADE_SECONDS = 0.3;
 
 // ---------------------------------------------------------------------------
 // Public drawing functions
@@ -84,111 +94,57 @@ export function drawGhostSpectator(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
   state: GameState,
-  ghostSpectatorPos: Vec2 | null,
+  runtime: PlayerRespawnRuntime,
 ): void {
-  if (state.player.alive || !ghostSpectatorPos) return;
-  const screen = camera.worldToScreen(ghostSpectatorPos);
-  const aimWorld = camera.screenToWorld(Input.mousePos);
-  const facing = ghostSpectatorPos.angleTo(aimWorld);
-  const pulse = 0.5 + 0.5 * Math.sin(state.gameTime * 2.8);
-  const shimmer = 0.5 + 0.5 * Math.sin(state.gameTime * 6.1);
-  const r = Math.max(12, 22 * camera.zoom);
-
-  // Sample the scene that has already been rendered and refract it through the
-  // hull. This makes stars and lights visibly bend inside the ghost instead of
-  // painting an opaque sketch over them.
-  const sourceRadius = Math.ceil(r * 1.7);
-  const sourceX = Math.max(0, Math.floor(screen.x - sourceRadius));
-  const sourceY = Math.max(0, Math.floor(screen.y - sourceRadius));
-  const sourceW = Math.min(ctx.canvas.width - sourceX, sourceRadius * 2);
-  const sourceH = Math.min(ctx.canvas.height - sourceY, sourceRadius * 2);
-  if (sourceW > 0 && sourceH > 0) {
-    const lens = ghostLensCanvas ?? (ghostLensCanvas = document.createElement('canvas'));
-    if (lens.width !== sourceW) lens.width = sourceW;
-    if (lens.height !== sourceH) lens.height = sourceH;
-    const lensCtx = lens.getContext('2d');
-    if (lensCtx) {
-      lensCtx.clearRect(0, 0, sourceW, sourceH);
-      lensCtx.drawImage(ctx.canvas, sourceX, sourceY, sourceW, sourceH, 0, 0, sourceW, sourceH);
-      ctx.save();
-      ctx.translate(screen.x, screen.y);
-      ctx.rotate(facing);
-      ctx.beginPath();
-      ctx.moveTo(r * 1.38, 0);
-      ctx.quadraticCurveTo(r * 0.48, -r * 0.68, -r * 0.9, -r * 0.72);
-      ctx.lineTo(-r * 0.52, 0);
-      ctx.lineTo(-r * 0.9, r * 0.72);
-      ctx.quadraticCurveTo(r * 0.48, r * 0.68, r * 1.38, 0);
-      ctx.clip();
-      ctx.rotate(-facing);
-      ctx.globalAlpha = 0.72;
-      for (let sourceBandY = 0; sourceBandY < sourceH; sourceBandY += 4) {
-        const localY = sourceY + sourceBandY - screen.y;
-        const bend = Math.sin(localY / Math.max(1, r) * Math.PI) * (3.5 + shimmer * 2);
-        ctx.drawImage(
-          lens,
-          0, sourceBandY, sourceW, Math.min(4, sourceH - sourceBandY),
-          sourceX - screen.x + bend, localY, sourceW * 1.035, 4.5,
-        );
-      }
-      ctx.restore();
-    }
-  }
+  if (state.player.alive || !runtime.ghostPos || runtime.ghostLights.length === 0) return;
+  const tint = teamColor(state.player.team);
+  const pulse = 0.86 + Math.sin(state.gameTime * 5.2) * 0.1;
+  const layers = [
+    { width: 5.8, alpha: 0.10 },
+    { width: 2.8, alpha: 0.24 },
+    { width: 1.1, alpha: 0.58 },
+  ] as const;
 
   ctx.save();
-  ctx.translate(screen.x, screen.y);
-  ctx.rotate(facing);
-
-  const glass = ctx.createLinearGradient(-r, -r, r, r);
-  glass.addColorStop(0, 'rgba(110, 235, 255, 0.04)');
-  glass.addColorStop(0.42, `rgba(225, 252, 255, ${0.10 + pulse * 0.06})`);
-  glass.addColorStop(0.58, 'rgba(100, 170, 255, 0.025)');
-  glass.addColorStop(1, 'rgba(170, 120, 255, 0.09)');
-  ctx.fillStyle = glass;
-  ctx.strokeStyle = `rgba(185, 246, 255, ${0.58 + pulse * 0.22})`;
-  ctx.lineWidth = Math.max(1, 1.25 * camera.zoom);
-  ctx.beginPath();
-  ctx.moveTo(r * 1.38, 0);
-  ctx.quadraticCurveTo(r * 0.48, -r * 0.68, -r * 0.9, -r * 0.72);
-  ctx.lineTo(-r * 0.52, 0);
-  ctx.lineTo(-r * 0.9, r * 0.72);
-  ctx.quadraticCurveTo(r * 0.48, r * 0.68, r * 1.38, 0);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
   ctx.globalCompositeOperation = 'lighter';
-  ctx.strokeStyle = `rgba(220, 252, 255, ${0.22 + shimmer * 0.18})`;
-  ctx.lineWidth = Math.max(0.7, 0.75 * camera.zoom);
-  ctx.beginPath();
-  ctx.moveTo(r * 1.08, 0);
-  ctx.quadraticCurveTo(r * 0.15, -r * 0.16, -r * 0.62, -r * 0.54);
-  ctx.moveTo(r * 1.08, 0);
-  ctx.quadraticCurveTo(r * 0.15, r * 0.16, -r * 0.62, r * 0.54);
-  ctx.moveTo(-r * 0.48, -r * 0.08);
-  ctx.quadraticCurveTo(r * 0.12, -r * 0.4, r * 0.7, -r * 0.08);
-  ctx.stroke();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
 
-  const core = ctx.createRadialGradient(r * 0.16, -r * 0.08, 0, r * 0.08, 0, r * 0.42);
-  core.addColorStop(0, `rgba(255, 255, 255, ${0.72 + shimmer * 0.2})`);
-  core.addColorStop(0.25, 'rgba(145, 240, 255, 0.28)');
-  core.addColorStop(1, 'rgba(100, 150, 255, 0)');
-  ctx.fillStyle = core;
-  ctx.beginPath();
-  ctx.ellipse(r * 0.08, 0, r * 0.38, r * 0.25, 0, 0, Math.PI * 2);
-  ctx.fill();
+  // Each light owns a tiny world-space history. Segment width and opacity
+  // increase toward the newest sample, producing a tapered luminous ribbon.
+  for (const light of runtime.ghostLights) {
+    const count = light.trail.length;
+    if (count >= 2) {
+      for (const layer of layers) {
+        ctx.strokeStyle = colorToCSS(tint);
+        for (let i = 1; i < count; i++) {
+          const a = light.trail[i - 1];
+          const b = light.trail[i];
+          const head = i / (count - 1);
+          const life = Math.max(0, 1 - (a.age + b.age) * 0.5 / 0.34);
+          const strength = head * head * life;
+          if (strength < 0.015) continue;
+          ctx.globalAlpha = layer.alpha * strength * pulse;
+          ctx.lineWidth = Math.max(0.35, layer.width * camera.zoom * (0.12 + head * 0.88));
+          ctx.beginPath();
+          ctx.moveTo(camera.screenX(a.x), camera.screenY(a.y));
+          ctx.lineTo(camera.screenX(b.x), camera.screenY(b.y));
+          ctx.stroke();
+        }
+      }
+    }
 
-  // Fine chromatic edge separation sells the glass/refraction without making
-  // the silhouette noisy.
-  ctx.lineWidth = Math.max(0.8, camera.zoom);
-  for (const [offset, color] of [[-1.8, 'rgba(80,220,255,0.24)'], [1.8, 'rgba(205,120,255,0.18)']] as const) {
-    ctx.strokeStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(-r * 0.75, offset * camera.zoom);
-    ctx.quadraticCurveTo(r * 0.38, -r * 0.66 + offset * camera.zoom, r * 1.32, offset * camera.zoom);
-    ctx.stroke();
+    const x = camera.screenX(light.x);
+    const y = camera.screenY(light.y);
+    const ballRadius = Math.max(1, 2.25 * camera.zoom);
+    ctx.globalAlpha = 0.12 * pulse;
+    ctx.fillStyle = colorToCSS(tint);
+    ctx.beginPath(); ctx.arc(x, y, ballRadius * 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.38 * pulse;
+    ctx.beginPath(); ctx.arc(x, y, ballRadius * 1.75, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.92 * pulse;
+    ctx.beginPath(); ctx.arc(x, y, ballRadius * 0.65, 0, Math.PI * 2); ctx.fill();
   }
-
   ctx.restore();
 }
 
@@ -222,7 +178,7 @@ export function drawMergedShipBlockerOutlines(
   const cells = new Set<string>();
   const entries: Array<{ x: number; y: number; team: Team; shielded: boolean }> = [];
   for (const building of blockers) {
-    const size = footprintForBuildingType(building.type);
+    const size = footprintForBuilding(building);
     const origin = buildingFootprintOrigin(building);
     const originX = origin.cx;
     const originY = origin.cy;
@@ -297,7 +253,7 @@ export function drawCommandModeOverlay(
   for (const b of state.buildings) {
     if (!commandSelectedTurrets.has(b.id) || !b.alive || !(b instanceof TurretBase)) continue;
     const p = camera.worldToScreen(b.position);
-    const s = footprintForBuildingType(b.type) * GRID_CELL_SIZE * camera.zoom;
+    const s = footprintForBuilding(b) * GRID_CELL_SIZE * camera.zoom;
     ctx.strokeStyle = colorToCSS(Colors.alert2, active ? 0.9 : 0.45);
     ctx.lineWidth = 1.5;
     ctx.strokeRect(p.x - s * 0.58, p.y - s * 0.58, s * 1.16, s * 1.16);
@@ -355,24 +311,47 @@ export function drawBuildingHoverHitpoints(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
   state: GameState,
+  frameDt: number,
 ): void {
   const world = camera.screenToWorld(Input.mousePos);
   const fadeRadius = GRID_CELL_SIZE * 6;
   const maxOverlayAlpha = 0.3;
+  const liveBuildingIds = new Set<number>();
 
   for (const b of state.buildings) {
     if (!b.alive) continue;
+    liveBuildingIds.add(b.id);
     const d = Math.hypot(world.x - b.position.x, world.y - b.position.y);
-    if (d > fadeRadius) continue;
+    if (d > fadeRadius) {
+      buildingHealthTextFades.delete(b.id);
+      continue;
+    }
 
     const hoverAlpha = maxOverlayAlpha * (1 - d / fadeRadius);
+    const footprintHalfSize = footprintForBuilding(b) * GRID_CELL_SIZE * 0.5;
+    const directlyHovered = Math.abs(world.x - b.position.x) <= footprintHalfSize
+      && Math.abs(world.y - b.position.y) <= footprintHalfSize;
+    const targetTextAlpha = directlyHovered ? BUILDING_HEALTH_HOVER_ALPHA : hoverAlpha;
+    let fade = buildingHealthTextFades.get(b.id);
+    if (!fade) {
+      fade = { alpha: hoverAlpha, startAlpha: hoverAlpha, elapsed: 0, directlyHovered };
+      buildingHealthTextFades.set(b.id, fade);
+    } else if (fade.directlyHovered !== directlyHovered) {
+      fade.startAlpha = fade.alpha;
+      fade.elapsed = 0;
+      fade.directlyHovered = directlyHovered;
+    }
+    fade.elapsed = Math.min(BUILDING_HEALTH_HOVER_FADE_SECONDS, fade.elapsed + Math.max(0, frameDt));
+    const fadeProgress = fade.elapsed / BUILDING_HEALTH_HOVER_FADE_SECONDS;
+    fade.alpha = fade.startAlpha + (targetTextAlpha - fade.startAlpha) * fadeProgress;
+    const textAlpha = fade.alpha;
     const screen = camera.worldToScreen(b.position);
     const range = buildingEffectRange(b);
     const tint = b.team === Team.Player ? Colors.radar_friendly_status : Colors.enemyfire;
 
     // Warm outline around building base when hovered
     const warmColor = b.team === Team.Player ? Colors.building_glow_power : Colors.building_glow_shipyard;
-    const baseSize = footprintForBuildingType(b.type) * GRID_CELL_SIZE * camera.zoom;
+    const baseSize = footprintForBuilding(b) * GRID_CELL_SIZE * camera.zoom;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.strokeStyle = colorToCSS(warmColor, 0.45 * hoverAlpha);
@@ -409,23 +388,27 @@ export function drawBuildingHoverHitpoints(
     const boxH = shieldText ? 38 : 22;
     const x = screen.x;
     const y = screen.y - b.radius * camera.zoom - 18;
-    ctx.fillStyle = colorToCSS(Colors.friendly_background, hoverAlpha * 0.72);
-    ctx.strokeStyle = colorToCSS(tint, hoverAlpha);
+    ctx.fillStyle = colorToCSS(Colors.friendly_background, textAlpha * 0.72);
+    ctx.strokeStyle = colorToCSS(tint, textAlpha);
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(x - boxW / 2, y - boxH / 2, boxW, boxH, 4);
     ctx.fill();
     ctx.stroke();
     if (shieldText) {
-      ctx.fillStyle = colorToCSS(Colors.radar_friendly_status, hoverAlpha);
+      ctx.fillStyle = colorToCSS(Colors.radar_friendly_status, textAlpha);
       ctx.fillText(shieldText, x, y - 8);
-      ctx.fillStyle = colorToCSS(b.team === Team.Enemy ? Colors.enemyfire : Colors.general_building, hoverAlpha);
+      ctx.fillStyle = colorToCSS(b.team === Team.Enemy ? Colors.enemyfire : Colors.general_building, textAlpha);
       ctx.fillText(text, x, y + 10);
     } else {
-      ctx.fillStyle = colorToCSS(b.team === Team.Enemy ? Colors.enemyfire : Colors.general_building, hoverAlpha);
+      ctx.fillStyle = colorToCSS(b.team === Team.Enemy ? Colors.enemyfire : Colors.general_building, textAlpha);
       ctx.fillText(text, x, y + 1);
     }
     ctx.restore();
+  }
+
+  for (const id of buildingHealthTextFades.keys()) {
+    if (!liveBuildingIds.has(id)) buildingHealthTextFades.delete(id);
   }
 }
 
@@ -546,7 +529,8 @@ export function drawGlowLayer(
         b.type === EntityType.TimeBomb ||
         b.type === EntityType.ExciterTurret ||
         b.type === EntityType.MassDriverTurret ||
-        b.type === EntityType.RegenTurret
+        b.type === EntityType.RegenTurret ||
+        b.type === EntityType.TetherTurret
       ) {
         glow.circleWorld(camera, b.position, b.radius * 1.25, color, 0.045 * pulse, false, 2);
       }

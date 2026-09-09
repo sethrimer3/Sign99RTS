@@ -43,7 +43,7 @@ export const SHIP_WEAPON_OPTIONS: ReadonlyArray<{
 }> = [
   { id: 'cannon', label: 'Cannon', description: 'Reliable medium-range primary weapon. Cannon V.2 adds homing shots.' },
   { id: 'gatling', label: 'Gatling', researchKey: 'weaponGatling', description: 'Very weak, very fast, short range.' },
-  { id: 'laser', label: 'Laser', researchKey: 'weaponLaser', description: 'Thin slow-firing beam with infinite pierce.' },
+  { id: 'laser', label: 'Laser', researchKey: 'weaponLaser', description: 'Piercing beam; hold RMB to charge deterministic worm lasers (one per 10 energy).' },
   { id: 'guidedmissile', label: 'Guided Missile', researchKey: 'weaponGuidedMissile', description: 'Hold fire to steer a heavy explosive missile.' },
   { id: 'synonymousLaser', label: 'Piercing Laser', description: 'Slow Synonymous beam that pierces clustered targets.' },
 ];
@@ -212,7 +212,7 @@ export class PlayerShip extends Entity {
 
     // Clamp speed — boost allows a higher cap.
     const speed = this.velocity.length();
-    const speedCap = this.isBoosting ? this.maxSpeed * BOOST_SPEED_MULT : this.maxSpeed;
+    const speedCap = (this.isBoosting ? this.maxSpeed * BOOST_SPEED_MULT : this.maxSpeed) * this.tetherSpeedMultiplier();
     if (speed > speedCap) {
       this.velocity = this.velocity.normalize().scale(speedCap);
     }
@@ -472,6 +472,40 @@ export class PlayerShip extends Entity {
     }
   }
 
+  /** Rebuild reversible ship stats from the upgrade labs that currently exist. */
+  syncResearchUpgrades(items: ReadonlySet<string>): void {
+    const healthFraction = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+    this.hpLevel = 0;
+    this.speedEnergyLevel = 0;
+    this.shieldLevel = 0;
+    this.shieldUnlocked = false;
+    this.dashUnlocked = false;
+    this.synonymousPierceMultiplier = 1;
+    this.synonymousFireSpeedLevel = 0;
+    this.synonymousVitalityUnlocked = false;
+    this.synonymousHealthRegenRate = 0;
+    this.maxHealth = this.baseMaxHealth;
+    this.maxSpeed = this.baseMaxSpeed;
+    this.thrustPower = this.baseThrustPower;
+    this.baseBatteryRegenRate = this.baseEnergyRegenRate;
+    this.fireCooldownMultiplier = 1;
+    this.maxShield = 0;
+    this.shield = 0;
+    this.hpLevel = [...items].filter((item) => /^shipHp\d$/.test(item)).length;
+    this.speedEnergyLevel = [...items].filter((item) => /^shipSpeedEnergy\d$/.test(item)).length;
+    this.shieldLevel = [...items].filter((item) => /^shipShield\d$/.test(item)).length;
+    this.shieldUnlocked = this.shieldLevel > 0;
+    this.synonymousFireSpeedLevel = [...items].filter((item) => /^synonymousFireSpeed\d$/.test(item)).length;
+    this.recomputeHpStats();
+    this.recomputeSpeedEnergyStats();
+    this.recomputeShieldStats();
+    for (const item of items) {
+      if (/^(shipHp|shipSpeedEnergy|shipShield|synonymousFireSpeed)\d$/.test(item)) continue;
+      this.applyResearchUpgrade(item);
+    }
+    this.health = Math.max(1, Math.min(this.maxHealth, this.maxHealth * healthFraction));
+  }
+
   /** HP upgrade: each level adds +25% of *base* max HP (non-cumulative — level 4 = +100%, not compounded). */
   private recomputeHpStats(): void {
     const healthFraction = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
@@ -609,6 +643,10 @@ export class PlayerShip extends Entity {
     const dir = new Vec2(Math.cos(this.angle), Math.sin(this.angle));
     this.battery = Math.max(0, this.battery - this.maxBattery * DASH_ENERGY_COST_FRACTION);
     this.velocity = this.velocity.add(dir.scale(DASH_INITIAL_SPEED));
+    // Dashing tears against any Tether holds — halve their grip immediately and
+    // let them re-tighten. dashCount bump is what the Tethers watch for.
+    this.dashCount++;
+    this.tetherSlowFrac *= 0.5;
     this.dashEffectTimer = DASH_TRAIL_LIFETIME;
     this.dashTrail = [
       { pos: this.position.add(dir.scale(-this.radius * 0.8)), age: DASH_TRAIL_LIFETIME * 0.16 },
@@ -808,157 +846,6 @@ export class PlayerShip extends Entity {
         ctx.beginPath();
         ctx.arc(mx, my, Math.max(0.6, r * 0.055), 0, Math.PI * 2);
         ctx.fill();
-      }
-    }
-
-    // Level 6: tri-axis ion spokes and a breathing outer phase ring.
-    if (getCinematicLevel() >= 6) {
-      const spokeCount = 3;
-      const spokeR = r * (1.18 + corePulse * 0.09);
-      ctx.strokeStyle = colorToCSS(coreColor, Math.min(0.44, 0.20 + coreGlint * 0.18));
-      ctx.lineWidth = 0.9;
-      ctx.beginPath();
-      for (let i = 0; i < spokeCount; i++) {
-        const a = this.drawTime * 1.35 + (i / spokeCount) * Math.PI * 2;
-        const ex = screen.x + Math.cos(a) * spokeR;
-        const ey = screen.y + Math.sin(a) * spokeR * 0.72;
-        ctx.moveTo(screen.x, screen.y);
-        ctx.lineTo(ex, ey);
-      }
-      ctx.stroke();
-
-      const phaseRingAlpha = Math.min(0.42, 0.18 + corePulse * 0.16);
-      ctx.strokeStyle = `rgba(190,230,255,${phaseRingAlpha.toFixed(3)})`;
-      ctx.lineWidth = 0.85;
-      ctx.beginPath();
-      ctx.ellipse(
-        screen.x,
-        screen.y,
-        r * (1.30 + corePulse * 0.08),
-        r * (0.90 + coreGlint * 0.05),
-        this.drawTime * 0.55,
-        0,
-        Math.PI * 2,
-      );
-      ctx.stroke();
-    }
-
-    // Level 7: hexagonal quantum lattice — six nodes at equal angles connected
-    // by edges, slowly rotating around the ship core.  The nodes pulse in alpha
-    // individually, creating a living web signature distinct from all prior rings.
-    if (getCinematicLevel() >= 7) {
-      const nodeCount = 6;
-      const latticeR = r * (1.55 + corePulse * 0.07);
-      const latticeRot = this.drawTime * 0.62;
-      const nodeAlphaBase = Math.min(0.52, 0.22 + coreGlint * 0.20);
-      const nodes: Array<{ x: number; y: number }> = [];
-      for (let i = 0; i < nodeCount; i++) {
-        const a = latticeRot + (i / nodeCount) * Math.PI * 2;
-        nodes.push({
-          x: screen.x + Math.cos(a) * latticeR,
-          y: screen.y + Math.sin(a) * latticeR * 0.80,
-        });
-      }
-
-      // Draw connecting edges between adjacent nodes.
-      ctx.lineWidth = 0.7;
-      for (let i = 0; i < nodeCount; i++) {
-        const na = nodes[i];
-        const nb = nodes[(i + 1) % nodeCount];
-        const edgeAlpha = nodeAlphaBase * (0.55 + 0.45 * Math.sin(this.drawTime * 2.1 + i * 1.05));
-        ctx.strokeStyle = colorToCSS(coreColor, Math.min(0.38, edgeAlpha));
-        ctx.beginPath();
-        ctx.moveTo(na.x, na.y);
-        ctx.lineTo(nb.x, nb.y);
-        ctx.stroke();
-      }
-
-      // Draw glowing node dots.
-      for (let i = 0; i < nodeCount; i++) {
-        const n = nodes[i];
-        const na = nodeAlphaBase * (0.6 + 0.4 * Math.sin(this.drawTime * 3.3 + i * 1.57));
-        ctx.fillStyle = `rgba(215,248,255,${Math.min(0.62, na).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, Math.max(0.5, r * 0.040), 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    // Level 8: warp field compression rings — two concentric ellipses whose
-    // aspect ratio is squeezed along the ship's heading, suggesting that space
-    // itself is being compressed in front of the vessel.  The rings counter-pulse
-    // in phase so one swells while the other contracts, creating a heartbeat-like
-    // energy field distinct from the level-7 hexagonal lattice.
-    if (getCinematicLevel() >= 8) {
-      // Ship heading from velocity; fall back to angle property if stationary.
-      const vLen = Math.hypot(this.velocity.x, this.velocity.y);
-      const headAngle = vLen > 0.1 ? Math.atan2(this.velocity.y, this.velocity.x) : this.angle;
-
-      const pulse1 = 0.5 + 0.5 * Math.sin(this.drawTime * 2.8);
-      const pulse2 = 0.5 + 0.5 * Math.sin(this.drawTime * 2.8 + Math.PI);
-
-      const rings8 = [
-        { scale: 1.85 + pulse1 * 0.15, yScale: 0.42 - pulse1 * 0.06, alpha: 0.28 + pulse1 * 0.10 },
-        { scale: 2.20 + pulse2 * 0.18, yScale: 0.36 - pulse2 * 0.05, alpha: 0.18 + pulse2 * 0.08 },
-      ];
-
-      ctx.save();
-      ctx.translate(screen.x, screen.y);
-      ctx.rotate(headAngle);
-      ctx.globalCompositeOperation = 'screen';
-
-      for (const ring of rings8) {
-        const rx = r * ring.scale;
-        const ry = rx * ring.yScale;
-        const grad = ctx.createLinearGradient(-rx, 0, rx, 0);
-        grad.addColorStop(0.00, `rgba(80,200,255,0)`);
-        grad.addColorStop(0.25, `rgba(100,220,255,${(ring.alpha * 0.70).toFixed(3)})`);
-        grad.addColorStop(0.50, `rgba(180,240,255,${ring.alpha.toFixed(3)})`);
-        grad.addColorStop(0.75, `rgba(100,220,255,${(ring.alpha * 0.70).toFixed(3)})`);
-        grad.addColorStop(1.00, `rgba(80,200,255,0)`);
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = Math.max(0.5, r * 0.035);
-        ctx.beginPath();
-        ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-
-    // Level 9: bow shock plasma arc — a forward-facing compressed arc ahead of
-    // the ship in the direction of travel, suggesting the vessel is ploughing
-    // through the interstellar medium.  Scales in brightness with ship speed,
-    // and pulses gently to give a living, breathing energy presence.
-    if (getCinematicLevel() >= 9) {
-      const vLen9 = Math.hypot(this.velocity.x, this.velocity.y);
-      if (vLen9 > 0.05) {
-        const bowAngle = Math.atan2(this.velocity.y, this.velocity.x);
-        const compression = Math.min(1.0, vLen9 / 8.0);
-        const bowR = r * (2.4 + compression * 0.8);
-        const arcAlpha = (0.16 + compression * 0.14) * (0.7 + 0.3 * (0.5 + 0.5 * Math.sin(this.drawTime * 4.2)));
-        const arcHalf = Math.PI * 0.40;
-
-        ctx.save();
-        ctx.translate(screen.x, screen.y);
-        ctx.rotate(bowAngle);
-        ctx.globalCompositeOperation = 'screen';
-
-        const bowGrad = ctx.createRadialGradient(0, 0, bowR * 0.75, 0, 0, bowR * 1.25);
-        bowGrad.addColorStop(0, `rgba(60,200,255,0)`);
-        bowGrad.addColorStop(0.35, `rgba(100,230,255,${(arcAlpha * 0.65).toFixed(3)})`);
-        bowGrad.addColorStop(0.58, `rgba(190,250,255,${arcAlpha.toFixed(3)})`);
-        bowGrad.addColorStop(0.80, `rgba(100,210,255,${(arcAlpha * 0.50).toFixed(3)})`);
-        bowGrad.addColorStop(1.0, `rgba(60,160,255,0)`);
-
-        ctx.strokeStyle = bowGrad;
-        ctx.lineWidth = Math.max(0.5, r * 0.062);
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.arc(0, 0, bowR, -arcHalf, arcHalf);
-        ctx.stroke();
-
-        ctx.restore();
       }
     }
 

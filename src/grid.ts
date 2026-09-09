@@ -273,6 +273,17 @@ export class WorldGrid {
     }
   }
 
+  /** Cancel every not-yet-built conduit owned by a team. Returns the number removed. */
+  cancelPendingConduits(team: Team): number {
+    let removed = 0;
+    for (const [key, entry] of this.pendingConduits) {
+      if (entry.team !== team) continue;
+      this.pendingConduits.delete(key);
+      removed++;
+    }
+    return removed;
+  }
+
   /** True if (cx,cy) is a conduit OR has at least one 4-adjacent conduit. */
   isOnOrAdjacentToConduit(cx: number, cy: number, team?: Team): boolean {
     const probe = (kx: number, ky: number): boolean => {

@@ -347,10 +347,12 @@ function drawRadarWaypointMarker(
   x: number,
   y: number,
   group: ShipCommandGroup,
+  marker: WaypointMarker,
   time: number,
 ): void {
-  const color = group === 'all' ? Colors.alert2 : GROUP_COLORS[group];
-  const label = group === 'all' ? 'A' : `${group + 1}`;
+  const moveCommand = marker.kind === 'move';
+  const color = moveCommand ? Colors.radar_friendly_status : group === 'all' ? Colors.alert2 : GROUP_COLORS[group];
+  const label = moveCommand ? '+' : group === 'all' ? 'A' : `${group + 1}`;
   const pulse = 0.5 + 0.5 * Math.sin(time * 4.4 + (group === 'all' ? 1.7 : group));
   const radius = 9 + pulse * 3;
 
@@ -399,7 +401,11 @@ function drawRadarWaypointMarker(
   ctx.font = 'bold 12px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = colorToCSS(Colors.particles_switch, 0.95);
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(0,0,0,0.96)';
+  ctx.strokeText(label, 0, 0);
+  ctx.fillStyle = colorToCSS(color, 1);
   ctx.fillText(label, 0, 0);
   ctx.restore();
 }
@@ -652,7 +658,7 @@ export function drawRadarOverlay(
       const dx = (marker.pos.x - playerPos.x) * scale;
       const dy = (marker.pos.y - playerPos.y) * scale;
       if (dx * dx + dy * dy > radarRadius * radarRadius) continue;
-      drawRadarWaypointMarker(ctx, centerX + dx, centerY + dy, group, state.gameTime);
+      drawRadarWaypointMarker(ctx, centerX + dx, centerY + dy, group, marker, state.gameTime);
     }
   }
 
@@ -664,4 +670,3 @@ export function drawRadarOverlay(
     ctx.fillText(`${r}`, centerX + r * scale + 2, centerY - 2);
   }
 }
-

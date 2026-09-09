@@ -3,6 +3,20 @@
 import { Vec2 } from './math.js';
 
 const DOUBLE_TAP_WINDOW_MS = 200;
+const KEYBIND_STORAGE_KEY = 'sign99:keybinds';
+
+export const KEYBIND_DEFINITIONS = [
+  { key: 'w', label: 'Move Up' }, { key: 's', label: 'Move Down' },
+  { key: 'a', label: 'Move Left' }, { key: 'd', label: 'Move Right' },
+  { key: 'Shift', label: 'Boost / Brake' }, { key: 'Tab', label: 'Full-screen Radar' },
+  { key: 'c', label: 'Command Mode' }, { key: 'q', label: 'Action Menu' },
+  { key: 'z', label: 'Alternate Action' },
+  { key: 'x', label: 'Research Menu' },
+  { key: '1', label: 'Command / Build Slot 1' }, { key: '2', label: 'Command / Build Slot 2' },
+  { key: '3', label: 'Command / Build Slot 3' }, { key: '4', label: 'Command / Build Slot 4' },
+  { key: 'n', label: 'Next Target / Unit' }, { key: 'Escape', label: 'Menu / Pause' },
+] as const;
+export type BindableKey = typeof KEYBIND_DEFINITIONS[number]['key'];
 
 class InputManager {
   private keysDown = new Set<string>();
@@ -17,6 +31,7 @@ class InputManager {
   private doubleTapped = new Set<string>();
   /** Fired when a key is pressed for the second time within the double-tap window (double-tap-then-hold). */
   private doubleTapDown = new Set<string>();
+  private bindings = new Map<string, string>();
 
   mousePos = new Vec2(0, 0);
   mouseDown = false;
@@ -44,6 +59,7 @@ class InputManager {
   private readonly touchStickMaxRadiusPx = 72;
 
   constructor() {
+    this.loadBindings();
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.onKeyDown);
       window.addEventListener('keyup', this.onKeyUp);
@@ -58,6 +74,41 @@ class InputManager {
       window.addEventListener('touchcancel', this.onTouchEnd, { passive: false });
     }
   }
+
+  private loadBindings(): void {
+    for (const item of KEYBIND_DEFINITIONS) this.bindings.set(item.key, this.normalizeKey(item.key));
+    try {
+      const saved = JSON.parse(window.localStorage?.getItem(KEYBIND_STORAGE_KEY) ?? '{}') as Record<string, unknown>;
+      for (const item of KEYBIND_DEFINITIONS) {
+        const value = saved[item.key];
+        if (typeof value === 'string' && value) this.bindings.set(item.key, this.normalizeKey(value));
+      }
+    } catch { /* Invalid or unavailable storage: defaults remain active. */ }
+  }
+
+  private resolveKey(key: string): string {
+    return this.bindings.get(key) ?? this.normalizeKey(key);
+  }
+
+  getBinding(key: BindableKey): string { return this.bindings.get(key) ?? this.normalizeKey(key); }
+
+  setBinding(key: BindableKey, value: string): void {
+    const normalized = this.normalizeKey(value);
+    // Keep bindings unambiguous: swap with whichever action already owns this key.
+    const previous = this.getBinding(key);
+    for (const [action, bound] of this.bindings) if (action !== key && bound === normalized) this.bindings.set(action, previous);
+    this.bindings.set(key, normalized);
+    try { window.localStorage?.setItem(KEYBIND_STORAGE_KEY, JSON.stringify(Object.fromEntries(this.bindings))); } catch { /* optional */ }
+  }
+
+  resetBindings(): void {
+    for (const item of KEYBIND_DEFINITIONS) this.bindings.set(item.key, this.normalizeKey(item.key));
+    try { window.localStorage?.removeItem(KEYBIND_STORAGE_KEY); } catch { /* optional */ }
+  }
+
+  /** Raw physical keys pressed this frame, used by the key-capture settings UI. */
+  pressedKeys(): string[] { return [...this.keysPressed]; }
+  rawWasPressed(key: string): boolean { return this.keysPressed.has(this.normalizeKey(key)); }
 
   private clampStickVector(dx: number, dy: number): Vec2 {
     const mag = Math.hypot(dx, dy);
@@ -215,7 +266,7 @@ class InputManager {
       if (k === 'w') return this.touchMoveVec.y < -this.touchDeadZone;
       if (k === 's') return this.touchMoveVec.y > this.touchDeadZone;
     }
-    return this.keysDown.has(this.normalizeKey(key));
+    return this.keysDown.has(this.resolveKey(key));
   }
 
   getMoveVector(): Vec2 {
@@ -249,22 +300,22 @@ class InputManager {
 
   /** True only on the frame the key was first pressed. */
   wasPressed(key: string): boolean {
-    return this.keysPressed.has(this.normalizeKey(key));
+    return this.keysPressed.has(this.resolveKey(key));
   }
 
   /** True only on the frame the key was released. */
   wasReleased(key: string): boolean {
-    return this.keysReleased.has(this.normalizeKey(key));
+    return this.keysReleased.has(this.resolveKey(key));
   }
 
   /** True if the key was released twice within the double-tap window this frame. */
   isDoubleTapped(key: string): boolean {
-    return this.doubleTapped.has(this.normalizeKey(key));
+    return this.doubleTapped.has(this.resolveKey(key));
   }
 
   /** True on the frame the key is pressed for the second time quickly (double-tap-then-hold). */
   isDoubleTapDown(key: string): boolean {
-    return this.doubleTapDown.has(this.normalizeKey(key));
+    return this.doubleTapDown.has(this.resolveKey(key));
   }
 
   /**

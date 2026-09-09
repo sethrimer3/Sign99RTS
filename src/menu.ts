@@ -18,13 +18,15 @@
  */
 
 import { Colors, TextColors, colorToCSS } from './colors.js';
-import { Input } from './input.js';
+import { MenuTriangleBackground, setMenuTrianglePalette } from './menuTriangles.js';
+import { SPACE_COLOR_OPTIONS, activeSpaceColor, saveSpaceThemeSettings, spaceColorLabel, spaceThemeSettings, type SpaceColorId } from './spaceTheme.js';
+import { Input, KEYBIND_DEFINITIONS, type BindableKey } from './input.js';
 import { Audio } from './audio.js';
 import { buildLabel } from './version.js';
 import { gameFont } from './fonts.js';
 import { drawDecodedText } from './decodeText.js';
 import { t as tr, LOCALES, LOCALE_NAMES, getLocale, setLocale, type Locale } from './i18n.js';
-import { applyThemeColors, cycleThemeColor, themeColorLabel, themeSettings, type ThemeColorId } from './theme.js';
+import { applyThemeColors, cycleThemeColor, saveThemeSettings, themeColor, themeColorLabel, themeSettings, type ThemeColorId } from './theme.js';
 import {
   PracticeConfig,
   cloneDefaultPracticeConfig,
@@ -76,6 +78,7 @@ import { OnlineLobbyManager } from './online/onlineLobby.js';
 import { SignalingClient } from './online/signalingClient.js';
 import { DEFAULT_VISUAL_QUALITY, type VisualQuality } from './visualquality.js';
 import { clampCinematicLevel, type CinematicLevel } from './cinematic.js';
+import { drawTerranFighterHull } from './fighter.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -176,6 +179,7 @@ export class MainMenu {
   /** Latched click pulse for visual feedback. */
   private clickPulse: { rect: HitRect; t: number } | null = null;
 
+  private triangleBackground = new MenuTriangleBackground();
   private bgStars: BackgroundStar[] = [];
   private animTime: number = 0;
   private openedAt: number = performance.now() * 0.001;
@@ -194,6 +198,12 @@ export class MainMenu {
    */
   visualQuality: VisualQuality = DEFAULT_VISUAL_QUALITY;
   cinematicLevel: CinematicLevel = 1;
+  /**
+   * When true, newer visual systems fall back to their original ("legacy")
+   * rendering.  Set externally by game.ts; toggled from the Graphics settings
+   * tab via a checkbox.
+   */
+  legacyGraphics: boolean = false;
   gameZoom: number = 1.0;
   uiZoom: number = 1.0;
 
@@ -307,6 +317,21 @@ export class MainMenu {
   private mouseXLatched: number = 0;
   private mouseYLatched: number = 0;
   private rankedSliderDragging: boolean = false;
+  private sliderDraggingKey: string | null = null;
+  private wheelDeltaLatched: number = 0;
+  private settingsScroll: number = 0;
+  private settingsScrollbarDragging: boolean = false;
+  private settingsScrollbarGrabOffset: number = 0;
+  private menuInputOffsetY: number = 0;
+  private menuInputViewport: HitRect | null = null;
+  /** Previewed while dragging so changing UI scale cannot move the slider under the pointer. */
+  private pendingUiZoom: number | null = null;
+  private settingsTab: 'gameplay' | 'graphics' | 'audio' | 'controls' = 'gameplay';
+  private settingsOrigin: 'title' | 'pause' = 'title';
+  private surrenderArmed = false;
+  private languageDropdownOpen = false;
+  private spaceColorDropdownOpen = false;
+  private awaitingBinding: BindableKey | null = null;
 
   // Output set by setup screens after the user clicks their start button.
   private pendingAction: MenuAction = 'none';
@@ -318,11 +343,22 @@ export class MainMenu {
   openTitle(): void {
     this.state = 'title';
     this.selectedIndex = 0;
+    this.surrenderArmed = false;
   }
 
   openPause(): void {
     this.state = 'pause';
     this.selectedIndex = 0;
+    this.surrenderArmed = false;
+  }
+
+  private openSettings(origin: 'title' | 'pause'): void {
+    this.settingsOrigin = origin;
+    this.settingsTab = 'gameplay';
+    this.languageDropdownOpen = false;
+    this.spaceColorDropdownOpen = false;
+    this.awaitingBinding = null;
+    this.setState('settings');
   }
 
   close(): void {
@@ -333,8 +369,13 @@ export class MainMenu {
     if (s !== 'lan_browser') this.stopLanDiscoveryListening();
     if (s !== 'lan_host_lobby' && this.state === 'lan_host_lobby') this.cancelPendingHostStart();
     this.state = s;
+    this.surrenderArmed = false;
     this.selectedIndex = 0;
     this.rankedSliderDragging = false;
+    this.sliderDraggingKey = null;
+    this.settingsScrollbarDragging = false;
+    this.settingsScroll = 0;
+    this.pendingUiZoom = null;
     this.hits = [];
     this.openedAt = performance.now() * 0.001;
     Audio.playSound('menucursor');
@@ -346,6 +387,7 @@ export class MainMenu {
 
   update(dt: number, screenW: number, screenH: number): MenuAction {
     this.animTime += dt;
+    this.triangleBackground.update(dt, screenW, screenH, this.state);
 
     // Latch the mouse state *before* Input.update() resets `mousePressed`
     // later this tick. draw() consumes this latched state.
@@ -360,6 +402,19 @@ export class MainMenu {
       // Keep the latched position fresh for hover tests when no click is queued.
       this.mouseXLatched = this.mouseX();
       this.mouseYLatched = this.mouseY();
+    }
+    if (Input.wheelDelta !== 0) this.wheelDeltaLatched += Input.wheelDelta;
+    if (this.awaitingBinding) {
+      const pressed = Input.pressedKeys()[0];
+      if (pressed) {
+        if (pressed === 'Escape') this.awaitingBinding = null;
+        else {
+          Input.setBinding(this.awaitingBinding, pressed);
+          this.awaitingBinding = null;
+          Audio.playSound('menuselection');
+        }
+        return 'none';
+      }
     }
 
     if (screenW !== this.lastScreenW || screenH !== this.lastScreenH) {
@@ -401,7 +456,13 @@ export class MainMenu {
 
     if (this.state === 'none') return 'none';
     if (Input.mouseReleased || !Input.mouseDown) {
+      if (this.pendingUiZoom !== null) {
+        this.uiZoom = this.pendingUiZoom;
+        this.pendingUiZoom = null;
+      }
       this.rankedSliderDragging = false;
+      this.sliderDraggingKey = null;
+      this.settingsScrollbarDragging = false;
     }
 
     return this.handleSimpleListInput();
@@ -416,26 +477,26 @@ export class MainMenu {
     const opts = this.currentSimpleOptions();
     if (!opts) return 'none';
 
-    if (Input.wasPressed('ArrowUp')) {
+    if (Input.rawWasPressed('ArrowUp')) {
       this.selectedIndex = (this.selectedIndex - 1 + opts.length) % opts.length;
       Audio.playSound('menucursor');
     }
-    if (Input.wasPressed('ArrowDown')) {
+    if (Input.rawWasPressed('ArrowDown')) {
       this.selectedIndex = (this.selectedIndex + 1) % opts.length;
       Audio.playSound('menucursor');
     }
-    if (Input.wasPressed('Enter') || Input.wasPressed(' ')) {
+    if (Input.rawWasPressed('Enter') || Input.rawWasPressed(' ')) {
       Audio.playSound('menuselection');
       opts[this.selectedIndex].action();
       return this.takePending();
     }
-    if (this.state === 'pause' && Input.wasPressed('Escape')) {
+    if (this.state === 'pause' && Input.rawWasPressed('Escape')) {
       Audio.playSound('menuselection');
       this.pendingAction = 'resume';
       return this.takePending();
     }
     if (
-      Input.wasPressed('Escape') &&
+      Input.rawWasPressed('Escape') &&
       (this.state === 'play' ||
         this.state === 'vs_ai_setup' ||
         this.state === 'practice_setup' ||
@@ -445,7 +506,8 @@ export class MainMenu {
         this.state === 'online_join')
     ) {
       Audio.playSound('menucursor');
-      this.setState('title');
+      if (this.state === 'settings') this.setState(this.settingsOrigin);
+      else this.setState('title');
     }
 
     return 'none';
@@ -471,7 +533,7 @@ export class MainMenu {
             description: tr('menu.title.practice.desc') },
           { label: tr('menu.title.tutorial'), action: () => { this.pendingAction = 'tutorial'; },
             description: tr('menu.title.tutorial.desc') },
-          { label: tr('menu.title.settings'), action: () => this.setState('settings'),
+          { label: tr('menu.title.settings'), action: () => this.openSettings('title'),
             description: tr('menu.title.settings.desc') },
         ];
       case 'play':
@@ -511,22 +573,14 @@ export class MainMenu {
       case 'pause':
         return [
           { label: tr('menu.pause.resume'), action: () => { this.pendingAction = 'resume'; } },
+          { label: tr('menu.title.settings'), action: () => this.openSettings('pause') },
           {
-            label: tr('menu.pause.graphics', { value: visualQualityLabel(this.visualQuality) }),
+            label: tr(this.surrenderArmed ? 'menu.pause.confirmSurrender' : 'menu.pause.quit'),
             action: () => {
-              const next: Record<VisualQuality, VisualQuality> = {
-                ultraLow: 'low',
-                low: 'medium',
-                medium: 'high',
-                high: 'ultraLow',
-              };
-              this.visualQuality = next[this.visualQuality];
+              if (this.surrenderArmed) this.pendingAction = 'quit_to_menu';
+              else this.surrenderArmed = true;
             },
-            description: tr('menu.pause.graphics.desc'),
           },
-          { label: tr('menu.pause.audio'), action: () => { /* sliders render below */ },
-            description: tr('menu.pause.audio.desc') },
-          { label: tr('menu.pause.quit'), action: () => { this.pendingAction = 'quit_to_menu'; } },
         ];
       default:
         return null;
@@ -576,6 +630,7 @@ export class MainMenu {
     // Always clear the latch at the end of a draw so the same click
     // never fires twice across consecutive frames.
     this.mousePressedLatched = false;
+    this.wheelDeltaLatched = 0;
   }
 
   // -------------------------------------------------------------------
@@ -583,35 +638,16 @@ export class MainMenu {
   // -------------------------------------------------------------------
 
   private drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const space = activeSpaceColor();
+    setMenuTrianglePalette(space.trianglePalette);
     const bg = ctx.createRadialGradient(w * 0.72, h * 0.18, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.78);
-    bg.addColorStop(0, '#082746');
-    bg.addColorStop(0.42, '#06142d');
-    bg.addColorStop(1, '#13051f');
+    for (const [offset, colour] of space.menuGradient) bg.addColorStop(offset, colour);
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
     ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
+    this.triangleBackground.draw(ctx);
     const drift = this.animTime * 18;
-    const auroraA = ctx.createLinearGradient(w * 0.08, h * 0.2, w * 0.92, h * 0.82);
-    auroraA.addColorStop(0, MENU_ACCENT_CYAN + '0)');
-    auroraA.addColorStop(0.35, MENU_ACCENT_CYAN + '0.10)');
-    auroraA.addColorStop(0.58, MENU_ACCENT_PINK + '0.08)');
-    auroraA.addColorStop(1, MENU_ACCENT_CYAN + '0)');
-    ctx.fillStyle = auroraA;
-    ctx.beginPath();
-    ctx.ellipse(w * 0.54 + Math.sin(this.animTime * 0.23) * 34, h * 0.56, w * 0.52, h * 0.20, -0.18, 0, Math.PI * 2);
-    ctx.fill();
-
-    const auroraB = ctx.createLinearGradient(w * 0.2, h * 0.84, w * 0.95, h * 0.2);
-    auroraB.addColorStop(0, MENU_ACCENT_GOLD + '0)');
-    auroraB.addColorStop(0.45, MENU_ACCENT_GOLD + '0.07)');
-    auroraB.addColorStop(1, MENU_ACCENT_CYAN + '0)');
-    ctx.fillStyle = auroraB;
-    ctx.beginPath();
-    ctx.ellipse(w * 0.72, h * 0.34 + Math.cos(this.animTime * 0.19) * 18, w * 0.44, h * 0.16, -0.42, 0, Math.PI * 2);
-    ctx.fill();
-
     ctx.globalCompositeOperation = 'source-over';
     ctx.strokeStyle = colorToCSS(Colors.radar_gridlines, 0.055);
     ctx.lineWidth = 1;
@@ -807,7 +843,7 @@ export class MainMenu {
     ctx.fillRect(0, 0, w, h);
 
     const cx = w * 0.5;
-    const headerY = h * 0.35;
+    const headerY = Math.max(82, h * 0.16);
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -824,23 +860,8 @@ export class MainMenu {
     ctx.lineTo(cx + tw * 0.5, headerY + 22);
     ctx.stroke();
 
-    const settingsX = cx - 220;
-    let y = headerY + 74;
-    const rowH = 34;
-    y = this.drawVolumeSliderRow(ctx, settingsX, y, rowH, 'Music Volume', Audio.getMusicVolume(), (v) => {
-      Audio.setMusicVolume(v);
-    });
-    this.drawVolumeSliderRow(ctx, settingsX, y, rowH, 'SFX Volume', Audio.getSfxVolume(), (v) => {
-      Audio.setSfxVolume(v);
-    });
-
     const opts = this.currentSimpleOptions()!;
-    const menuStartY = h * 0.63;
-    this.drawClickableOptions(ctx, cx, menuStartY, opts.slice(0, 2), 0);
-    this.drawCinematicSliderRow(ctx, settingsX, menuStartY + 108, rowH, this.cinematicLevel, (v) => {
-      this.cinematicLevel = v;
-    });
-    this.drawClickableOptions(ctx, cx, menuStartY + 184, opts.slice(2), 2);
+    this.drawClickableOptions(ctx, cx, headerY + 92, opts);
   }
 
   // -------------------------------------------------------------------
@@ -1108,8 +1129,15 @@ export class MainMenu {
   }
 
   private drawSettings(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    this.drawBackground(ctx, w, h);
-    this.drawBuildBadge(ctx, w);
+    if (this.settingsOrigin === 'pause') {
+      // The game world has already been rendered by Game.render(). Keep it
+      // visible behind settings so opening this screen still reads as paused.
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      this.drawBackground(ctx, w, h);
+      this.drawBuildBadge(ctx, w);
+    }
 
     const cx = w * 0.5;
     ctx.textAlign = 'center';
@@ -1118,59 +1146,73 @@ export class MainMenu {
     ctx.fillStyle = colorToCSS(TextColors.title);
     ctx.fillText(tr('settings.heading'), cx, 90);
 
+    this.drawButtonRow(ctx, [
+      { label: tr('settings.tab.gameplay'), emphasis: this.settingsTab === 'gameplay', action: () => { this.settingsTab = 'gameplay'; this.settingsScroll = 0; } },
+      { label: tr('settings.tab.graphics'), emphasis: this.settingsTab === 'graphics', action: () => { this.settingsTab = 'graphics'; this.settingsScroll = 0; } },
+      { label: tr('settings.tab.audio'), emphasis: this.settingsTab === 'audio', action: () => { this.settingsTab = 'audio'; this.settingsScroll = 0; } },
+      { label: tr('settings.tab.controls'), emphasis: this.settingsTab === 'controls', action: () => { this.settingsTab = 'controls'; this.settingsScroll = 0; } },
+    ], cx, 130);
+
     const x = cx - 230;
-    let y = 160;
+    let y = 190;
     const rowH = 44;
+    const viewportTop = 165;
+    const viewportBottom = Math.max(viewportTop + 80, h - 115);
+    const viewportH = viewportBottom - viewportTop;
+    const contentBottom = this.settingsTab === 'controls'
+      ? 190 + KEYBIND_DEFINITIONS.length * rowH + 90
+      : this.settingsTab === 'gameplay' ? (this.languageDropdownOpen ? 620 : 390)
+      : this.settingsTab === 'graphics' ? (this.spaceColorDropdownOpen ? 608 + SPACE_COLOR_OPTIONS.length * 30 : 608)
+      : 520;
+    const maxScroll = Math.max(0, contentBottom - viewportBottom);
+    if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
+      this.settingsScroll = Math.max(0, Math.min(maxScroll, this.settingsScroll + this.wheelDeltaLatched * 0.55));
+    }
+    this.settingsScroll = Math.max(0, Math.min(maxScroll, this.settingsScroll));
 
-    const LOCALE_OPTIONS: Locale[] = [...LOCALES];
-    y = this.drawCycleRow<Locale>(
-      ctx, x, y, rowH, tr('settings.language'),
-      getLocale(),
-      LOCALE_OPTIONS,
-      (v) => { setLocale(v); },
-      (v) => LOCALE_NAMES[v],
-    );
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, viewportTop, w, viewportH);
+    ctx.clip();
+    ctx.translate(0, -this.settingsScroll);
+    this.menuInputOffsetY = this.settingsScroll;
+    this.menuInputViewport = { x: 0, y: viewportTop, w, h: viewportH };
 
-    const QUALITY_OPTIONS: VisualQuality[] = ['ultraLow', 'low', 'medium', 'high'];
-    y = this.drawCycleRow<VisualQuality>(
-      ctx, x, y, rowH, tr('settings.graphicsQuality'),
-      this.visualQuality,
-      QUALITY_OPTIONS,
-      (v) => { this.visualQuality = v; },
-      visualQualityLabel,
-      QUALITY_OPTIONS.indexOf(this.visualQuality) / (QUALITY_OPTIONS.length - 1),
-    );
+    if (this.settingsTab === 'gameplay') {
+      y = this.drawLanguageDropdown(ctx, x, y, rowH);
+      this.drawDiscordButton(ctx, cx, y + 62);
+    } else if (this.settingsTab === 'graphics') {
+      const qualities: VisualQuality[] = ['ultraLow', 'low', 'medium', 'high'];
+      y = this.drawCycleRow(ctx, x, y, rowH, tr('settings.graphicsQuality'), this.visualQuality, qualities,
+        (v) => { this.visualQuality = v; }, visualQualityLabel, qualities.indexOf(this.visualQuality) / 3);
+      y = this.drawCinematicSliderRow(ctx, x, y, rowH, this.cinematicLevel, (v) => { this.cinematicLevel = v; });
+      y = this.drawCheckboxRow(ctx, x, y, rowH, tr('settings.legacyGraphics'), this.legacyGraphics,
+        (v) => { this.legacyGraphics = v; });
+      y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.playerColor'), themeSettings.playerColor, themeSettings.enemyColor, false, (v) => {
+        themeSettings.playerColor = v; applyThemeColors(); saveThemeSettings();
+      });
+      y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.enemyColor'), themeSettings.enemyColor, themeSettings.playerColor, true, (v) => {
+        themeSettings.enemyColor = v; applyThemeColors(); saveThemeSettings();
+      });
+      y = this.drawSpaceColorDropdown(ctx, x, y, rowH);
+      y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.gameZoom'), this.gameZoom, (v) => { this.gameZoom = v; });
+      this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.uiZoom'), this.pendingUiZoom ?? this.uiZoom, (v) => { this.pendingUiZoom = v; });
+    } else if (this.settingsTab === 'audio') {
+      y = this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.musicVolume'), Audio.getMusicVolume(), (v) => Audio.setMusicVolume(v));
+      this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.sfxVolume'), Audio.getSfxVolume(), (v) => Audio.setSfxVolume(v));
+    } else {
+      for (const binding of KEYBIND_DEFINITIONS) y = this.drawKeybindRow(ctx, x, y, rowH, binding.label, binding.key);
+      this.drawButtonRow(ctx, [{ label: tr('common.resetDefaults'), action: () => Input.resetBindings() }], cx, y + 18);
+    }
 
-    y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.playerColor'), themeSettings.playerColor, (v) => {
-      themeSettings.playerColor = v;
-      applyThemeColors();
-    });
-    y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.enemyColor'), themeSettings.enemyColor, (v) => {
-      themeSettings.enemyColor = v;
-      applyThemeColors();
-    });
-    y = this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.musicVolume'), Audio.getMusicVolume(), (v) => {
-      Audio.setMusicVolume(v);
-    });
-    y = this.drawVolumeSliderRow(ctx, x, y, rowH, tr('settings.sfxVolume'), Audio.getSfxVolume(), (v) => {
-      Audio.setSfxVolume(v);
-    });
-    y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.gameZoom'), this.gameZoom, (v) => {
-      this.gameZoom = v;
-    });
-    y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.uiZoom'), this.uiZoom, (v) => {
-      this.uiZoom = v;
-    });
+    this.menuInputOffsetY = 0;
+    this.menuInputViewport = null;
+    ctx.restore();
 
-    ctx.font = gameFont(16);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = colorToCSS(TextColors.normal, 0.75);
-    ctx.fillText(tr('settings.fontNote'), cx, y + 36);
-
-    this.drawDiscordButton(ctx, cx, y + 86);
+    if (maxScroll > 0) this.drawSettingsScrollbar(ctx, w, viewportTop, viewportH, maxScroll);
 
     this.drawButtonRow(ctx, [
-      { label: tr('common.back'), action: () => this.setState('title'), emphasis: true },
+      { label: tr('common.back'), action: () => this.setState(this.settingsOrigin), emphasis: true },
     ], cx, h - 70);
   }
 
@@ -1319,6 +1361,8 @@ export class MainMenu {
     h: number,
     label: string,
     value: ThemeColorId,
+    excluded: ThemeColorId,
+    hostile: boolean,
     onChange: (v: ThemeColorId) => void,
   ): number {
     this.drawRowLabel(ctx, x, y, label);
@@ -1333,11 +1377,103 @@ export class MainMenu {
     ctx.font = gameFont(18);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = colorToCSS(TextColors.normal, 0.95);
+    const selectedColor = themeColor(value);
+    ctx.fillStyle = colorToCSS(selectedColor, 0.95);
+    ctx.shadowColor = colorToCSS(selectedColor, 0.65);
+    ctx.shadowBlur = 7;
     ctx.fillText(themeColorLabel(value), bodyRect.x + bodyRect.w / 2, y);
-    if (this.handleClick(leftRect)) onChange(cycleThemeColor(value, -1));
-    if (this.handleClick(rightRect) || this.handleClick(bodyRect)) onChange(cycleThemeColor(value, 1));
+    ctx.shadowBlur = 0;
+    this.drawColorShipWaypoint(ctx, valX + valW + 31, y, selectedColor, hostile);
+    if (this.handleClick(leftRect)) onChange(cycleThemeColor(value, -1, excluded));
+    if (this.handleClick(rightRect) || this.handleClick(bodyRect)) onChange(cycleThemeColor(value, 1, excluded));
     return y + h;
+  }
+
+  private drawSettingsScrollbar(ctx: CanvasRenderingContext2D, w: number, trackY: number, trackH: number, maxScroll: number): void {
+    const track: HitRect = { x: w - 25, y: trackY, w: 10, h: trackH };
+    const totalH = trackH + maxScroll;
+    const thumbH = Math.max(34, trackH * (trackH / totalH));
+    const travel = trackH - thumbH;
+    const thumbY = trackY + (this.settingsScroll / maxScroll) * travel;
+    const thumb: HitRect = { x: track.x - 5, y: thumbY, w: track.w + 10, h: thumbH };
+    const rawX = this.rawMouseX();
+    const rawY = this.rawMouseY();
+
+    if (this.mousePressedLatched && pointInRect(this.mouseXLatched, this.mouseYLatched, thumb)) {
+      this.settingsScrollbarDragging = true;
+      this.settingsScrollbarGrabOffset = this.mouseYLatched - thumbY;
+      this.mousePressedLatched = false;
+    } else if (this.mousePressedLatched && pointInRect(this.mouseXLatched, this.mouseYLatched, track)) {
+      this.settingsScroll = Math.max(0, Math.min(maxScroll, ((this.mouseYLatched - trackY - thumbH * 0.5) / travel) * maxScroll));
+      this.settingsScrollbarDragging = true;
+      this.settingsScrollbarGrabOffset = thumbH * 0.5;
+      this.mousePressedLatched = false;
+    }
+    if (this.settingsScrollbarDragging && Input.mouseDown) {
+      this.settingsScroll = Math.max(0, Math.min(maxScroll, ((rawY - trackY - this.settingsScrollbarGrabOffset) / travel) * maxScroll));
+    }
+
+    ctx.save();
+    ctx.fillStyle = colorToCSS(Colors.menu_background, 0.78);
+    ctx.fillRect(track.x, track.y, track.w, track.h);
+    ctx.strokeStyle = MENU_ACCENT_CYAN + '0.48)';
+    ctx.strokeRect(track.x + 0.5, track.y + 0.5, track.w - 1, track.h - 1);
+    const gradient = ctx.createLinearGradient(thumb.x, thumbY, thumb.x + thumb.w, thumbY);
+    gradient.addColorStop(0, MENU_ACCENT_CYAN + '0.78)');
+    gradient.addColorStop(1, MENU_ACCENT_PINK + '0.82)');
+    ctx.shadowColor = MENU_ACCENT_CYAN + '0.75)';
+    ctx.shadowBlur = pointInRect(rawX, rawY, thumb) || this.settingsScrollbarDragging ? 13 : 6;
+    ctx.fillStyle = gradient;
+    ctx.fillRect(thumb.x, thumbY, thumb.w, thumbH);
+    ctx.restore();
+  }
+
+  private drawColorShipWaypoint(ctx: CanvasRenderingContext2D, x: number, y: number, color: { r: number; g: number; b: number; intensity: number }, hostile: boolean): void {
+    const orbitRadius = 13;
+    const angle = this.animTime * 2.15;
+    const shipX = x + Math.cos(angle) * orbitRadius;
+    const shipY = y + Math.sin(angle) * orbitRadius * 0.55;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = colorToCSS(color, 0.38);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.ellipse(x, y, orbitRadius, orbitRadius * 0.55, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const pulse = 1 + Math.sin(this.animTime * 4.5) * 0.18;
+    ctx.strokeStyle = colorToCSS(color, 0.82);
+    ctx.beginPath();
+    ctx.arc(x, y, 3.4 * pulse, 0, Math.PI * 2);
+    ctx.moveTo(x - 6, y);
+    ctx.lineTo(x + 6, y);
+    ctx.moveTo(x, y - 6);
+    ctx.lineTo(x, y + 6);
+    ctx.stroke();
+
+    ctx.translate(shipX, shipY);
+    ctx.rotate(angle + Math.PI / 2);
+    ctx.shadowColor = colorToCSS(color, 0.9);
+    ctx.shadowBlur = 7;
+    const fighterRadius = 6.5;
+    drawTerranFighterHull(ctx, fighterRadius, color, hostile, 0.92);
+    const enginePulse = 0.5 + 0.5 * Math.sin(this.animTime * 5.3);
+    ctx.fillStyle = colorToCSS(color, 0.18 + enginePulse * 0.10);
+    ctx.beginPath();
+    ctx.arc(-fighterRadius * 0.7, 0, fighterRadius * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = colorToCSS(color, 0.88);
+    ctx.beginPath();
+    ctx.arc(0, 0, fighterRadius * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = colorToCSS(Colors.particles_switch, 0.34);
+    ctx.beginPath();
+    ctx.arc(-fighterRadius * 0.09, -fighterRadius * 0.09, fighterRadius * 0.14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   // -------------------------------------------------------------------
@@ -1419,6 +1555,91 @@ export class MainMenu {
     return y + h;
   }
 
+  private drawLanguageDropdown(ctx: CanvasRenderingContext2D, x: number, y: number, h: number): number {
+    this.drawRowLabel(ctx, x, y, tr('settings.language'));
+    const rect: HitRect = { x: x + 200, y: y - 15, w: 240, h: 30 };
+    this.drawControlWell(ctx, rect, pointInRect(this.mouseX(), this.mouseY(), rect), this.languageDropdownOpen ? 1 : 0);
+    ctx.font = gameFont(17);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = colorToCSS(TextColors.normal);
+    ctx.fillText(`${LOCALE_NAMES[getLocale()]}  ▾`, rect.x + rect.w / 2, y);
+    if (this.handleClick(rect)) this.languageDropdownOpen = !this.languageDropdownOpen;
+    if (this.languageDropdownOpen) {
+      let optionY = rect.y + rect.h;
+      for (const locale of LOCALES) {
+        const option: HitRect = { x: rect.x, y: optionY, w: rect.w, h: 30 };
+        this.drawControlWell(ctx, option, pointInRect(this.mouseX(), this.mouseY(), option), locale === getLocale() ? 1 : 0);
+        ctx.fillStyle = colorToCSS(TextColors.normal);
+        ctx.fillText(LOCALE_NAMES[locale], option.x + option.w / 2, option.y + option.h / 2);
+        if (this.handleClick(option)) { setLocale(locale); this.languageDropdownOpen = false; }
+        optionY += option.h;
+      }
+      return y + h + LOCALES.length * 30;
+    }
+    return y + h;
+  }
+
+  private drawSpaceColorDropdown(ctx: CanvasRenderingContext2D, x: number, y: number, h: number): number {
+    this.drawRowLabel(ctx, x, y, tr('settings.spaceColor'));
+    const rect: HitRect = { x: x + 200, y: y - 15, w: 240, h: 30 };
+    const current = spaceThemeSettings.spaceColor;
+
+    const drawSwatch = (r: HitRect, colour: string): void => {
+      const s = 14;
+      const sx = r.x + 12;
+      const sy = r.y + r.h / 2 - s / 2;
+      ctx.fillStyle = colour;
+      ctx.fillRect(sx, sy, s, s);
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx + 0.5, sy + 0.5, s - 1, s - 1);
+    };
+
+    this.drawControlWell(ctx, rect, pointInRect(this.mouseX(), this.mouseY(), rect), this.spaceColorDropdownOpen ? 1 : 0);
+    drawSwatch(rect, activeSpaceColor().swatch);
+    ctx.font = gameFont(17);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = colorToCSS(TextColors.normal);
+    ctx.fillText(`${spaceColorLabel(current)}  ▾`, rect.x + rect.w / 2 + 10, y);
+    if (this.handleClick(rect)) this.spaceColorDropdownOpen = !this.spaceColorDropdownOpen;
+
+    if (this.spaceColorDropdownOpen) {
+      let optionY = rect.y + rect.h;
+      for (const option of SPACE_COLOR_OPTIONS) {
+        const row: HitRect = { x: rect.x, y: optionY, w: rect.w, h: 30 };
+        this.drawControlWell(ctx, row, pointInRect(this.mouseX(), this.mouseY(), row), option.id === current ? 1 : 0);
+        drawSwatch(row, option.swatch);
+        ctx.fillStyle = colorToCSS(TextColors.normal);
+        ctx.fillText(option.label, row.x + row.w / 2 + 10, row.y + row.h / 2);
+        if (this.handleClick(row)) {
+          spaceThemeSettings.spaceColor = option.id as SpaceColorId;
+          saveSpaceThemeSettings();
+          this.spaceColorDropdownOpen = false;
+        }
+        optionY += row.h;
+      }
+      return y + h + SPACE_COLOR_OPTIONS.length * 30;
+    }
+    return y + h;
+  }
+
+  private drawKeybindRow(ctx: CanvasRenderingContext2D, x: number, y: number, h: number, label: string, key: BindableKey): number {
+    this.drawRowLabel(ctx, x, y, label);
+    const rect: HitRect = { x: x + 200, y: y - 14, w: 240, h: 28 };
+    const active = this.awaitingBinding === key;
+    this.drawControlWell(ctx, rect, pointInRect(this.mouseX(), this.mouseY(), rect), active ? 1 : 0);
+    ctx.font = gameFont(17);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = colorToCSS(TextColors.normal);
+    const bound = Input.getBinding(key);
+    ctx.fillText(active ? tr('settings.pressKey') : (bound.length === 1 ? bound.toUpperCase() : bound), rect.x + rect.w / 2, y);
+    if (this.handleClick(rect)) this.awaitingBinding = key;
+    return y + h;
+  }
+
   private drawSliderRow(
     ctx: CanvasRenderingContext2D, x: number, y: number, h: number,
     label: string, value: number, min: number, max: number, step: number,
@@ -1478,7 +1699,13 @@ export class MainMenu {
     ctx.fillStyle = colorToCSS(TextColors.normal, 0.85);
     ctx.fillText(fmt(value), sx + sw + 12, y);
 
-    if (this.handleClick(track) || (Input.mouseDown && pointInRect(this.mouseX(), this.mouseY(), track))) {
+    const sliderKey = `${this.state}:${label}:${x}`;
+    if (this.mousePressedLatched && this.menuPointerInRect(this.mouseXLatched, this.mouseYLatched, track)) {
+      this.sliderDraggingKey = sliderKey;
+      this.mousePressedLatched = false;
+      this.clickPulse = { rect: track, t: 0.18 };
+    }
+    if (this.sliderDraggingKey === sliderKey && Input.mouseDown) {
       const tt = Math.max(0, Math.min(1, (this.mouseX() - sx) / sw));
       let v = min + tt * (max - min);
       v = Math.round(v / step) * step;
@@ -1532,7 +1759,7 @@ export class MainMenu {
       'Cinematic Slider',
       value,
       -3,
-      9,
+      5,
       1,
       (v) => onChange(clampCinematicLevel(v)),
       (v) => String(Math.round(v)),
@@ -2316,30 +2543,30 @@ export class MainMenu {
     const text = this.getActiveJoinText();
     const cursor = this.getActiveJoinCursor();
 
-    if (Input.wasPressed('Backspace')) {
+    if (Input.rawWasPressed('Backspace')) {
       if (cursor > 0) {
         this.setActiveJoinText(text.slice(0, cursor - 1) + text.slice(cursor));
         this.setActiveJoinCursor(cursor - 1);
       }
     }
-    if (Input.wasPressed('Delete')) {
+    if (Input.rawWasPressed('Delete')) {
       if (cursor < text.length) {
         this.setActiveJoinText(text.slice(0, cursor) + text.slice(cursor + 1));
       }
     }
-    if (Input.wasPressed('ArrowLeft')) {
+    if (Input.rawWasPressed('ArrowLeft')) {
       this.setActiveJoinCursor(Math.max(0, this.getActiveJoinCursor() - 1));
     }
-    if (Input.wasPressed('ArrowRight')) {
+    if (Input.rawWasPressed('ArrowRight')) {
       this.setActiveJoinCursor(Math.min(this.getActiveJoinText().length, this.getActiveJoinCursor() + 1));
     }
-    if (Input.wasPressed('Home')) {
+    if (Input.rawWasPressed('Home')) {
       this.setActiveJoinCursor(0);
     }
-    if (Input.wasPressed('End')) {
+    if (Input.rawWasPressed('End')) {
       this.setActiveJoinCursor(this.getActiveJoinText().length);
     }
-    if (Input.wasPressed('Tab')) {
+    if (Input.rawWasPressed('Tab')) {
       this._joinActiveField = this._joinActiveField === 'url' ? 'name' : 'url';
       this.clampJoinCursors();
     }
@@ -2999,7 +3226,7 @@ export class MainMenu {
    */
   private handleClick(rect: HitRect): boolean {
     if (!this.mousePressedLatched) return false;
-    if (!pointInRect(this.mouseXLatched, this.mouseYLatched, rect)) return false;
+    if (!this.menuPointerInRect(this.mouseXLatched, this.mouseYLatched, rect)) return false;
     Audio.playSound('menuselection');
     this.clickPulse = { rect, t: 0.18 };
     this.mousePressedLatched = false;
@@ -3008,11 +3235,24 @@ export class MainMenu {
   }
 
   private mouseX(): number {
-    return Input.mousePos.x / Math.max(0.01, this.uiZoom);
+    return this.rawMouseX();
   }
 
   private mouseY(): number {
+    return this.rawMouseY() + this.menuInputOffsetY;
+  }
+
+  private rawMouseX(): number {
+    return Input.mousePos.x / Math.max(0.01, this.uiZoom);
+  }
+
+  private rawMouseY(): number {
     return Input.mousePos.y / Math.max(0.01, this.uiZoom);
+  }
+
+  private menuPointerInRect(x: number, y: number, rect: HitRect): boolean {
+    if (this.menuInputViewport && !pointInRect(x, y, this.menuInputViewport)) return false;
+    return pointInRect(x, y + this.menuInputOffsetY, rect);
   }
 }
 

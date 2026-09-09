@@ -56,17 +56,8 @@ function createSunPlacement(): SunPlacement {
 const SUN_PLACEMENT = createSunPlacement();
 
 /**
- * Secondary (cool, blue-white) star in the opposite corner from the primary.
- * Visible only at cinematic level 3+ — adds a second light source and richness.
- */
-const SEC_STAR_PLACEMENT: SunPlacement = {
-  cx: 1 - SUN_PLACEMENT.cx,
-  cy: 1 - SUN_PLACEMENT.cy,
-};
-
-/**
- * Tertiary (deep red/amber ember) star in an adjacent corner from the primary.
- * Visible only at cinematic level 4 — adds a third warm-toned light source.
+ * Anchor point in an adjacent corner from the primary sun, used to place the
+ * faint level-5 quaternary dust band.
  */
 const THIRD_STAR_PLACEMENT: SunPlacement = {
   cx: 1 - SUN_PLACEMENT.cx,
@@ -132,18 +123,6 @@ export class DistantSuns {
   private lightW = 0;
   private lightH = 0;
 
-  /**
-   * Baked glow for the secondary cool star (level 3+).
-   * Rebuilt alongside the primary glow canvas when level/screen changes.
-   */
-  private secGlowCanvas: HTMLCanvasElement;
-
-  /**
-   * Baked glow for the tertiary ember star (level 4 only).
-   * Deep red/amber warm accent in an adjacent corner.
-   */
-  private thirdGlowCanvas: HTMLCanvasElement;
-
   /** Accumulated time for shimmer / ray / corona animation. */
   private time = 0;
 
@@ -164,12 +143,6 @@ export class DistantSuns {
     this.lightCanvas = document.createElement('canvas');
     this.lightCanvas.width  = 1;
     this.lightCanvas.height = 1;
-    this.secGlowCanvas = document.createElement('canvas');
-    this.secGlowCanvas.width  = 1;
-    this.secGlowCanvas.height = 1;
-    this.thirdGlowCanvas = document.createElement('canvas');
-    this.thirdGlowCanvas.width  = 1;
-    this.thirdGlowCanvas.height = 1;
   }
 
   // -------------------------------------------------------------------------
@@ -264,29 +237,8 @@ export class DistantSuns {
     ctx.drawImage(this.glowCanvas, 0, 0, screenW, screenH);
     ctx.restore();
 
-    // 1b — Secondary cool star (level 3+).
-    if (getCinematicLevel() >= 3) {
-      this.drawSecondaryStarLayer(ctx, camera, screenW, screenH);
-    }
-
-    // 1c — Tertiary ember star (level 4 only).
-    if (getCinematicLevel() >= 4) {
-      this.drawThirdStarLayer(ctx, camera, screenW, screenH);
-    }
     if (getCinematicLevel() >= 5) {
       this.drawQuaternaryDustBand(ctx, camera, screenW, screenH);
-    }
-    if (getCinematicLevel() >= 6) {
-      this.drawSolarFilamentHalo(ctx, cx, cy, screenW, screenH);
-    }
-    if (getCinematicLevel() >= 7) {
-      this.drawGravitationalLensRing(ctx, cx, cy, screenW, screenH);
-    }
-    if (getCinematicLevel() >= 8) {
-      this.drawSolarProminences(ctx, cx, cy, screenW, screenH);
-    }
-    if (getCinematicLevel() >= 9) {
-      this.drawMagneticFieldArcs(ctx, cx, cy, screenW, screenH);
     }
 
     // 2 — Warm directional screen fill (all quality levels).
@@ -312,13 +264,7 @@ export class DistantSuns {
               ? (this.coronaEnabled ? 22 : 14)
                 : level === 4
                   ? (this.coronaEnabled ? 28 : 18)
-                  : level === 5
-                    ? (this.coronaEnabled ? 32 : 20)
-                    : level === 6
-                      ? (this.coronaEnabled ? 36 : 24)
-                      : level < 9
-                        ? (this.coronaEnabled ? 42 : 28)
-                        : (this.coronaEnabled ? 48 : 32);
+                  : (this.coronaEnabled ? 32 : 20);
       const lc = this.lightCtx;
       lc.clearRect(0, 0, this.lightW, this.lightH);
       // Scale sun position to half-res buffer coordinates.
@@ -373,8 +319,7 @@ export class DistantSuns {
 
     const cx = w * SUN_PLACEMENT.cx;
     const cy = h * SUN_PLACEMENT.cy;
-    const detailLevel = getCinematicLevel();
-    const level = Math.min(2, detailLevel);
+    const level = Math.min(2, getCinematicLevel());
     // Radius generous enough to bathe the whole screen in warmth.
     const r  = Math.hypot(w, h) * (level === 0 ? 1.18 : level === 1 ? 1.28 : level === 2 ? 1.38 : level === 3 ? 1.48 : level === 4 ? 1.55 : level === 5 ? 1.62 : level === 6 ? 1.68 : level === 7 ? 1.74 : level === 8 ? 1.80 : 1.86);
 
@@ -403,15 +348,6 @@ export class DistantSuns {
 
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
-
-    // At level 3+, also bake the secondary (cool) star glow.
-    if (detailLevel >= 3) {
-      this.bakeSecondaryStarGlow();
-    }
-    // At level 4, also bake the tertiary (ember) star glow.
-    if (detailLevel >= 4) {
-      this.bakeThirdStarGlow();
-    }
   }
 
   // -------------------------------------------------------------------------
@@ -757,303 +693,8 @@ export class DistantSuns {
     ctx.restore();
   }
 
-  // -------------------------------------------------------------------------
-  // Secondary star (level 3 only)
-  // -------------------------------------------------------------------------
-
   /**
-   * Bake the secondary (cool, blue-white) star's radial glow into an offscreen
-   * canvas.  Called from bakeSunGlow() when cinematic level >= 3.
-   */
-  private bakeSecondaryStarGlow(): void {
-    const w = this.screenW;
-    const h = this.screenH;
-    this.secGlowCanvas.width  = w;
-    this.secGlowCanvas.height = h;
-    const ctx = this.secGlowCanvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, w, h);
-    const cx = w * SEC_STAR_PLACEMENT.cx;
-    const cy = h * SEC_STAR_PLACEMENT.cy;
-    const r = Math.hypot(w, h) * 0.88;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0.000, 'rgba(210,230,255,0.58)');
-    grad.addColorStop(0.018, 'rgba(155,195,255,0.42)');
-    grad.addColorStop(0.050, 'rgba(100,155,240,0.24)');
-    grad.addColorStop(0.110, 'rgba(60,100,200,0.13)');
-    grad.addColorStop(0.240, 'rgba(35,55,160,0.065)');
-    grad.addColorStop(0.500, 'rgba(15,25,80,0.022)');
-    grad.addColorStop(1.000, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
-  }
-
-  /**
-   * Draw the secondary star: baked cool glow + compact core disc + faint blue rays.
-   * The star uses slightly lower parallax than the primary (further away).
-   */
-  private drawSecondaryStarLayer(
-    ctx: CanvasRenderingContext2D,
-    camera: Camera,
-    screenW: number,
-    screenH: number,
-  ): void {
-    const dx = (camera.position.x - WORLD_WIDTH  * 0.5) * PARALLAX_X * 0.55;
-    const dy = (camera.position.y - WORLD_HEIGHT * 0.5) * PARALLAX_Y * 0.55;
-    const scx = screenW  * SEC_STAR_PLACEMENT.cx - dx;
-    const scy = screenH * SEC_STAR_PLACEMENT.cy - dy;
-
-    // Baked cool glow at reduced opacity so it stays subordinate to the primary.
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.globalAlpha = 0.55;
-    ctx.drawImage(this.secGlowCanvas, 0, 0, screenW, screenH);
-    ctx.globalAlpha = 1;
-    ctx.restore();
-
-    // Small blue-white solar core and corona.
-    this.drawSecondaryStarCore(ctx, scx, scy, screenW, screenH);
-    // Faint cool volumetric rays (drawn directly — subtle enough without blur).
-    this.drawSecondaryStarRays(ctx, scx, scy, screenW, screenH);
-  }
-
-  /** Compact blue-white core disc for the secondary star. */
-  private drawSecondaryStarCore(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    w: number,
-    h: number,
-  ): void {
-    const size = Math.max(w, h);
-    const coreR   = size * 0.018;
-    const coronaR = size * 0.068;
-    const pulse   = 0.92 + 0.08 * Math.sin(this.time * 0.61 + 1.3);
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-
-    const corona = ctx.createRadialGradient(cx, cy, coreR * 0.15, cx, cy, coronaR * pulse);
-    corona.addColorStop(0.00, 'rgba(200,225,255,0.52)');
-    corona.addColorStop(0.28, 'rgba(130,175,255,0.24)');
-    corona.addColorStop(0.62, 'rgba(80,130,230,0.09)');
-    corona.addColorStop(1.00, 'rgba(0,0,0,0)');
-    ctx.fillStyle = corona;
-    ctx.beginPath();
-    ctx.arc(cx, cy, coronaR * pulse, 0, Math.PI * 2);
-    ctx.fill();
-
-    const core = ctx.createRadialGradient(cx - coreR * 0.15, cy - coreR * 0.12, 0, cx, cy, coreR);
-    core.addColorStop(0.00, 'rgba(235,245,255,0.96)');
-    core.addColorStop(0.35, 'rgba(175,210,255,0.80)');
-    core.addColorStop(0.72, 'rgba(110,170,250,0.48)');
-    core.addColorStop(1.00, 'rgba(60,110,220,0.10)');
-    ctx.fillStyle = core;
-    ctx.beginPath();
-    ctx.arc(cx, cy, coreR * pulse, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  /** Six short cool-blue rays emanating from the secondary star. */
-  private drawSecondaryStarRays(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    w: number,
-    h: number,
-  ): void {
-    const count = 6;
-    const len   = Math.hypot(w, h) * 0.68;
-    const rot   = this.time * 0.009 + 0.8;
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-
-    for (let i = 0; i < count; i++) {
-      const angle   = (i / count) * Math.PI * 2 + rot + Math.sin(this.time * 0.18 + i * 1.27) * 0.05;
-      const tipX    = cx + Math.cos(angle) * len;
-      const tipY    = cy + Math.sin(angle) * len;
-      const px      = -Math.sin(angle);
-      const py      =  Math.cos(angle);
-      const flicker = 0.038 + 0.018 * Math.sin(this.time * 0.62 + i * 0.94);
-      const hw      = len * 0.024;
-
-      const g = ctx.createLinearGradient(cx, cy, tipX, tipY);
-      g.addColorStop(0.00, `rgba(155,200,255,${(flicker).toFixed(3)})`);
-      g.addColorStop(0.22, `rgba(100,165,240,${(flicker * 0.68).toFixed(3)})`);
-      g.addColorStop(0.58, `rgba(65,120,210,${(flicker * 0.28).toFixed(3)})`);
-      g.addColorStop(1.00, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-
-      // Two-pass soft ray (wide feather + narrow spine).
-      for (const mult of [5.2, 1.0]) {
-        ctx.beginPath();
-        ctx.moveTo(cx + px * hw * mult, cy + py * hw * mult);
-        ctx.lineTo(tipX, tipY);
-        ctx.lineTo(cx - px * hw * mult, cy - py * hw * mult);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-
-    ctx.restore();
-  }
-
-  // -------------------------------------------------------------------------
-  // Tertiary ember star (level 4 only)
-  // -------------------------------------------------------------------------
-
-  /**
-   * Bake the tertiary (deep red/amber ember) star's radial glow into an offscreen
-   * canvas.  Called from bakeSunGlow() when cinematic level >= 4.
-   * Smaller and dimmer than the primary; its deep crimson hue adds a third
-   * light source temperature unique to level 4.
-   */
-  private bakeThirdStarGlow(): void {
-    const w = this.screenW;
-    const h = this.screenH;
-    this.thirdGlowCanvas.width  = w;
-    this.thirdGlowCanvas.height = h;
-    const ctx = this.thirdGlowCanvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, w, h);
-    const cx = w * THIRD_STAR_PLACEMENT.cx;
-    const cy = h * THIRD_STAR_PLACEMENT.cy;
-    const r = Math.hypot(w, h) * 0.72;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0.000, 'rgba(255,160,60,0.44)');
-    grad.addColorStop(0.022, 'rgba(220,90,30,0.30)');
-    grad.addColorStop(0.062, 'rgba(180,40,12,0.16)');
-    grad.addColorStop(0.140, 'rgba(120,20,8,0.082)');
-    grad.addColorStop(0.300, 'rgba(72,10,6,0.038)');
-    grad.addColorStop(0.560, 'rgba(30,4,2,0.012)');
-    grad.addColorStop(1.000, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
-  }
-
-  /**
-   * Draw the tertiary star: baked ember glow + compact deep-red core + faint
-   * crimson rays.  Parallax factor slightly different from both other stars so
-   * the three bodies move independently when panning.
-   */
-  private drawThirdStarLayer(
-    ctx: CanvasRenderingContext2D,
-    camera: Camera,
-    screenW: number,
-    screenH: number,
-  ): void {
-    const dx = (camera.position.x - WORLD_WIDTH  * 0.5) * PARALLAX_X * 0.72;
-    const dy = (camera.position.y - WORLD_HEIGHT * 0.5) * PARALLAX_Y * 0.72;
-    const tcx = screenW  * THIRD_STAR_PLACEMENT.cx - dx;
-    const tcy = screenH * THIRD_STAR_PLACEMENT.cy - dy;
-
-    // Baked ember glow at reduced opacity — subordinate to both other stars.
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.globalAlpha = 0.48;
-    ctx.drawImage(this.thirdGlowCanvas, 0, 0, screenW, screenH);
-    ctx.globalAlpha = 1;
-    ctx.restore();
-
-    // Compact ember core disc.
-    this.drawThirdStarCore(ctx, tcx, tcy, screenW, screenH);
-    // Short crimson diffraction rays.
-    this.drawThirdStarRays(ctx, tcx, tcy, screenW, screenH);
-  }
-
-  /** Compact deep-red/amber core disc for the tertiary ember star. */
-  private drawThirdStarCore(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    w: number,
-    h: number,
-  ): void {
-    const size = Math.max(w, h);
-    const coreR   = size * 0.014;
-    const coronaR = size * 0.054;
-    const pulse   = 0.90 + 0.10 * Math.sin(this.time * 0.48 + 2.7);
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-
-    const corona = ctx.createRadialGradient(cx, cy, coreR * 0.12, cx, cy, coronaR * pulse);
-    corona.addColorStop(0.00, 'rgba(255,150,50,0.44)');
-    corona.addColorStop(0.30, 'rgba(210,60,15,0.18)');
-    corona.addColorStop(0.66, 'rgba(140,20,6,0.06)');
-    corona.addColorStop(1.00, 'rgba(0,0,0,0)');
-    ctx.fillStyle = corona;
-    ctx.beginPath();
-    ctx.arc(cx, cy, coronaR * pulse, 0, Math.PI * 2);
-    ctx.fill();
-
-    const core = ctx.createRadialGradient(cx - coreR * 0.18, cy - coreR * 0.14, 0, cx, cy, coreR);
-    core.addColorStop(0.00, 'rgba(255,220,140,0.96)');
-    core.addColorStop(0.28, 'rgba(255,130,40,0.88)');
-    core.addColorStop(0.62, 'rgba(200,50,12,0.60)');
-    core.addColorStop(1.00, 'rgba(100,10,4,0.10)');
-    ctx.fillStyle = core;
-    ctx.beginPath();
-    ctx.arc(cx, cy, coreR * pulse, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  /**
-   * Four short crimson diffraction spikes — fewer than the secondary star's six
-   * so each body has a distinct visual signature.
-   */
-  private drawThirdStarRays(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    w: number,
-    h: number,
-  ): void {
-    const count = 4;
-    const len   = Math.hypot(w, h) * 0.50;
-    // Counter-rotate relative to the secondary star for visual variety.
-    const rot   = -this.time * 0.012 + 1.9;
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-
-    for (let i = 0; i < count; i++) {
-      const angle   = (i / count) * Math.PI * 2 + rot + Math.sin(this.time * 0.22 + i * 1.61) * 0.06;
-      const tipX    = cx + Math.cos(angle) * len;
-      const tipY    = cy + Math.sin(angle) * len;
-      const px      = -Math.sin(angle);
-      const py      =  Math.cos(angle);
-      const flicker = 0.044 + 0.022 * Math.sin(this.time * 0.55 + i * 1.09);
-      const hw      = len * 0.020;
-
-      const g = ctx.createLinearGradient(cx, cy, tipX, tipY);
-      g.addColorStop(0.00, `rgba(255,110,35,${(flicker).toFixed(3)})`);
-      g.addColorStop(0.24, `rgba(210,60,15,${(flicker * 0.62).toFixed(3)})`);
-      g.addColorStop(0.60, `rgba(150,20,6,${(flicker * 0.24).toFixed(3)})`);
-      g.addColorStop(1.00, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-
-      // Two-pass soft ray (wide feather + narrow spine).
-      for (const mult of [4.8, 1.0]) {
-        ctx.beginPath();
-        ctx.moveTo(cx + px * hw * mult, cy + py * hw * mult);
-        ctx.lineTo(tipX, tipY);
-        ctx.lineTo(cx - px * hw * mult, cy - py * hw * mult);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-
-    ctx.restore();
-  }
-
-  /**
-   * Level 5 only: faint quaternary dust band near the tertiary star.
+   * Level 5 only: faint quaternary dust band in an adjacent corner.
    * This adds layered color separation and motion detail without raising glow gain.
    */
   private drawQuaternaryDustBand(
@@ -1092,260 +733,4 @@ export class DistantSuns {
     ctx.restore();
   }
 
-  /**
-   * Level 6: layered filament halo around the primary sun.
-   * Adds fine curved plasma structure and counter-rotating ribbon detail.
-   */
-  private drawSolarFilamentHalo(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    screenW: number,
-    screenH: number,
-  ): void {
-    const baseR = Math.max(screenW, screenH) * 0.16;
-    const t = this.time;
-    const filaments = 5;
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.translate(cx, cy);
-
-    for (let i = 0; i < filaments; i++) {
-      const phase = t * (0.18 + i * 0.04) + i * 0.9;
-      const ringR = baseR * (0.78 + i * 0.18 + 0.05 * Math.sin(phase * 1.8));
-      const arcLen = Math.PI * (0.44 + 0.14 * Math.sin(phase * 1.2 + i));
-      const startA = phase * (i % 2 === 0 ? 1 : -1) + Math.sin(phase * 0.7) * 0.42;
-      const alpha = 0.05 + 0.025 * Math.sin(phase * 2.2 + i * 1.3);
-      const grad = ctx.createLinearGradient(
-        Math.cos(startA) * ringR,
-        Math.sin(startA) * ringR,
-        Math.cos(startA + arcLen) * ringR,
-        Math.sin(startA + arcLen) * ringR,
-      );
-      grad.addColorStop(0.00, `rgba(255,210,155,${(alpha * 0.30).toFixed(3)})`);
-      grad.addColorStop(0.40, `rgba(255,160,90,${alpha.toFixed(3)})`);
-      grad.addColorStop(0.72, `rgba(205,95,58,${(alpha * 0.88).toFixed(3)})`);
-      grad.addColorStop(1.00, `rgba(92,45,72,${(alpha * 0.34).toFixed(3)})`);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = Math.max(0.7, baseR * (0.012 - i * 0.0014));
-      ctx.beginPath();
-      ctx.ellipse(0, 0, ringR, ringR * (0.40 + (i % 3) * 0.07), i * 0.36, startA, startA + arcLen);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
-
-  /**
-   * Level 7: gravitational lensing rings around the primary sun.
-   * Two large-radius horseshoe arcs with warm→cool color shifts and very slow
-   * counter-rotation, simulating light from the secondary star bent around the
-   * primary's gravity well.  Drawn at extremely low alpha so they read as a
-   * subtle atmospheric detail rather than a dominant visual element.
-   */
-  private drawGravitationalLensRing(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    screenW: number,
-    screenH: number,
-  ): void {
-    const t = this.time;
-    const baseSize = Math.max(screenW, screenH);
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.translate(cx, cy);
-
-    const rings = [
-      { r: baseSize * 0.24, yScale: 0.58, dir:  1, speed: 0.024, tilt: 0.22, arcLen: Math.PI * 1.55 },
-      { r: baseSize * 0.31, yScale: 0.44, dir: -1, speed: 0.017, tilt: 0.58, arcLen: Math.PI * 1.20 },
-      { r: baseSize * 0.19, yScale: 0.70, dir:  1, speed: 0.038, tilt: 1.10, arcLen: Math.PI * 0.85 },
-    ];
-
-    for (const ring of rings) {
-      const phase   = ring.dir * t * ring.speed;
-      const startA  = phase + Math.sin(t * 0.11 + ring.tilt) * 0.28;
-      const alpha   = 0.038 + 0.016 * Math.sin(t * 0.19 + ring.tilt * 1.3);
-      const grad = ctx.createLinearGradient(
-        Math.cos(startA)              * ring.r,
-        Math.sin(startA)              * ring.r * ring.yScale,
-        Math.cos(startA + ring.arcLen) * ring.r,
-        Math.sin(startA + ring.arcLen) * ring.r * ring.yScale,
-      );
-      // Color transitions from the warm primary hue to a cool secondary tint —
-      // as if the primary is lensing light from the blue-white secondary star.
-      grad.addColorStop(0.00, `rgba(255,200,120,${(alpha * 0.55).toFixed(3)})`);
-      grad.addColorStop(0.30, `rgba(255,165,80,${alpha.toFixed(3)})`);
-      grad.addColorStop(0.60, `rgba(180,210,255,${(alpha * 0.80).toFixed(3)})`);
-      grad.addColorStop(0.85, `rgba(130,180,255,${(alpha * 0.50).toFixed(3)})`);
-      grad.addColorStop(1.00, `rgba(0,0,0,0)`);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = Math.max(0.8, baseSize * 0.0025);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, ring.r, ring.r * ring.yScale, ring.tilt + phase * 0.14, startA, startA + ring.arcLen);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
-
-  /**
-   * Level 8: solar prominence eruptions — animated plasma arcs that loop from
-   * the solar surface outward and curve back, simulating real solar prominences.
-   * Each arc is a Bézier curve with warm-to-cool color shift: the base is
-   * golden-orange (attached to the hot photosphere) while the apex fades to
-   * soft violet-pink as the plasma cools at height.  Three arcs with staggered
-   * phase offsets loop at different speeds and scales so the sun feels alive.
-   */
-  private drawSolarProminences(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    screenW: number,
-    screenH: number,
-  ): void {
-    const t = this.time;
-    const baseR = Math.max(screenW, screenH) * 0.11;
-
-    // Each prominence: base angle (where it roots on the limb), arc size,
-    // oscillation speed, and per-prominence phase.
-    const prominences = [
-      { baseAngle: -0.38, arcScale: 1.00, speed: 0.048, phase: 0.00 },
-      { baseAngle:  0.52, arcScale: 0.76, speed: 0.062, phase: 2.09 },
-      { baseAngle:  1.20, arcScale: 0.88, speed: 0.038, phase: 4.19 },
-    ];
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-
-    for (const p of prominences) {
-      // Slow wave that causes the prominence to breathe — swell out and retract.
-      const swell = 0.55 + 0.45 * Math.abs(Math.sin(t * p.speed + p.phase));
-      const alpha = (0.048 + 0.018 * Math.sin(t * p.speed * 1.7 + p.phase)) * swell;
-
-      const baseA = p.baseAngle + t * p.speed * 0.22;
-      const spreadA = 0.48 * p.arcScale;
-
-      // Two feet of the arch on the solar limb.
-      const foot1X = cx + Math.cos(baseA - spreadA) * baseR;
-      const foot1Y = cy + Math.sin(baseA - spreadA) * baseR * 0.60;
-      const foot2X = cx + Math.cos(baseA + spreadA) * baseR;
-      const foot2Y = cy + Math.sin(baseA + spreadA) * baseR * 0.60;
-
-      // Apex — lifted radially outward from the sun center, proportional to swell.
-      const apexDist = baseR * (1.55 + 0.55 * p.arcScale) * swell;
-      const apexX = cx + Math.cos(baseA) * apexDist;
-      const apexY = cy + Math.sin(baseA) * apexDist * 0.60;
-
-      // Control points lean outward to give the arch a teardrop silhouette.
-      const cp1X = cx + Math.cos(baseA - spreadA * 0.55) * apexDist * 0.82;
-      const cp1Y = cy + Math.sin(baseA - spreadA * 0.55) * apexDist * 0.60 * 0.82;
-      const cp2X = cx + Math.cos(baseA + spreadA * 0.55) * apexDist * 0.82;
-      const cp2Y = cy + Math.sin(baseA + spreadA * 0.55) * apexDist * 0.60 * 0.82;
-
-      // Gradient along the arch from warm base to cool apex.
-      const grad = ctx.createLinearGradient(
-        (foot1X + foot2X) * 0.5, (foot1Y + foot2Y) * 0.5,
-        apexX, apexY,
-      );
-      grad.addColorStop(0.00, `rgba(255,185,80,${(alpha * 0.80).toFixed(3)})`);
-      grad.addColorStop(0.30, `rgba(255,130,60,${alpha.toFixed(3)})`);
-      grad.addColorStop(0.65, `rgba(200,100,220,${(alpha * 0.70).toFixed(3)})`);
-      grad.addColorStop(0.88, `rgba(140,160,255,${(alpha * 0.40).toFixed(3)})`);
-      grad.addColorStop(1.00, 'rgba(0,0,0,0)');
-
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = Math.max(0.8, baseR * 0.065 * p.arcScale * swell);
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(foot1X, foot1Y);
-      ctx.bezierCurveTo(cp1X, cp1Y, cp2X, cp2Y, foot2X, foot2Y);
-      ctx.stroke();
-
-      // Soft glow halo around the arch apex.
-      const haloR = baseR * 0.18 * p.arcScale * swell;
-      const halo = ctx.createRadialGradient(apexX, apexY, 0, apexX, apexY, haloR);
-      halo.addColorStop(0.00, `rgba(255,200,255,${(alpha * 0.55).toFixed(3)})`);
-      halo.addColorStop(1.00, 'rgba(0,0,0,0)');
-      ctx.fillStyle = halo;
-      ctx.beginPath();
-      ctx.arc(apexX, apexY, haloR, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-
-  // Level 9: magnetic field coronal loops — 5 small cool-hued arcs that arch
-  // out from the solar limb and close back, tracing the sun's magnetic flux
-  // tubes.  Rendered in blue/violet to visually complement the warm-amber
-  // prominences from level 8; each loop breathes slowly in brightness.
-  private drawMagneticFieldArcs(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number,
-    screenW: number,
-    screenH: number,
-  ): void {
-    const t = this.time;
-    const baseR = Math.max(screenW, screenH) * 0.09;
-
-    // Five compact loops anchored on the solar limb, spread around the disk.
-    const loops = [
-      { angle: -1.10, span: 0.30, speed: 0.041, phase: 0.00 },
-      { angle:  0.20, span: 0.24, speed: 0.055, phase: 1.26 },
-      { angle:  0.90, span: 0.36, speed: 0.034, phase: 2.51 },
-      { angle:  1.85, span: 0.28, speed: 0.048, phase: 3.77 },
-      { angle: -0.55, span: 0.20, speed: 0.062, phase: 5.03 },
-    ];
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-
-    for (const lp of loops) {
-      const swell = 0.60 + 0.40 * Math.abs(Math.sin(t * lp.speed + lp.phase));
-      const alpha = (0.030 + 0.012 * Math.sin(t * lp.speed * 1.8 + lp.phase)) * swell;
-      const a = lp.angle + t * lp.speed * 0.15;
-      const half = lp.span * 0.5;
-
-      // Feet of the loop on the solar limb (slightly flattened on the y axis).
-      const foot1X = cx + Math.cos(a - half) * baseR;
-      const foot1Y = cy + Math.sin(a - half) * baseR * 0.62;
-      const foot2X = cx + Math.cos(a + half) * baseR;
-      const foot2Y = cy + Math.sin(a + half) * baseR * 0.62;
-
-      // Apex rises radially outward, less than level-8 prominences.
-      const apexDist = baseR * (1.22 + 0.32 * lp.span) * swell;
-      const apexX = cx + Math.cos(a) * apexDist;
-      const apexY = cy + Math.sin(a) * apexDist * 0.62;
-
-      // Bezier control points lean outward for a smooth arch silhouette.
-      const cp1X = cx + Math.cos(a - half * 0.55) * apexDist * 0.80;
-      const cp1Y = cy + Math.sin(a - half * 0.55) * apexDist * 0.62 * 0.80;
-      const cp2X = cx + Math.cos(a + half * 0.55) * apexDist * 0.80;
-      const cp2Y = cy + Math.sin(a + half * 0.55) * apexDist * 0.62 * 0.80;
-
-      // Cool blue→violet gradient up the arch — complementary to warm prominences.
-      const grad = ctx.createLinearGradient(
-        (foot1X + foot2X) * 0.5, (foot1Y + foot2Y) * 0.5,
-        apexX, apexY,
-      );
-      grad.addColorStop(0.00, `rgba(80,200,255,${(alpha * 0.55).toFixed(3)})`);
-      grad.addColorStop(0.35, `rgba(60,140,255,${alpha.toFixed(3)})`);
-      grad.addColorStop(0.70, `rgba(160,80,255,${(alpha * 0.62).toFixed(3)})`);
-      grad.addColorStop(1.00, 'rgba(0,0,0,0)');
-
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = Math.max(0.4, baseR * 0.032 * lp.span * swell);
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(foot1X, foot1Y);
-      ctx.bezierCurveTo(cp1X, cp1Y, cp2X, cp2Y, foot2X, foot2Y);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
 }

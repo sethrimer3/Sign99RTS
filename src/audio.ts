@@ -81,6 +81,17 @@ class AudioManager {
   private listenerY = 0;
   private hasListener = false;
 
+  constructor() {
+    try {
+      const musicSaved = window.localStorage?.getItem('sign99:music-volume');
+      const sfxSaved = window.localStorage?.getItem('sign99:sfx-volume');
+      const music = Number(musicSaved);
+      const sfx = Number(sfxSaved);
+      if (musicSaved !== null && musicSaved !== undefined && Number.isFinite(music)) this.musicVolume = Math.max(0, Math.min(1, music));
+      if (sfxSaved !== null && sfxSaved !== undefined && Number.isFinite(sfx)) this.sfxVolume = Math.max(0, Math.min(1, sfx));
+    } catch { /* Keep defaults. */ }
+  }
+
   /**
    * Update the location the player hears the world from. Call once per frame
    * with the player's (or spectator camera's) world position. Sounds played
@@ -338,11 +349,13 @@ class AudioManager {
 
   setSfxVolume(v: number): void {
     this.sfxVolume = Math.max(0, Math.min(1, v));
+    try { window.localStorage?.setItem('sign99:sfx-volume', String(this.sfxVolume)); } catch { /* optional */ }
     if (this.sfxGain) this.sfxGain.gain.value = this.effectiveSfxVolume();
   }
 
   setMusicVolume(v: number): void {
     this.musicVolume = Math.max(0, Math.min(1, v));
+    try { window.localStorage?.setItem('sign99:music-volume', String(this.musicVolume)); } catch { /* optional */ }
     const effectiveVolume = this.effectiveMusicVolume();
     if (this.musicGain) this.musicGain.gain.value = effectiveVolume;
     if (this.musicElement) this.musicElement.volume = effectiveVolume;

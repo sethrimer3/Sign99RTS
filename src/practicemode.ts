@@ -502,7 +502,7 @@ export class PracticeMode {
     for (const b of state.buildings) {
       if (!b.alive) continue;
       if (b.team === Team.Enemy) {
-        if (b instanceof TurretBase && b.buildProgress >= 1) this.tickCache.turrets.push(b);
+        if (b instanceof TurretBase && b.buildProgress >= 1 && b.powered) this.tickCache.turrets.push(b);
         if (b.powered && b.buildProgress >= 1) {
           if (b.type === EntityType.Factory) this.tickCache.poweredEnemyFactories++;
           else if (b instanceof Shipyard) {
@@ -513,7 +513,7 @@ export class PracticeMode {
       } else if (b.team === Team.Player) {
         if (b instanceof Shipyard) this.tickCache.playerShipyards++;
         if (b instanceof TurretBase) {
-          if (b.buildProgress >= 1) this.tickCache.turrets.push(b);
+          if (b.buildProgress >= 1 && b.powered) this.tickCache.turrets.push(b);
           this.tickCache.playerTurrets++;
           if (b.type === EntityType.MassDriverTurret) this.tickCache.playerMassDrivers.push(b);
         }

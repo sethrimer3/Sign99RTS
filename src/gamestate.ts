@@ -3,25 +3,25 @@
 import { pointToSegmentDistance, Vec2 } from './math.js';
 import { Entity, Team, EntityType } from './entities.js';
 import { PlayerShip } from './ship.js';
-import { BuildingBase, CommandPost, Wall } from './building.js';
+import { BuildingBase, CommandPost, ResearchLab, ShieldGenerator, Wall } from './building.js';
 import { Shipyard } from './building.js';
-import { SynonymousMineLayer, TurretBase } from './turret.js';
-import { MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
+import { SynonymousMineLayer, TetherTurret, TurretBase } from './turret.js';
+import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
 import { isSynonymousDriftMine } from './synonymousMine.js';
-import { FighterShip, SwarmShip, FIGHTER_UPGRADE_RESEARCH_KEYS, applyFighterResearchUpgrade } from './fighter.js';
+import { FighterShip, SwarmShip, syncFighterResearchUpgrades } from './fighter.js';
 import { ParticleSystem } from './particles.js';
 import { RingEffectSystem } from './ringeffects.js';
 import { Camera } from './camera.js';
 import { Audio } from './audio.js';
 import { WorldGrid, GRID_CELL_SIZE, cellKey, footprintOrigin, footprintCenter } from './grid.js';
 import { PowerGraph } from './power.js';
-import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, CONDUIT_COST, RESEARCH_TIME, TICK_RATE, DT } from './constants.js';
+import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, CONDUIT_COST, DT } from './constants.js';
 import { findClosestEnemy } from './combatUtils.js';
-import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS } from './constants.js';
+import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS, RESEARCH_MODE, RESEARCH_TIME, TICK_RATE } from './constants.js';
 import { buildCostForBuildingType, type BuildDef } from './builddefs.js';
 import { Colors, colorToCSS } from './colors.js';
 import { teamColor } from './teamutils.js';
-import { footprintForBuildingType } from './buildingfootprint.js';
+import { footprintForBuilding, footprintForBuildingType } from './buildingfootprint.js';
 import { type FactionType, type ConfluenceTerritoryCircle, CONFLUENCE_BASE_RADIUS, CONFLUENCE_PLACEMENT_DISTANCE, CONFLUENCE_PLACEMENT_TOLERANCE, CONFLUENCE_PARENT_EXPAND_DURATION, CONFLUENCE_NEW_CIRCLE_GROW_DURATION, CONFLUENCE_INCLUDE_MARGIN, isConfluenceFaction, isSynonymousFaction } from './confluence.js';
 import { SynonymousSwarmSystem, SYNONYMOUS_BASE_PRODUCTION, SYNONYMOUS_BUILD_COST, SYNONYMOUS_CURRENCY_SYMBOL, SYNONYMOUS_FACTORY_PRODUCTION } from './synonymous.js';
 import {
@@ -244,6 +244,8 @@ export class GameState {
   researchQueue: string[] = [];
   completedResearchNotifications: string[] = [];
   researchedItems: Set<string> = new Set();
+  /** Classic mode only: seconds accumulated on the currently active research item. */
+  private researchActiveElapsedSeconds = 0;
 
   /**
    * Vs. AI bot-player main ship, when the active mode is `vs_ai`.
@@ -315,6 +317,7 @@ export class GameState {
         else if (entity.type === EntityType.ExciterTurret) entity.synonymousVisualKind = 'laserturret';
         else if (entity.type === EntityType.MassDriverTurret) entity.synonymousVisualKind = 'laserturret';
         else if (entity.type === EntityType.RegenTurret) entity.synonymousVisualKind = 'laserturret';
+        else if (entity.type === EntityType.TetherTurret) entity.synonymousVisualKind = 'laserturret';
         else if (entity.type === EntityType.TimeBomb) entity.synonymousVisualKind = 'minelayer';
       }
       this.buildings.push(entity);
@@ -510,9 +513,11 @@ export class GameState {
         this.power.markDirty();
       }
     }
+    this.updateAreaShields();
     for (const b of this.buildings) {
       if (b instanceof SynonymousMineLayer) b.tickMineLayer(this);
     }
+    this.updateTethers(dt);
     this.synonymous.updateBuildingIntegrity(this.buildings);
     this.rebuildSpatialIndex();
 
@@ -553,6 +558,8 @@ export class GameState {
         const pulseRadius = p.consumeDamagePulse();
         if (pulseRadius !== null) {
           this.applyMassDriverPulse(p, pulseRadius);
+          // Singularity: the first blast drags in nearby ships.
+          if (p.pulsesFired === 1) this.applySingularityPull(p, pulseRadius);
         }
       }
       if (p instanceof SynonymousNovaBomb && p.consumePulse()) {
@@ -671,7 +678,9 @@ export class GameState {
 
   private resolveMineProjectileDamage(): void {
     for (const shot of this.projectiles) {
-      if (!shot.alive || isSynonymousDriftMine(shot)) continue;
+      // Worm lasers own their swept, once-per-target collision handling and
+      // must pass through mines just as they pass through ships/buildings.
+      if (!shot.alive || shot instanceof ChargedLaserBurst || isSynonymousDriftMine(shot)) continue;
       const shotEnd = projectileSegmentEnd(shot);
       const queryRadius = shot.radius + ENTITY_RADIUS.missile + 12;
       const nearby = shotEnd === shot.position
@@ -698,6 +707,7 @@ export class GameState {
 
   /** Returns true if the projectile hit and was consumed. */
   private checkHit(proj: ProjectileBase, target: Entity, isRegen: boolean): boolean {
+    if (proj instanceof ChargedLaserBurst) return false;
     if (proj instanceof SynonymousNovaBomb) return false;
     if (proj instanceof MassDriverBullet && proj.isBursting) return false;
     // Regen bullets heal same-team, damage other-team
@@ -1140,7 +1150,7 @@ export class GameState {
     for (const b of this.buildings) {
       if (!b.alive || b.team !== team) continue;
       if (b.buildProgress < 1 || !b.powered) continue;
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const origin = buildingFootprintOrigin(b);
       const endCx = origin.cx + size - 1;
       const endCy = origin.cy + size - 1;
@@ -1264,7 +1274,7 @@ export class GameState {
     if (!building.alive || building.team === Team.Neutral) return;
     if (building.type === EntityType.Wall) return;
     if (isConfluenceFaction(this.factionByTeam, building.team)) return;
-    const size = footprintForBuildingType(building.type);
+    const size = footprintForBuilding(building);
     const origin = buildingFootprintOrigin(building);
     let planned = 0;
 
@@ -1320,7 +1330,7 @@ export class GameState {
     let bestDist = Infinity;
     for (const b of this.buildings) {
       if (!b.alive || b.team !== team) continue;
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const origin = buildingFootprintOrigin(b);
       if (px < origin.cx || px >= origin.cx + size || py < origin.cy || py >= origin.cy + size) {
         continue;
@@ -1350,6 +1360,84 @@ export class GameState {
     }
     this.ringEffects.spawn('shockwave', proj.position.clone(), radius * 0.35, radius, 0.22, 1.1);
     Audio.playSoundAt('explode1', proj.position);
+  }
+
+  /** True for player / fighter / bomber hulls — the things Tethers and the
+   *  Singularity pull can grab. */
+  private isShipEntity(e: Entity): boolean {
+    return (
+      e.type === EntityType.PlayerShip ||
+      e.type === EntityType.Fighter ||
+      e.type === EntityType.Bomber
+    );
+  }
+
+  /**
+   * Singularity first-blast gravity well: yank every non-allied ship within
+   * twice the blast radius toward the detonation, harder the closer it is.
+   */
+  private applySingularityPull(proj: MassDriverBullet, radius: number): void {
+    const reach = radius * 2;
+    const PULL_PEAK = 520;
+    for (const e of this.queryEntitiesInRange(proj.position, reach + ENTITY_RADIUS.building, this.spatialQueryScratch)) {
+      if (!e.alive || e.team === Team.Neutral || e.team === proj.team) continue;
+      if (!this.isShipEntity(e)) continue;
+      const d = e.position.distanceTo(proj.position);
+      if (d > reach || d < 1) continue;
+      const closeness = 1 - d / reach; // 1 at the centre, 0 at the edge
+      const mag = PULL_PEAK * closeness * closeness;
+      const dir = proj.position.sub(e.position).normalize();
+      e.velocity = e.velocity.add(dir.scale(mag));
+    }
+    this.ringEffects.spawn('blackout_wave', proj.position.clone(), reach * 0.15, reach * 0.9, 0.4, 0.6);
+  }
+
+  /**
+   * Per-tick Tether resolution. Runs for every team so AI-owned Tethers work
+   * too. Resets each ship's accumulated slow, then lets every powered Tether
+   * latch onto the nearest opposing ship and add its hold.
+   */
+  private updateTethers(dt: number): void {
+    let anyTether = false;
+    for (const b of this.buildings) {
+      if (b instanceof TetherTurret) { anyTether = true; break; }
+    }
+    if (!anyTether) return;
+
+    for (const s of this.playerShips.values()) s.tetherSlowFrac = 0;
+    for (const f of this.fighters) f.tetherSlowFrac = 0;
+
+    for (const b of this.buildings) {
+      if (!(b instanceof TetherTurret)) continue;
+      if (!b.alive || b.buildProgress < 1 || !b.powered) {
+        b.releaseTether();
+        continue;
+      }
+      let target = b.tetherTarget;
+      const stillValid =
+        target !== null &&
+        target.alive &&
+        target.team !== b.team &&
+        target.team !== Team.Neutral &&
+        this.isShipEntity(target) &&
+        b.position.distanceTo(target.position) <= b.range;
+      if (!stillValid) {
+        target = null;
+        let bestDist = b.range;
+        for (const e of this.queryEntitiesInRange(b.position, b.range, this.spatialQueryScratch)) {
+          if (!e.alive || e.team === Team.Neutral || e.team === b.team) continue;
+          if (!this.isShipEntity(e)) continue;
+          const d = b.position.distanceTo(e.position);
+          if (d < bestDist) { bestDist = d; target = e; }
+        }
+      }
+      if (!target) {
+        b.releaseTether();
+        continue;
+      }
+      b.tickTether(target, dt);
+      target.tetherSlowFrac += b.tetherStrength;
+    }
   }
 
   private applyAdvancedFighterHazardAvoidance(fighter: FighterShip, dt: number): void {
@@ -1388,6 +1476,31 @@ export class GameState {
       return 'conduit';
     }
     return null;
+  }
+
+  /**
+   * Remove construction that has not become operational yet and return its
+   * full purchase price. Used when the player ship enters ghost mode.
+   */
+  cancelPlannedConstruction(team: Team): { buildings: number; conduits: number; refund: number } {
+    let buildings = 0;
+    let refund = 0;
+    for (const building of this.buildings) {
+      if (!building.alive || building.team !== team || building.buildProgress >= 1) continue;
+      if (isSynonymousFaction(this.factionByTeam, team)) {
+        this.synonymous.releaseBuilding(building.id, this.gameTime, { sold: true });
+      } else {
+        refund += building.placementCost ?? buildCostForBuildingType(building.type);
+      }
+      building.destroy();
+      buildings++;
+    }
+
+    const conduits = this.grid.cancelPendingConduits(team);
+    refund += conduits * CONDUIT_COST;
+    if (team === Team.Player && refund > 0) this.resources += refund;
+    if (buildings > 0 || conduits > 0) this.power.markDirty();
+    return { buildings, conduits, refund };
   }
 
   eraseBlueprintAt(pos: Vec2, team: Team): boolean {
@@ -1440,53 +1553,122 @@ export class GameState {
   // -----------------------------------------------------------------------
 
   private tickResearch(dt: number): void {
-    if (!this.researchProgress.item) return;
+    if (RESEARCH_MODE === 'building') this.tickResearchBuilding();
+    else this.tickResearchClassic(dt);
+  }
 
-    // Need a research lab
-    const hasLab = this.buildings.some(
-      (b) =>
-        b.alive &&
-        b.type === EntityType.ResearchLab &&
-        b.team === Team.Player &&
-            (isSynonymousFaction(this.factionByTeam, b.team) || b.powered) &&
-            b.buildProgress >= 1,
-    );
-    if (!hasLab) return;
-
-    this.researchProgress.progress += dt;
-    if (this.researchProgress.progress >= this.researchProgress.timeNeeded) {
-      const completed = this.researchProgress.item;
-      this.researchedItems.add(completed);
-      this.player.applyResearchUpgrade(completed);
-      if ((FIGHTER_UPGRADE_RESEARCH_KEYS as readonly string[]).includes(completed)) {
-        for (const f of this.fighters) {
-          if (f.alive && f.team === Team.Player) applyFighterResearchUpgrade(f, completed);
-        }
-      } else if (completed === 'shipShield1') {
-        for (const f of this.fighters) {
-          if (f.alive && f.team === Team.Player && !f.docked && f.position.distanceTo(this.player.position) <= 90) {
-            f.enableShield();
-          }
-        }
-      } else if (completed === 'poweredWalls') {
-        for (const b of this.buildings) {
-          if (b.alive && b.team === Team.Player && b instanceof Wall) b.enablePoweredWall();
+  /** Original mode: each upgrade is a physical 3x3 Research Node; losing the node revokes it. */
+  private tickResearchBuilding(): void {
+    const completed = new Set<string>();
+    let active: ResearchLab | null = null;
+    for (const building of this.buildings) {
+      if (!(building instanceof ResearchLab) || !building.alive || building.team !== Team.Player || !building.researchItem) continue;
+      if (building.buildProgress >= 1) completed.add(building.researchItem);
+      else if (!active || building.buildProgress > active.buildProgress) active = building;
+    }
+    const changed = completed.size !== this.researchedItems.size
+      || [...completed].some((item) => !this.researchedItems.has(item));
+    if (changed) {
+      for (const item of completed) {
+        if (!this.researchedItems.has(item)) {
+          this.completedResearchNotifications.push(item);
+          Audio.playSound('researchcomplete');
         }
       }
-      this.completedResearchNotifications.push(completed);
-      this.researchProgress = { item: null, progress: 0, timeNeeded: 0 };
-      this.startNextQueuedResearch();
+      this.researchedItems = completed;
+      this.applyResearchSideEffects();
+    }
+    this.researchProgress = active
+      ? { item: active.researchItem, progress: active.buildProgress * active.buildDurationSeconds, timeNeeded: active.buildDurationSeconds }
+      : { item: null, progress: 0, timeNeeded: 0 };
+  }
+
+  /**
+   * Classic mode: research is a timer gated on having a finished, powered 9x9
+   * Research Lab. Cost is paid up front when research is queued/started; once
+   * an item finishes, the player keeps it permanently regardless of whether
+   * the lab later gets destroyed. Losing the lab mid-research only pauses the
+   * timer (no progress or resources are lost) until a lab exists again.
+   */
+  private tickResearchClassic(dt: number): void {
+    if (!this.researchProgress.item && this.researchQueue.length > 0) {
+      const next = this.researchQueue.shift()!;
+      this.researchActiveElapsedSeconds = 0;
+      const timeNeeded = (RESEARCH_TIME[next as keyof typeof RESEARCH_TIME] ?? 0) / TICK_RATE;
+      this.researchProgress = { item: next, progress: 0, timeNeeded };
+    }
+    const item = this.researchProgress.item;
+    if (!item || !this.hasResearchLab()) return; // paused: no working Research Lab
+    this.researchActiveElapsedSeconds += dt;
+    const timeNeeded = this.researchProgress.timeNeeded;
+    this.researchProgress = { item, progress: Math.min(this.researchActiveElapsedSeconds, timeNeeded), timeNeeded };
+    if (this.researchActiveElapsedSeconds >= timeNeeded) {
+      this.researchedItems.add(item);
+      this.completedResearchNotifications.push(item);
       Audio.playSound('researchcomplete');
+      this.applyResearchSideEffects();
+      this.researchProgress = { item: null, progress: 0, timeNeeded: 0 };
+      this.researchActiveElapsedSeconds = 0;
     }
   }
 
-  private startNextQueuedResearch(): void {
-    while (!this.researchProgress.item && this.researchQueue.length > 0) {
-      const next = this.researchQueue.shift()!;
-      if (this.researchedItems.has(next)) continue;
-      const ticks = RESEARCH_TIME[next as keyof typeof RESEARCH_TIME];
-      if (ticks === undefined) continue;
-      this.researchProgress = { item: next, progress: 0, timeNeeded: ticks / TICK_RATE };
+  /** Classic mode only: cancel the active research item and refund its cost, no progress kept. */
+  cancelActiveResearch(): void {
+    this.researchProgress = { item: null, progress: 0, timeNeeded: 0 };
+    this.researchActiveElapsedSeconds = 0;
+  }
+
+  /** Classic mode only: start (or enqueue behind the active item) a research item. */
+  queueResearch(item: string): void {
+    if (!this.researchProgress.item) {
+      const timeNeeded = (RESEARCH_TIME[item as keyof typeof RESEARCH_TIME] ?? 0) / TICK_RATE;
+      this.researchActiveElapsedSeconds = 0;
+      this.researchProgress = { item, progress: 0, timeNeeded };
+    } else {
+      this.researchQueue.push(item);
+    }
+  }
+
+  private applyResearchSideEffects(): void {
+    const completed = this.researchedItems;
+    this.player.syncResearchUpgrades(completed);
+    const yardFaster = completed.has('fighterYard1');
+    const yardBigger = completed.has('fighterYard2');
+    for (const b of this.buildings) {
+      if (!b.alive || b.team !== Team.Player || !(b instanceof Shipyard) || b.type === EntityType.SwarmYard) continue;
+      b.buildInterval = yardFaster ? 4 : 5;
+      b.shipCapacity = yardBigger ? 7 : 5;
+    }
+    for (const f of this.fighters) {
+      if (!f.alive || f.team !== Team.Player) continue;
+      syncFighterResearchUpgrades(f, completed);
+      if (!completed.has('shipShield1')) f.disableShield();
+    }
+  }
+
+  private updateAreaShields(): void {
+    const shieldedEntities = [
+      ...this.playerShips.values(),
+      ...this.buildings,
+      ...this.fighters,
+    ];
+    for (const entity of shieldedEntities) entity.areaShield = null;
+    const generators = this.buildings.filter(
+      (building): building is ShieldGenerator => building instanceof ShieldGenerator && building.fieldActive,
+    );
+    for (const entity of shieldedEntities) {
+      if (!entity.alive || entity.team === Team.Neutral) continue;
+      let closest: ShieldGenerator | null = null;
+      let closestDistance = Infinity;
+      for (const generator of generators) {
+        if (generator.team !== entity.team || !generator.contains(entity.position)) continue;
+        const distance = generator.position.distanceTo(entity.position);
+        if (distance < closestDistance) {
+          closest = generator;
+          closestDistance = distance;
+        }
+      }
+      entity.areaShield = closest;
     }
   }
 
@@ -1727,7 +1909,23 @@ export class GameState {
   /** Check if the player has a research lab. */
   hasResearchLab(): boolean {
     return this.buildings.some(
-      (b) => b.alive && b.type === EntityType.ResearchLab && b.team === Team.Player,
+      (b) => b.alive && b instanceof ResearchLab && b.researchItem === null && b.team === Team.Player
+        && b.buildProgress >= 1 && (isSynonymousFaction(this.factionByTeam, b.team) || b.powered),
+    );
+  }
+
+  /**
+   * True when `item` is currently occupied/unavailable for (re)selection in
+   * the research menu: in 'building' mode that means a live Research Node
+   * exists for it, in 'classic' mode that it's already the active or a
+   * queued research item.
+   */
+  hasResearchBuilding(item: string): boolean {
+    if (RESEARCH_MODE === 'classic') {
+      return this.researchProgress.item === item || this.researchQueue.includes(item);
+    }
+    return this.buildings.some(
+      (b) => b.alive && b.team === Team.Player && b instanceof ResearchLab && b.researchItem === item,
     );
   }
 
@@ -1948,7 +2146,7 @@ export class GameState {
 
     for (const building of this.buildings) {
       if (!building.alive || building.team !== team) continue;
-      const halfSide = footprintForBuildingType(building.type) * GRID_CELL_SIZE * 0.5;
+      const halfSide = footprintForBuilding(building) * GRID_CELL_SIZE * 0.5;
       left = Math.min(left, building.position.x - halfSide);
       right = Math.max(right, building.position.x + halfSide);
       top = Math.min(top, building.position.y - halfSide);
@@ -2117,6 +2315,8 @@ export class GameState {
       : def.key === 'exciterturret' ? EntityType.ExciterTurret
       : def.key === 'massdriverturret' ? EntityType.MassDriverTurret
       : def.key === 'regenturret' ? EntityType.RegenTurret
+      : def.key === 'tetherturret' ? EntityType.TetherTurret
+      : def.key === 'shieldgenerator' ? EntityType.ShieldGenerator
       : null;
     if (type === null) return { valid: true, reason: 'OK' };
     const cap = type === EntityType.Factory ? MAX_FACTORIES
@@ -2126,7 +2326,9 @@ export class GameState {
       : type === EntityType.BomberYard && team === Team.Player ? 3
       : type === EntityType.SwarmYard ? 5
       : 5;
-    const count = this.countBuildingsOfType(type, team);
+    const count = type === EntityType.ResearchLab
+      ? this.buildings.filter((b) => b.alive && b.team === team && b instanceof ResearchLab && b.researchItem === null).length
+      : this.countBuildingsOfType(type, team);
     if (count >= cap) {
       return {
         valid: false,
@@ -2167,7 +2369,7 @@ export class GameState {
     }
     for (const b of this.buildings) {
       if (!b.alive) continue;
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const bo = buildingFootprintOrigin(b);
       const bx2 = bo.cx + size - 1;
       const by2 = bo.cy + size - 1;
@@ -2198,7 +2400,7 @@ export class GameState {
   isCellOccupiedByBuilding(cx: number, cy: number): boolean {
     for (const b of this.buildings) {
       if (!b.alive) continue;
-      const size = footprintForBuildingType(b.type);
+      const size = footprintForBuilding(b);
       const origin = buildingFootprintOrigin(b);
       if (cx >= origin.cx && cx < origin.cx + size && cy >= origin.cy && cy < origin.cy + size) {
         return true;
@@ -2247,7 +2449,7 @@ export class GameState {
     for (const b of this.buildings) {
       if (!b.alive || b.team !== team) continue;
       if (b.type !== EntityType.CommandPost && b.type !== EntityType.PowerGenerator) continue;
-      const sourceSize = footprintForBuildingType(b.type);
+      const sourceSize = footprintForBuilding(b);
       const sourceOrigin = buildingFootprintOrigin(b);
       const sourceX2 = sourceOrigin.cx + sourceSize - 1;
       const sourceY2 = sourceOrigin.cy + sourceSize - 1;

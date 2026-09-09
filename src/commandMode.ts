@@ -248,7 +248,7 @@ function issueCommandModeOrder(
     f.triggerOrderDash(targetPos);
   }
   if (commandModeState.selectedFighters.size > 0) {
-    ctx.waypointMarkers.set('all', { pos: targetPos.clone(), issuedAt: ctx.state.gameTime });
+    ctx.waypointMarkers.set('all', { pos: targetPos.clone(), issuedAt: ctx.state.gameTime, kind: 'move' });
   }
 
   for (const b of ctx.state.buildings) {
@@ -375,11 +375,11 @@ function groupLabel(group: ShipCommandGroup): string {
 function recordWaypointMarker(ctx: CommandModeCtx, group: ShipCommandGroup, pos: Vec2): void {
   if (group === 'all') {
     ctx.waypointMarkers.clear();
-    ctx.waypointMarkers.set('all', { pos: pos.clone(), issuedAt: ctx.state.gameTime });
+    ctx.waypointMarkers.set('all', { pos: pos.clone(), issuedAt: ctx.state.gameTime, kind: 'group' });
     return;
   }
   ctx.waypointMarkers.delete('all');
-  ctx.waypointMarkers.set(group, { pos: pos.clone(), issuedAt: ctx.state.gameTime });
+  ctx.waypointMarkers.set(group, { pos: pos.clone(), issuedAt: ctx.state.gameTime, kind: 'group' });
 }
 
 function clearWaypointMarker(
