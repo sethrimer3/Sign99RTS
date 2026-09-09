@@ -98,14 +98,16 @@ function buildNoiseTile(): HTMLCanvasElement {
       const nz = (Math.cos(ang2) + 1) * scale;
       const nw = (Math.sin(ang2) + 1) * scale;
       let v = ridged(nx + nz, ny + nw);
-      // Sharpen contrast so the flame has bright cores and dark gaps.
-      v = Math.pow(v, 1.9);
-      const a = Math.max(0, Math.min(255, v * 255));
+      // Sharpen contrast so the flame has bright cores and dark gaps, then lift
+      // the floor so a multiply pass darkens the gaps without crushing to black.
+      v = 0.2 + 0.8 * Math.pow(v, 2.4);
+      const g = Math.max(0, Math.min(255, v * 255));
       const i = (y * TILE + x) * 4;
-      d[i] = 255;
-      d[i + 1] = 255;
-      d[i + 2] = 255;
-      d[i + 3] = a;
+      // Opaque grayscale: multiply uses the RGB value, additive uses brightness.
+      d[i] = g;
+      d[i + 1] = g;
+      d[i + 2] = g;
+      d[i + 3] = 255;
     }
   }
   c.putImageData(img, 0, 0);
@@ -175,42 +177,56 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
   const path = maskPath(x, y, side, nodeSize);
   const n = Math.min(nodeSize, side * 0.5);
 
-  ctx.save();
-  ctx.beginPath();
-  ctx.clip(path);
-  ctx.globalAlpha = intensity;
-
-  // 1) dark ember base so the additive layers have something to bloom over.
-  ctx.fillStyle = 'rgba(20, 6, 2, 0.9)';
-  ctx.fillRect(x, y, side, side);
-
-  // 2) scrolling fire-noise layers, additive.
-  ctx.globalCompositeOperation = 'lighter';
   const layers = LAYERS.slice(0, layerCount);
-  for (let li = 0; li < layers.length; li++) {
-    const L = layers[li];
-    const drawn = n * 2.4 * L.scale;
-    const off = timeSec * L.speed + seed * 17.3 + li * 40;
-    const ox = ((L.dx * off) % drawn + drawn) % drawn;
-    const oy = ((L.dy * off) % drawn + drawn) % drawn;
-    ctx.globalAlpha = intensity * L.alpha;
+  const tileRun = (drawn: number, ox: number, oy: number) => {
     for (let ty = -1; ty <= Math.ceil(side / drawn) + 1; ty++) {
       for (let tx = -1; tx <= Math.ceil(side / drawn) + 1; tx++) {
         ctx.drawImage(tile, x + tx * drawn - ox, y + ty * drawn - oy, drawn, drawn);
       }
     }
-  }
+  };
+  const scroll = (li: number) => {
+    const L = layers[li];
+    const drawn = n * 2.4 * L.scale;
+    const off = timeSec * L.speed + seed * 17.3 + li * 40;
+    return {
+      drawn,
+      ox: ((L.dx * off) % drawn + drawn) % drawn,
+      oy: ((L.dy * off) % drawn + drawn) % drawn,
+      L,
+    };
+  };
 
-  // 3) tint the accumulated brightness through a warm fire gradient.
-  ctx.globalCompositeOperation = 'source-atop';
+  ctx.save();
+  ctx.beginPath();
+  ctx.clip(path);
+
+  // 1) solid warm fire gradient as the colour bed.
   ctx.globalAlpha = intensity;
   const grad = ctx.createLinearGradient(x, y + side, x, y);
-  grad.addColorStop(0.0, 'rgba(120, 12, 0, 0.95)');
-  grad.addColorStop(0.4, 'rgba(226, 74, 12, 0.95)');
-  grad.addColorStop(0.75, 'rgba(255, 152, 40, 0.95)');
-  grad.addColorStop(1.0, 'rgba(255, 226, 150, 0.95)');
+  grad.addColorStop(0.0, 'rgb(90, 10, 0)');
+  grad.addColorStop(0.4, 'rgb(210, 66, 10)');
+  grad.addColorStop(0.75, 'rgb(255, 150, 44)');
+  grad.addColorStop(1.0, 'rgb(255, 224, 150)');
   ctx.fillStyle = grad;
   ctx.fillRect(x, y, side, side);
+
+  // 2) carve the flame shapes out of the bed — dark noise gaps darken it, so
+  //    the sharp ridged pattern reads as licking fire tongues.
+  ctx.globalCompositeOperation = 'multiply';
+  for (let li = 0; li < layers.length; li++) {
+    const s = scroll(li);
+    ctx.globalAlpha = intensity * (0.85 - li * 0.12);
+    tileRun(s.drawn, s.ox, s.oy);
+  }
+
+  // 3) additive hot cores — the brightest noise crests glow white-yellow.
+  ctx.globalCompositeOperation = 'lighter';
+  for (let li = 0; li < layers.length; li++) {
+    const s = scroll(li);
+    ctx.globalAlpha = intensity * s.L.alpha * 0.28;
+    tileRun(s.drawn * 0.8, s.ox * 1.3, s.oy * 1.3);
+  }
 
   ctx.restore();
 
