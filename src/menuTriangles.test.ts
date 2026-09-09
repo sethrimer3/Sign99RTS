@@ -1,11 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { growMenuTriangles, subdivideTriangle } from './menuTriangles.js';
+import { createTriangleOpacityField, growMenuTriangles, subdivideTriangle } from './menuTriangles.js';
 
 const area = (p: { x: number; y: number }[]) => Math.abs(
   (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y),
 ) / 2;
 
 describe('menu triangle formations', () => {
+  it('fades all triangle sizes by distance regardless of placement order', () => {
+    let state = 42;
+    const tiles = growMenuTriangles(1280, 720, () => ((state = (state * 1664525 + 1013904223) >>> 0) / 4294967296));
+    const opacity = createTriangleOpacityField(tiles);
+    const reorderedOpacity = createTriangleOpacityField([...tiles].reverse());
+    const center = (points: { x: number; y: number }[]) => ({ x: points.reduce((s, p) => s + p.x, 0) / 3, y: points.reduce((s, p) => s + p.y, 0) / 3 });
+    const origin = center(tiles[0].points);
+    const shapes = tiles.flatMap(tile => [...(tile.subdivided ? subdivideTriangle(tile.points) : [tile.points]), ...(tile.edgeTriangles ?? [])]);
+    shapes.sort((a, b) => {
+      const p = center(a), q = center(b);
+      return Math.hypot(p.x - origin.x, p.y - origin.y) - Math.hypot(q.x - origin.x, q.y - origin.y);
+    });
+    expect(opacity(tiles[0].points)).toBeCloseTo(0.9);
+    expect(opacity(shapes[shapes.length - 1])).toBeCloseTo(0.05);
+    for (let i = 0; i < shapes.length; i++) {
+      expect(opacity(shapes[i])).toBeCloseTo(reorderedOpacity(shapes[i]));
+      if (i > 0) expect(opacity(shapes[i])).toBeLessThanOrEqual(opacity(shapes[i - 1]) + 1e-12);
+    }
+  });
   it('covers 20–50% with a connected, reversible growth order across screen shapes', () => {
     for (const [w, h] of [[1920, 1080], [800, 1200], [640, 360]]) {
       for (let seed = 1; seed <= 20; seed++) {

@@ -6,7 +6,6 @@ export interface MenuTriangle {
   area: number;
   parent: number;
   phase: number;
-  opacity?: number;
   subdivided?: boolean;
   edgeTriangles?: Point[][];
 }
@@ -18,6 +17,27 @@ const samePoint = (a: Point, b: Point): boolean => Math.abs(a.x - b.x) < 0.001 &
 export function subdivideTriangle([a, b, c]: Point[]): Point[][] {
   const ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
   return [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]];
+}
+
+function triangleCenter(points: Point[]): Point {
+  return { x: points.reduce((sum, p) => sum + p.x, 0) / 3, y: points.reduce((sum, p) => sum + p.y, 0) / 3 };
+}
+
+/** Fixed spatial fade, independent of growth order and animation progress. */
+export function createTriangleOpacityField(tiles: MenuTriangle[]): (points: Point[]) => number {
+  const seed = tiles.find(tile => tile.parent === -1);
+  if (!seed) return () => 0.9;
+  const origin = triangleCenter(seed.points);
+  const distance = (points: Point[]) => {
+    const p = triangleCenter(points);
+    return Math.hypot(p.x - origin.x, p.y - origin.y);
+  };
+  const shapes = tiles.flatMap(tile => [
+    ...(tile.subdivided ? subdivideTriangle(tile.points) : [tile.points]),
+    ...(tile.edgeTriangles ?? []),
+  ]);
+  const extent = Math.max(1, ...shapes.map(distance));
+  return points => 0.9 - 0.85 * Math.min(1, distance(points) / extent);
 }
 
 function clippedArea(points: Point[], w: number, h: number): number {
@@ -119,17 +139,6 @@ export function growMenuTriangles(w: number, h: number, random = Math.random): M
     (candidate.parent.edgeTriangles ??= []).push(candidate.points);
     area += candidate.area;
   }
-  // Keep the fade spatial and stable throughout growth/retraction. The seed
-  // stays at 90%; the most distant body tile reaches 5%.
-  const seedCenter = center(seed);
-  const distances = result.map(tile => {
-    const p = center(tile);
-    return Math.hypot(p.x - seedCenter.x, p.y - seedCenter.y);
-  });
-  const extent = Math.max(...distances, 1);
-  result.forEach((tile, index) => {
-    tile.opacity = 0.9 + (0.05 - 0.9) * distances[index] / extent;
-  });
   return result;
 }
 
@@ -142,6 +151,7 @@ function color(value: number): string {
 
 export class MenuTriangleBackground {
   private tiles: MenuTriangle[] = [];
+  private opacityAt: (points: Point[]) => number = () => 0.9;
   private width = 0;
   private height = 0;
   private state = '';
@@ -154,6 +164,7 @@ export class MenuTriangleBackground {
     if (w !== this.width || h !== this.height) {
       this.width = w; this.height = h;
       this.tiles = growMenuTriangles(w, h);
+      this.opacityAt = createTriangleOpacityField(this.tiles);
       this.visible = 0; this.retracting = false;
     }
     if (state !== this.state) {
@@ -164,6 +175,7 @@ export class MenuTriangleBackground {
       this.visible = Math.max(0, this.visible - dt * Math.max(1, this.tiles.length) / 0.15);
       if (this.visible === 0) {
         this.tiles = growMenuTriangles(w, h);
+        this.opacityAt = createTriangleOpacityField(this.tiles);
         this.retracting = false;
       }
     } else this.visible = Math.min(this.tiles.length, this.visible + dt * this.tiles.length / 0.72);
@@ -203,9 +215,8 @@ export class MenuTriangleBackground {
       const shapes = tile.subdivided ? subdivideTriangle(tile.points) : [tile.points];
       shapes.push(...(tile.edgeTriangles ?? []));
       for (const shape of shapes) {
-        // All four subdivisions inherit their body's opacity; fringe tiles
-        // lie on the outer boundary and use the 5% endpoint.
-        ctx.globalAlpha = amount * (tile.edgeTriangles?.includes(shape) ? 0.05 : (tile.opacity ?? 0.9));
+        // Sample final world positions, never placement index or scaled geometry.
+        ctx.globalAlpha = this.opacityAt(shape);
         ctx.beginPath();
         const points = shape.map(p => ({ x: anchor.x + (p.x - anchor.x) * scale, y: anchor.y + (p.y - anchor.y) * scale }));
         ctx.moveTo((points[2].x + points[0].x) / 2, (points[2].y + points[0].y) / 2);
