@@ -14,7 +14,7 @@ import { MainMenu, MenuAction } from './menu.js';
 import { Colors, colorToCSS } from './colors.js';
 import { Team, EntityType, ShipGroup, Entity } from './entities.js';
 import { DT, WORLD_WIDTH, WORLD_HEIGHT, RESEARCH_COST, RESEARCH_TIME, TICK_RATE, WEAPON_STATS, ACTIVE_RESEARCH_ITEMS, SHIP_STATS, BASELINE_RESOURCE_GAIN, RESOURCE_GAIN_RATE } from './constants.js';
-import { BuildingBase, CommandPost, Factory } from './building.js';
+import { BuildingBase, CommandPost, Factory, ResearchLab } from './building.js';
 import { Shipyard } from './building.js';
 import { EnemyBasePlanner } from './enemybaseplanner.js';
 import { TurretBase } from './turret.js';
@@ -1134,11 +1134,6 @@ export class Game {
   }
 
   private startResearch(item: string): void {
-    if (!this.state.hasResearchLab()) {
-      this.hud.showMessage('Build a Research Lab first!', Colors.alert1, 3);
-      return;
-    }
-
     const costKey = item as keyof typeof RESEARCH_COST;
     const timeKey = item as keyof typeof RESEARCH_TIME;
     const cost = RESEARCH_COST[costKey];
@@ -1150,35 +1145,46 @@ export class Game {
       this.hud.showMessage('Research Regen Turrets first!', Colors.alert1, 3);
       return;
     }
-    if (this.state.researchedItems.has(item) || this.state.researchProgress.item === item || this.state.researchQueue.includes(item)) {
-      this.hud.showMessage(`${researchDisplayName(item)} is already queued or complete`, Colors.alert2, 3);
+    if (this.state.researchedItems.has(item) || this.state.hasResearchBuilding(item)) {
+      this.hud.showMessage(`${researchDisplayName(item)} already has a lab`, Colors.alert2, 3);
       return;
     }
-
-    if (isSynonymousFaction(this.state.factionByTeam, Team.Player)) {
-      if (!this.state.synonymous.canSpend(Team.Player, cost)) {
-        this.hud.showMessage(`Need ${cost} ${SYNONYMOUS_CURRENCY_SYMBOL} for research!`, Colors.alert1, 3);
-        return;
-      }
-      this.state.synonymous.spendFreeDrones(Team.Player, cost, this.state.player.position);
-    } else {
-      if (this.state.resources < cost) {
-        this.hud.showMessage('Not enough resources for research!', Colors.alert1, 3);
-        return;
-      }
-      this.state.resources -= cost;
-    }
-    if (this.state.researchProgress.item) {
-      this.state.researchQueue.push(item);
-      this.hud.showMessage(`Queued research: ${researchDisplayName(item)}`, Colors.researchlab_detail, 3);
-      return;
-    }
-    this.state.researchProgress = {
-      item,
-      progress: 0,
-      timeNeeded: time / TICK_RATE,
+    const def = {
+      key: `researchlab:${item}`,
+      label: `${researchDisplayName(item)} Lab`,
+      description: 'A physical upgrade lab.',
+      cost,
+      footprintCells: 3,
+      buildTime: time,
+      tier: 'structure' as const,
+      factory: (pos: Vec2, team: Team) => new ResearchLab(pos, team, item),
     };
-    this.hud.showMessage(`Researching: ${researchDisplayName(item)}`, Colors.researchlab_detail, 3);
+    const aimWorld = this.camera.screenToWorld(Input.mousePos);
+    const cell = worldToCell(aimWorld);
+    const worldPos = footprintCenter(cell.cx, cell.cy, 3);
+    const status = this.state.getPlacementStatus(def, cell.cx, cell.cy, Team.Player);
+    if (!status.valid) {
+      this.hud.showMessage(status.reason, Colors.alert1, 3);
+      return;
+    }
+    const building = new ResearchLab(worldPos, Team.Player, item);
+    building.buildDurationSeconds = time / TICK_RATE;
+    building.buildProgress = 0;
+    building.placementCost = cost;
+    if (isSynonymousFaction(this.state.factionByTeam, Team.Player)) {
+      building.synonymousVisualKind = 'researchlab';
+      if (!this.state.synonymous.allocateToBuilding(Team.Player, building.id, 'researchlab', worldPos, cost, this.state.gameTime)) {
+        this.hud.showMessage(`Need ${cost} ${SYNONYMOUS_CURRENCY_SYMBOL}`, Colors.alert1, 3);
+        return;
+      }
+    } else {
+      const refund = this.state.sellReplaceableConduitsUnderFootprint(def, cell.cx, cell.cy, Team.Player);
+      this.state.resources += refund - cost;
+    }
+    this.state.addEntity(building);
+    this.state.applyConfluencePlacement(Team.Player, worldPos, String(building.id));
+    Audio.playSound('build');
+    this.hud.showMessage(`Building ${researchDisplayName(item)} Lab…`, Colors.researchlab_detail, 3);
   }
 
   private cancelQueuedResearch(queueIndex: number): void {

@@ -508,8 +508,7 @@ function buildBuildRoot(state: GameState): RadialItem[] {
 function buildResearchRoot(state: GameState): RadialItem[] {
   const makeResearchItem = (key: string): RadialItem | null => {
     if (state.researchedItems.has(key)) return null;
-    if (state.researchProgress.item === key) return null;
-    if (state.researchQueue.includes(key)) return null;
+    if (state.hasResearchBuilding(key)) return null;
     if (!(ACTIVE_RESEARCH_ITEMS as readonly string[]).includes(key)) return null;
     if (key === 'advancedRegenTurrets' && !state.researchedItems.has('regenturret')) return null;
     const researchKey = key as keyof typeof RESEARCH_COST;

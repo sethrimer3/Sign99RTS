@@ -16,6 +16,7 @@ import { teamColor } from './teamutils.js';
 import { getDistantSunScreenPosition } from './suns.js';
 import { Input } from './input.js';
 import { getCinematicLevel } from './cinematic.js';
+import { researchCategory, researchIcon } from './research.js';
 
 interface BaseVisual {
   side: number;
@@ -606,8 +607,10 @@ private drawAssignedGroupLabel(ctx:CanvasRenderingContext2D,screen:Vec2,v:BaseVi
 
 export class ResearchLab extends BuildingBase {
   private spinPhase = 0;
-  constructor(position: Vec2, team: Team) {
+  researchItem: string | null;
+  constructor(position: Vec2, team: Team, researchItem: string | null = null) {
     super(EntityType.ResearchLab, team, position, HP_VALUES.researchLab);
+    this.researchItem = researchItem;
   }
   update(dt: number): void { super.update(dt); this.spinPhase += this.powered ? dt * 2 : dt * 0.35; }
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
@@ -618,6 +621,25 @@ export class ResearchLab extends BuildingBase {
     const ringA = this.powered ? 0.85 : 0.45;
     ctx.save();
     ctx.translate(screen.x, screen.y);
+    if (this.researchItem) {
+      const category = researchCategory(this.researchItem);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `bold ${Math.max(13, v.side * 0.25)}px "Segoe UI", sans-serif`;
+      ctx.lineWidth = Math.max(2, v.side * 0.035);
+      ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+      ctx.strokeText(category, 0, 0);
+      ctx.fillStyle = colorToCSS(Colors.researchlab_detail, 1);
+      ctx.fillText(category, 0, 0);
+      // Exact technology is friendly-only; opponents see the category letter alone.
+      if (this.team === Team.Player) {
+        const icon = researchIcon(this.researchItem);
+        ctx.font = `bold ${Math.max(8, v.side * 0.115)}px "Segoe UI", sans-serif`;
+        ctx.strokeText(icon, 0, v.side * 0.27);
+        ctx.fillStyle = colorToCSS(Colors.building_glow_research, 0.95);
+        ctx.fillText(icon, 0, v.side * 0.27);
+      }
+    }
     // Three spinning elliptical rings
     ctx.strokeStyle = colorToCSS(Colors.researchlab_detail, ringA);
     ctx.lineWidth = Math.max(0.8, v.side * 0.018);

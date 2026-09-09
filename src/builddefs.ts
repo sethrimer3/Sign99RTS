@@ -166,10 +166,11 @@ export const BUILD_DEFS: Record<string, BuildDef> = {
     label: 'Research Lab',
     description: 'Enables research of new technologies and Main Ship upgrades.',
     cost: BUILDING_COST.researchlab,
-    footprintCells: 9,
+    footprintCells: 3,
     buildTime: BUILD_TIME.researchlab,
     tier: 'structure',
     radialLabel: 'Research\nLab',
+    hidden: true,
     factory: (pos, team) => new ResearchLab(pos, team),
   },
   factory: {
