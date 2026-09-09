@@ -41,7 +41,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 ## Building Placement
 
 - The grid cell size is one third of the original port grid.
-- Buildings snap to grid footprints: most buildings are 3x3, Factories and Research Labs are 4x4, and Command Posts are 6x6.
+- Buildings snap to grid footprints: most buildings and all upgrade Research Labs are 3x3, Factories are 4x4, and Command Posts are 6x6.
 - Placement requires enough resources, an empty cell, world bounds, and adjacency to the player power network.
 - Concentroid placement instead requires the building footprint to sit on the race's frontier band.
 - Synonymous placement is freeform and does not require grid power or frontier bands, but the player must have enough free nanobots for the selected structure.
@@ -78,8 +78,9 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 
 ## Research
 
-- Research requires at least one powered, finished Research Lab to progress.
-- One active research item can run at a time.
+- Choosing research places a dedicated 3x3 upgrade Research Lab at the cursor; its construction time is the research time.
+- A completed, living upgrade lab grants its linked upgrade. Destroying or selling it immediately removes that upgrade and makes it available to build again.
+- Enemy labs reveal only S (ship), F (fighter), or D (defense/turret); the owner also sees the exact upgrade icon.
 - Active research items are turret unlocks, Bomber Yard, Advanced Fighters, and Main Ship upgrades including Dash.
 - Mine Layer research and construction are exclusive to The Synonymous faction; Terran players do not see or unlock Mine Layers.
 - Completed research is hidden from the research menu and summarized on the HUD.

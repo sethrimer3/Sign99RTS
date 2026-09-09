@@ -3,7 +3,7 @@
 import { pointToSegmentDistance, Vec2 } from './math.js';
 import { Entity, Team, EntityType } from './entities.js';
 import { PlayerShip } from './ship.js';
-import { BuildingBase, CommandPost, Wall } from './building.js';
+import { BuildingBase, CommandPost, ResearchLab, Wall } from './building.js';
 import { Shipyard } from './building.js';
 import { SynonymousMineLayer, TetherTurret, TurretBase } from './turret.js';
 import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
@@ -15,7 +15,7 @@ import { Camera } from './camera.js';
 import { Audio } from './audio.js';
 import { WorldGrid, GRID_CELL_SIZE, cellKey, footprintOrigin, footprintCenter } from './grid.js';
 import { PowerGraph } from './power.js';
-import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, CONDUIT_COST, RESEARCH_TIME, TICK_RATE, DT } from './constants.js';
+import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, CONDUIT_COST, DT } from './constants.js';
 import { findClosestEnemy } from './combatUtils.js';
 import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS } from './constants.js';
 import { buildCostForBuildingType, type BuildDef } from './builddefs.js';
@@ -38,7 +38,7 @@ import { SpatialIndex, type SpatialIndexStats } from './spatialIndex.js';
 
 const FACTORY_COST_STEP = 25;
 const MAX_FACTORIES = 10;
-const MAX_RESEARCH_LABS = 1;
+const MAX_RESEARCH_LABS = 32;
 const MAX_TURRETS_PER_KIND = 20;
 
 export interface DestroyedBuildingRecord {
@@ -1550,60 +1550,40 @@ export class GameState {
   // -----------------------------------------------------------------------
 
   private tickResearch(dt: number): void {
-    if (!this.researchProgress.item) return;
-
-    // Need a research lab
-    const hasLab = this.buildings.some(
-      (b) =>
-        b.alive &&
-        b.type === EntityType.ResearchLab &&
-        b.team === Team.Player &&
-            (isSynonymousFaction(this.factionByTeam, b.team) || b.powered) &&
-            b.buildProgress >= 1,
-    );
-    if (!hasLab) return;
-
-    this.researchProgress.progress += dt;
-    if (this.researchProgress.progress >= this.researchProgress.timeNeeded) {
-      const completed = this.researchProgress.item;
-      this.researchedItems.add(completed);
-      this.player.applyResearchUpgrade(completed);
-      if (completed === 'advancedFighters') {
-        for (const b of this.buildings) {
-          if (b.alive && b.team === Team.Player && b instanceof Shipyard) {
-            b.shipCapacity = 7;
-            b.buildInterval = 4;
-          }
-        }
-        for (const f of this.fighters) {
-          if (f.alive && f.team === Team.Player) f.upgradeToAdvanced();
-        }
-      } else if (completed === 'shipShield1') {
-        for (const f of this.fighters) {
-          if (f.alive && f.team === Team.Player && !f.docked && f.position.distanceTo(this.player.position) <= 90) {
-            f.enableShield();
-          }
-        }
-      } else if (completed === 'poweredWalls') {
-        for (const b of this.buildings) {
-          if (b.alive && b.team === Team.Player && b instanceof Wall) b.enablePoweredWall();
+    void dt;
+    const completed = new Set<string>();
+    let active: ResearchLab | null = null;
+    for (const building of this.buildings) {
+      if (!(building instanceof ResearchLab) || !building.alive || building.team !== Team.Player || !building.researchItem) continue;
+      if (building.buildProgress >= 1) completed.add(building.researchItem);
+      else if (!active || building.buildProgress > active.buildProgress) active = building;
+    }
+    const changed = completed.size !== this.researchedItems.size
+      || [...completed].some((item) => !this.researchedItems.has(item));
+    if (changed) {
+      for (const item of completed) {
+        if (!this.researchedItems.has(item)) {
+          this.completedResearchNotifications.push(item);
+          Audio.playSound('researchcomplete');
         }
       }
-      this.completedResearchNotifications.push(completed);
-      this.researchProgress = { item: null, progress: 0, timeNeeded: 0 };
-      this.startNextQueuedResearch();
-      Audio.playSound('researchcomplete');
+      this.researchedItems = completed;
+      this.player.syncResearchUpgrades(completed);
+      const advanced = completed.has('advancedFighters');
+      for (const b of this.buildings) {
+        if (!b.alive || b.team !== Team.Player || !(b instanceof Shipyard) || b.type === EntityType.SwarmYard) continue;
+        b.shipCapacity = advanced ? 7 : 5;
+        b.buildInterval = advanced ? 4 : 5;
+      }
+      for (const f of this.fighters) {
+        if (!f.alive || f.team !== Team.Player) continue;
+        if (advanced) f.upgradeToAdvanced(); else f.downgradeFromAdvanced();
+        if (!completed.has('shipShield1')) f.disableShield();
+      }
     }
-  }
-
-  private startNextQueuedResearch(): void {
-    while (!this.researchProgress.item && this.researchQueue.length > 0) {
-      const next = this.researchQueue.shift()!;
-      if (this.researchedItems.has(next)) continue;
-      const ticks = RESEARCH_TIME[next as keyof typeof RESEARCH_TIME];
-      if (ticks === undefined) continue;
-      this.researchProgress = { item: next, progress: 0, timeNeeded: ticks / TICK_RATE };
-    }
+    this.researchProgress = active
+      ? { item: active.researchItem, progress: active.buildProgress * active.buildDurationSeconds, timeNeeded: active.buildDurationSeconds }
+      : { item: null, progress: 0, timeNeeded: 0 };
   }
 
   // -----------------------------------------------------------------------
@@ -1844,6 +1824,12 @@ export class GameState {
   hasResearchLab(): boolean {
     return this.buildings.some(
       (b) => b.alive && b.type === EntityType.ResearchLab && b.team === Team.Player,
+    );
+  }
+
+  hasResearchBuilding(item: string): boolean {
+    return this.buildings.some(
+      (b) => b.alive && b.team === Team.Player && b instanceof ResearchLab && b.researchItem === item,
     );
   }
 

@@ -534,8 +534,15 @@ function buildResearchRoot(state: GameState): RadialItem[] {
       ? categories
       : [{ label: 'ALL RESEARCH COMPLETE', disabled: true, infoOnly: true }];
   };
+  const firstMissing = (prefix: string, max: number): string => {
+    for (let level = 1; level <= max; level++) {
+      const key = `${prefix}${level}`;
+      if (!state.researchedItems.has(key) && !state.hasResearchBuilding(key)) return key;
+    }
+    return `${prefix}${max}`;
+  };
   if (isPlayerSynonymous(state)) {
-    const nextFireSpeed = `synonymousFireSpeed${Math.min(4, state.player.synonymousFireSpeedLevel + 1)}`;
+    const nextFireSpeed = firstMissing('synonymousFireSpeed', 4);
     return visibleCategories([
       category('Main Ship', ['synonymousSpeed', 'synonymousVitality']),
       category('Weapons', ['synonymousPierce', nextFireSpeed]),
@@ -543,9 +550,9 @@ function buildResearchRoot(state: GameState): RadialItem[] {
       category('Defensive Turrets', ['synonymousminelayer', 'exciterturret', 'massdriverturret', 'regenturret']),
     ]);
   }
-  const nextHp = `shipHp${Math.min(SHIP_HP_MAX_LEVEL, state.player.hpLevel + 1)}`;
-  const nextSpeedEnergy = `shipSpeedEnergy${Math.min(SHIP_SPEED_ENERGY_MAX_LEVEL, state.player.speedEnergyLevel + 1)}`;
-  const nextShield = `shipShield${Math.min(SHIP_SHIELD_MAX_LEVEL, state.player.shieldLevel + 1)}`;
+  const nextHp = firstMissing('shipHp', SHIP_HP_MAX_LEVEL);
+  const nextSpeedEnergy = firstMissing('shipSpeedEnergy', SHIP_SPEED_ENERGY_MAX_LEVEL);
+  const nextShield = firstMissing('shipShield', SHIP_SHIELD_MAX_LEVEL);
   return visibleCategories([
     category('Defensive Turrets', ['missileturret', 'exciterturret', 'massdriverturret', 'regenturret', 'advancedRegenTurrets']),
     category('Main Ship', [nextHp, nextSpeedEnergy, nextShield, 'shipDash']),

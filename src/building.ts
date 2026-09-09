@@ -608,9 +608,12 @@ private drawAssignedGroupLabel(ctx:CanvasRenderingContext2D,screen:Vec2,v:BaseVi
 export class ResearchLab extends BuildingBase {
   private spinPhase = 0;
   researchItem: string | null;
+  /** Rendering permission set from the local viewer's team on network clients. */
+  showExactUpgrade: boolean;
   constructor(position: Vec2, team: Team, researchItem: string | null = null) {
     super(EntityType.ResearchLab, team, position, HP_VALUES.researchLab);
     this.researchItem = researchItem;
+    this.showExactUpgrade = team === Team.Player;
   }
   update(dt: number): void { super.update(dt); this.spinPhase += this.powered ? dt * 2 : dt * 0.35; }
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
@@ -632,7 +635,7 @@ export class ResearchLab extends BuildingBase {
       ctx.fillStyle = colorToCSS(Colors.researchlab_detail, 1);
       ctx.fillText(category, 0, 0);
       // Exact technology is friendly-only; opponents see the category letter alone.
-      if (this.team === Team.Player) {
+      if (this.showExactUpgrade) {
         const icon = researchIcon(this.researchItem);
         ctx.font = `bold ${Math.max(8, v.side * 0.115)}px "Segoe UI", sans-serif`;
         ctx.strokeText(icon, 0, v.side * 0.27);

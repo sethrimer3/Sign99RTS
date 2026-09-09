@@ -1968,6 +1968,10 @@ export class Game {
         b.health = sb.health;
         b.buildProgress = sb.buildProgress;
         b.powered = sb.powered;
+        if (b instanceof ResearchLab) {
+          b.researchItem = sb.researchItem ?? null;
+          b.showExactUpgrade = b.team === this.localPlayerTeam();
+        }
         if (!sb.alive && b.alive) b.destroy();
       } else if (sb.alive) {
         // Building not known locally — create it from snapshot so remote clients
@@ -1980,6 +1984,10 @@ export class Game {
           newBuilding.health = sb.health;
           newBuilding.buildProgress = sb.buildProgress;
           newBuilding.powered = sb.powered;
+          if (newBuilding instanceof ResearchLab) {
+            newBuilding.researchItem = sb.researchItem ?? null;
+            newBuilding.showExactUpgrade = newBuilding.team === this.localPlayerTeam();
+          }
           this.state.addEntity(newBuilding);
           this.state.power.markDirty();
         }
@@ -2140,6 +2148,7 @@ export class Game {
         buildProgress: b.buildProgress,
         powered: b.powered,
         alive: b.alive,
+        researchItem: b instanceof ResearchLab ? b.researchItem ?? undefined : undefined,
       });
     }
 

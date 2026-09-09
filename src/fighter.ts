@@ -281,6 +281,23 @@ export class FighterShip extends Entity {
     this.fireRate = Math.max(1, this.fireRate / 1.5);
   }
 
+  downgradeFromAdvanced(): void {
+    if (!this.advancedTier) return;
+    const healthFraction = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+    this.advancedTier = false;
+    this.maxHealth /= 1.5;
+    this.health = Math.max(1, this.maxHealth * healthFraction);
+    this.maxShield = 0;
+    this.shield = 0;
+    this.shieldUnlocked = false;
+    this.thrustPower /= 1.5;
+    this.maxSpeed /= 1.5;
+    this.turnRate /= 1.2;
+    this.weaponDamage /= 1.5;
+    this.weaponRange /= 1.08;
+    this.fireRate *= 1.5;
+  }
+
   avoidHazard(center: Vec2, radius: number, dt: number): void {
     if (!this.alive || this.docked || radius <= 0) return;
     const offset = this.position.sub(center);

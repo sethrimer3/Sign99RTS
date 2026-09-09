@@ -472,6 +472,40 @@ export class PlayerShip extends Entity {
     }
   }
 
+  /** Rebuild reversible ship stats from the upgrade labs that currently exist. */
+  syncResearchUpgrades(items: ReadonlySet<string>): void {
+    const healthFraction = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+    this.hpLevel = 0;
+    this.speedEnergyLevel = 0;
+    this.shieldLevel = 0;
+    this.shieldUnlocked = false;
+    this.dashUnlocked = false;
+    this.synonymousPierceMultiplier = 1;
+    this.synonymousFireSpeedLevel = 0;
+    this.synonymousVitalityUnlocked = false;
+    this.synonymousHealthRegenRate = 0;
+    this.maxHealth = this.baseMaxHealth;
+    this.maxSpeed = this.baseMaxSpeed;
+    this.thrustPower = this.baseThrustPower;
+    this.baseBatteryRegenRate = this.baseEnergyRegenRate;
+    this.fireCooldownMultiplier = 1;
+    this.maxShield = 0;
+    this.shield = 0;
+    this.hpLevel = [...items].filter((item) => /^shipHp\d$/.test(item)).length;
+    this.speedEnergyLevel = [...items].filter((item) => /^shipSpeedEnergy\d$/.test(item)).length;
+    this.shieldLevel = [...items].filter((item) => /^shipShield\d$/.test(item)).length;
+    this.shieldUnlocked = this.shieldLevel > 0;
+    this.synonymousFireSpeedLevel = [...items].filter((item) => /^synonymousFireSpeed\d$/.test(item)).length;
+    this.recomputeHpStats();
+    this.recomputeSpeedEnergyStats();
+    this.recomputeShieldStats();
+    for (const item of items) {
+      if (/^(shipHp|shipSpeedEnergy|shipShield|synonymousFireSpeed)\d$/.test(item)) continue;
+      this.applyResearchUpgrade(item);
+    }
+    this.health = Math.max(1, Math.min(this.maxHealth, this.maxHealth * healthFraction));
+  }
+
   /** HP upgrade: each level adds +25% of *base* max HP (non-cumulative — level 4 = +100%, not compounded). */
   private recomputeHpStats(): void {
     const healthFraction = this.maxHealth > 0 ? this.health / this.maxHealth : 1;

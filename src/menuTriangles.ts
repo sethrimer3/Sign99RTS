@@ -172,6 +172,8 @@ export class MenuTriangleBackground {
   draw(ctx: CanvasRenderingContext2D): void {
     ctx.save();
     const radius = Math.max(44, Math.min(this.width, this.height) / 10) * 0.065;
+    // Equal pixel radii keep hotspots circular at every screen aspect ratio.
+    const hotspotRadius = Math.max(1, Math.min(this.width, this.height) * 0.14);
     for (let i = 0; i < Math.ceil(this.visible); i++) {
       const tile = this.tiles[i];
       const amount = Math.min(1, this.visible - i);
@@ -182,7 +184,7 @@ export class MenuTriangleBackground {
         const t = this.time * (0.10 + j * 0.025) + j * 2.1;
         const x = this.width * (0.5 + 0.48 * Math.sin(t));
         const y = this.height * (0.5 + 0.48 * Math.cos(t * 0.73 + j));
-        const dx = (cx - x) / (this.width * 0.20), dy = (cy - y) / (this.height * 0.10);
+        const dx = (cx - x) / hotspotRadius, dy = (cy - y) / hotspotRadius;
         heat = Math.max(heat, Math.exp(-(dx * dx + dy * dy) * 1.5));
       }
       const value = 0.12 + 0.19 * (0.5 + 0.5 * Math.sin(this.time * 0.35 + tile.phase)) + heat * 0.78;
