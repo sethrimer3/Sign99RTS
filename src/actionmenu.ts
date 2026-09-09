@@ -17,7 +17,7 @@ import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { GameState } from './gamestate.js';
 import { ShipGroup, TacticalOrder, Team } from './entities.js';
-import { RESEARCH_COST, CONDUIT_COST, ACTIVE_RESEARCH_ITEMS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
+import { RESEARCH_COST, RESEARCH_MODE, CONDUIT_COST, ACTIVE_RESEARCH_ITEMS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
 import { SHIP_WEAPON_OPTIONS, type ShipWeaponId, SHIP_HP_MAX_LEVEL, SHIP_SPEED_ENERGY_MAX_LEVEL, SHIP_SHIELD_MAX_LEVEL } from './ship.js';
 import { worldToCell, cellKey, cellCenter, footprintCenter, footprintOrigin, GRID_CELL_SIZE } from './grid.js';
 import { defsByTier, BuildDef, getBuildDef } from './builddefs.js';
@@ -1186,8 +1186,10 @@ class LeftHoldMenu {
       const rowY = y + 54 + i * (rowH + gap);
       const hovered = Input.mousePos.x >= x + 10 && Input.mousePos.x <= x + w - 10 &&
         Input.mousePos.y >= rowY && Input.mousePos.y <= rowY + rowH;
-      if (!entry.active) this.queueRects.push({ index: i - (state.researchProgress.item ? 1 : 0), item: entry.item, x: x + 10, y: rowY, w: w - 20, h: rowH });
-      drawMenuRow(ctx, x + 10, rowY, w - 20, rowH, hovered && !entry.active, false);
+      // Classic mode lets the player cancel the in-progress item too (full refund, no partial progress kept).
+      const cancelable = !entry.active || RESEARCH_MODE === 'classic';
+      if (cancelable) this.queueRects.push({ index: entry.active ? -1 : i - (state.researchProgress.item ? 1 : 0), item: entry.item, x: x + 10, y: rowY, w: w - 20, h: rowH });
+      drawMenuRow(ctx, x + 10, rowY, w - 20, rowH, hovered && cancelable, false);
       ctx.fillStyle = colorToCSS(Colors.general_building, 0.88);
       const queueNumber = state.researchProgress.item ? i : i + 1;
       const prefix = entry.active ? 'Now' : `${queueNumber}.`;
@@ -1196,7 +1198,7 @@ class LeftHoldMenu {
       ctx.textBaseline = 'middle';
       ctx.fillStyle = colorToCSS(Colors.radar_gridlines, 0.62);
       ctx.font = '15px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
-      ctx.fillText(entry.active ? 'active' : 'cancel', x + w - 18, rowY + rowH * 0.5);
+      ctx.fillText(cancelable ? 'cancel' : 'active', x + w - 18, rowY + rowH * 0.5);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
     }
