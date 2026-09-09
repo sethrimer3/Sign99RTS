@@ -25,6 +25,7 @@ import { drawDecodedText } from './decodeText.js';
 import { isConfluenceFaction, isSynonymousFaction, CONFLUENCE_PLACEMENT_DISTANCE, CONFLUENCE_PLACEMENT_TOLERANCE, CONFLUENCE_BASE_RADIUS } from './confluence.js';
 import { MENU_CANVAS_FONT } from './fonts.js';
 import { SYNONYMOUS_BUILD_COST, SYNONYMOUS_CURRENCY_SYMBOL } from './synonymous.js';
+import { footprintForBuilding } from './buildingfootprint.js';
 
 /** Radius (px) from the menu centre at which items are placed. */
 const ITEM_RADIUS = 110;
@@ -1580,6 +1581,13 @@ class QuickBuildMenu {
   private touchedThisDrag = new Set<string>();
   private buildingDragCells = new Set<string>();
   private buildingDragStartCell: { cx: number; cy: number } | null = null;
+  /**
+   * When a building drag begins on top of an existing building, the footprint
+   * cell bounds of that building. New buildings (walls/conduits excepted) are
+   * suppressed until the drag has carried the cursor at least one conduit cell
+   * clear of this rectangle.
+   */
+  private buildingDragOriginBounds: { minCx: number; minCy: number; maxCx: number; maxCy: number } | null = null;
   private dragMode: 'paint' | 'erase' | null = null;
   private lastDragCell: { cx: number; cy: number } | null = null;
   private shapeDrawing = false;
@@ -1591,6 +1599,7 @@ class QuickBuildMenu {
     this.touchedThisDrag.clear();
     this.buildingDragCells.clear();
     this.buildingDragStartCell = null;
+    this.buildingDragOriginBounds = null;
     this.dragMode = null;
     this.lastDragCell = null;
     this.shapeDrawing = false;
@@ -1629,6 +1638,27 @@ class QuickBuildMenu {
     return cells;
   }
 
+  /**
+   * Footprint cell bounds of the player building covering cell (cx, cy), or
+   * null if no player building sits there.
+   */
+  private buildingBoundsAtCell(
+    state: GameState,
+    cx: number,
+    cy: number,
+  ): { minCx: number; minCy: number; maxCx: number; maxCy: number } | null {
+    for (const b of state.buildings) {
+      if (!b.alive || b.team !== Team.Player) continue;
+      const fp = footprintForBuilding(b);
+      const minCx = Math.round(b.position.x / GRID_CELL_SIZE - fp / 2);
+      const minCy = Math.round(b.position.y / GRID_CELL_SIZE - fp / 2);
+      if (cx >= minCx && cx < minCx + fp && cy >= minCy && cy < minCy + fp) {
+        return { minCx, minCy, maxCx: minCx + fp - 1, maxCy: minCy + fp - 1 };
+      }
+    }
+    return null;
+  }
+
   update(state: GameState, camera: Camera): MenuResult {
     if (!state.player.alive) {
       this.cancel();
@@ -1642,6 +1672,7 @@ class QuickBuildMenu {
       this.touchedThisDrag.clear();
       this.buildingDragCells.clear();
       this.buildingDragStartCell = null;
+      this.buildingDragOriginBounds = null;
       this.dragMode = null;
       this.lastDragCell = null;
       this.shapeDrawing = false;
@@ -1650,6 +1681,7 @@ class QuickBuildMenu {
       this.touchedThisDrag.clear();
       this.buildingDragCells.clear();
       this.buildingDragStartCell = null;
+      this.buildingDragOriginBounds = null;
       this.dragMode = null;
       this.lastDragCell = null;
       this.shapeDrawing = false;
@@ -1691,6 +1723,7 @@ class QuickBuildMenu {
       this.touchedThisDrag.clear();
       this.buildingDragCells.clear();
       this.buildingDragStartCell = null;
+      this.buildingDragOriginBounds = null;
       this.dragMode = 'erase';
       this.lastDragCell = null;
     }
@@ -1729,18 +1762,36 @@ class QuickBuildMenu {
       if (!Input.mouseDown) {
         this.buildingDragCells.clear();
         this.buildingDragStartCell = null;
+        this.buildingDragOriginBounds = null;
         this.lastDragCell = null;
         return { action: 'none' };
       }
       const worldPos = camera.screenToWorld(Input.mousePos);
       const cell = worldToCell(worldPos);
-      if (!this.buildingDragStartCell) this.buildingDragStartCell = cell;
+      if (!this.buildingDragStartCell) {
+        this.buildingDragStartCell = cell;
+        // If the drag began on top of an existing building, remember its
+        // footprint so we can hold off placing until the cursor pulls at least
+        // one conduit cell clear of it. Walls place flush, so they opt out.
+        this.buildingDragOriginBounds = selected.def.key === 'wall'
+          ? null
+          : this.buildingBoundsAtCell(state, cell.cx, cell.cy);
+      }
       const cells = this.buildingDragLineCells(this.buildingDragStartCell, cell, selected.def);
       this.lastDragCell = cell;
       for (const candidate of cells) {
         const origin = footprintOrigin(candidate.cx, candidate.cy, selected.def.footprintCells);
         const key = `${selected.def.key}:${origin.cx},${origin.cy}`;
         if (this.buildingDragCells.has(key)) continue;
+        if (this.buildingDragOriginBounds) {
+          const endCx = origin.cx + selected.def.footprintCells - 1;
+          const endCy = origin.cy + selected.def.footprintCells - 1;
+          const b = this.buildingDragOriginBounds;
+          const clear =
+            origin.cx > b.maxCx + 1 || endCx < b.minCx - 1 ||
+            origin.cy > b.maxCy + 1 || endCy < b.minCy - 1;
+          if (!clear) continue;
+        }
         this.buildingDragCells.add(key);
         const status = state.getPlacementStatus(selected.def, candidate.cx, candidate.cy, Team.Player);
         if (status.valid) return { action: 'build', buildingType: selected.def.key, cell: candidate };

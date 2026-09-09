@@ -12,6 +12,7 @@ import { Colors } from './colors.js';
 import { Audio } from './audio.js';
 import { BASELINE_RESOURCE_GAIN, RESOURCE_GAIN_RATE, WORLD_WIDTH, WORLD_HEIGHT, WEAPON_STATS } from './constants.js';
 import { footprintCenter, worldToCell } from './grid.js';
+import { footprintForBuildingType } from './buildingfootprint.js';
 import { damageLaserLine, damageLaserLineLimited } from './combatUtils.js';
 import { EnemyBasePlanner } from './enemybaseplanner.js';
 import type { PlayerStrategy } from './enemybaseplanner.js';
@@ -202,7 +203,7 @@ export class PracticeMode {
       Math.max(300, Math.min(WORLD_HEIGHT - 300, playerPos.y + Math.sin(angle) * dist)),
     );
     const baseCell = worldToCell(rawBasePos);
-    const basePos = footprintCenter(baseCell.cx, baseCell.cy, 6);
+    const basePos = footprintCenter(baseCell.cx, baseCell.cy, footprintForBuildingType(EntityType.CommandPost));
     const base = this.createEnemyBase(state, basePos);
     this.primaryBase = base;
     this.planner = base.planner;
@@ -445,7 +446,7 @@ export class PracticeMode {
         Math.max(300, Math.min(WORLD_HEIGHT - 300, playerPos.y + Math.sin(angle) * dist)),
       );
       const cell = worldToCell(raw);
-      const pos = footprintCenter(cell.cx, cell.cy, 6);
+      const pos = footprintCenter(cell.cx, cell.cy, footprintForBuildingType(EntityType.CommandPost));
       const nearest = existing.reduce((min, b) => Math.min(min, b.position.distanceTo(pos)), Infinity);
       const score = nearest + playerPos.distanceTo(pos) * 0.25;
       if (score > bestScore) {

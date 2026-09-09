@@ -42,10 +42,10 @@ uniform vec2  u_resolution;
 uniform vec2  u_camOffset;   // camera world position * parallax scale
 
 // --- Star Nest constants (tuned for Sign99 deep-space aesthetic) ---
-#define BRIGHTNESS   0.0016
+#define BRIGHTNESS   0.0015
 #define DARKMATTER   0.300
 #define DISTFADING   0.730
-#define SATURATION   0.72
+#define SATURATION   0.850
 
 void main() {
   vec2 uv = (gl_FragCoord.xy / u_resolution.xy) - 0.5;
@@ -58,7 +58,8 @@ void main() {
   mat2 rot1 = mat2(cos(a1), sin(a1), -sin(a1), cos(a1));
   mat2 rot2 = mat2(cos(a2), sin(a2), -sin(a2), cos(a2));
 
-  vec3 dir = vec3(uv * 0.86, 1.0);
+  // Increased zoom (2.5) to make stars smaller
+  vec3 dir = vec3(uv * 2.5, 1.0);
   dir.xz = rot1 * dir.xz;
   dir.xy = rot2 * dir.xy;
 
@@ -74,7 +75,7 @@ void main() {
 
   for (int r = 0; r < ${volsteps}; r++) {
     vec3 p = from + s * dir * 0.5;
-    p = abs(vec3(0.7) - mod(p, vec3(1.4)));
+    p = abs(vec3(0.850) - mod(p, vec3(1.700)));
 
     float pa = 0.0;
     float a  = 0.0;
@@ -84,7 +85,7 @@ void main() {
       pa = length(p);
     }
 
-    // Dark matter — mutes interior bloom
+    // Dark matter - mutes interior bloom
     float dm = max(0.0, DARKMATTER - a * a * 0.001);
     a *= a * a;
     if (r > 6) fade *= 1.0 - dm;
@@ -92,17 +93,11 @@ void main() {
     v += fade;
     v += vec3(s, s * s, s * s * s * s) * a * BRIGHTNESS * fade;
     fade *= DISTFADING;
-    s += 0.18;
+    s += 0.1;
   }
 
   v = mix(vec3(length(v)), v, SATURATION);
-
-  // Tint toward deep navy / violet / blue-white — suppress warm orange
-  v *= vec3(0.55, 0.62, 1.00);
-  // Additional clamp to keep it dark
-  v = clamp(v * 0.16, 0.0, 1.0);
-
-  gl_FragColor = vec4(v, 1.0);
+  gl_FragColor = vec4(v * 0.01, 1.0);
 }
 `;
 }

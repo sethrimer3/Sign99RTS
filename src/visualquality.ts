@@ -282,7 +282,7 @@ export const VISUAL_QUALITY_PRESETS: Record<VisualQuality, VisualQualityPreset> 
     dustHazeEnabled: false,
     starNestEnabled: true,
     starNestRenderScale: 0.75,
-    starNestOpacity: 0.1,
+    starNestOpacity: 1.0,
     starNestIterations: 17,
     starNestVolsteps: 20,
   },

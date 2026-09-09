@@ -108,7 +108,9 @@ export abstract class BuildingBase extends Entity {
       ctx.stroke();
     }
     this.drawSquareHealthFrame(ctx, x, y, v.side);
-    this.drawPowerStrip(ctx, x, y, v.side);
+    // Legacy-only: the bright top/left "power strip" tabs. The new look conveys
+    // power state through overall dimming + drawUnpoweredWarning instead.
+    if (isLegacyGraphics()) this.drawPowerStrip(ctx, x, y, v.side);
     this.drawUnpoweredWarning(ctx, x, y, v.side);
     if (this.powered && this.buildProgress >= 1 && !v.simple) this.drawPoweredScanLine(ctx, x, y, v.side);
     if (getCinematicLevel() >= 2 && this.buildProgress >= 1) this.drawCinematicBloom(ctx, x, y, v.side, camera);

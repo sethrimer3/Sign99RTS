@@ -99,7 +99,9 @@ export const BUILD_DEFS: Record<string, BuildDef> = {
     label: 'Command Post',
     description: 'Your command center. Allows construction within its radius. Losing this ends the game.',
     cost: COMMANDPOST_REBUILD_COST,
-    footprintCells: 6,
+    // Must match footprintForBuildingType(CommandPost); an odd footprint centres
+    // the post on a cell centre so its auto-conduit ring frames it evenly.
+    footprintCells: 7,
     buildTime: COMMANDPOST_REBUILD_TIME,
     tier: 'structure',
     radialLabel: 'Command\nPost',

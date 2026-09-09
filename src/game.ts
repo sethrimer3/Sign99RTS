@@ -378,7 +378,7 @@ export class Game {
       // Lower iterations/volsteps to make it sparser
       preset.starNestIterations = 9;
       preset.starNestVolsteps = 11;
-      preset.starNestOpacity = 0.05;
+      preset.starNestOpacity = 0.5;
     }
     this.starNest.configure(preset);
   }
@@ -1361,7 +1361,7 @@ export class Game {
     // Create player command post near player
     const rawCpPos = new Vec2(playerStart.x, playerStart.y + 80);
     const cpCell = worldToCell(rawCpPos);
-    const cpPos = footprintCenter(cpCell.cx, cpCell.cy, 6);
+    const cpPos = footprintCenter(cpCell.cx, cpCell.cy, footprintForBuildingType(EntityType.CommandPost));
     const cp = new CommandPost(cpPos, Team.Player);
     if (playerFaction === 'synonymous') cp.synonymousVisualKind = 'base';
     this.state.addEntity(cp);
@@ -1608,7 +1608,7 @@ export class Game {
       const team = teamForLobbySlot(spawn.slotIndex);
       const faction = resolveRaceSelection(slot.race ?? 'terran', matchStart.seed + spawn.slotIndex * 0.37);
       const cpCell = worldToCell(new Vec2(spawn.position.x, spawn.position.y + 80));
-      const cpPos = footprintCenter(cpCell.cx, cpCell.cy, 6);
+      const cpPos = footprintCenter(cpCell.cx, cpCell.cy, footprintForBuildingType(EntityType.CommandPost));
       const cp = new CommandPost(cpPos, team);
       if (faction === 'synonymous') cp.synonymousVisualKind = 'base';
       this.state.addEntity(cp);
@@ -1814,7 +1814,7 @@ export class Game {
       const team = teamForLobbySlot(spawn.slotIndex);
       const faction = resolveRaceSelection(slot.race ?? 'terran', matchStart.seed + spawn.slotIndex * 0.37);
       const cpCell = worldToCell(new Vec2(spawn.position.x, spawn.position.y + 80));
-      const cpPos = footprintCenter(cpCell.cx, cpCell.cy, 6);
+      const cpPos = footprintCenter(cpCell.cx, cpCell.cy, footprintForBuildingType(EntityType.CommandPost));
       const cp = new CommandPost(cpPos, team);
       if (faction === 'synonymous') cp.synonymousVisualKind = 'base';
       this.state.addEntity(cp);
