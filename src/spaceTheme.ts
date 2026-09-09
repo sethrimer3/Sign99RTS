@@ -28,6 +28,11 @@ export interface SpaceColorOption {
   /** In-game radial depth gradient painted over the fill, or null for none. */
   readonly gameGradient: readonly GradientStop[] | null;
   /**
+   * Whether the faction-coloured nebula wisp layer is drawn in-game. Set false
+   * for colours that want a pure-black void behind the scene.
+   */
+  readonly nebula: boolean;
+  /**
    * Replacement palette for the main-menu triangles (4 RGB triplets, blended
    * across the tile "heat" range), or null to keep the default palette.
    */
@@ -44,12 +49,13 @@ export const SPACE_COLOR_OPTIONS: readonly SpaceColorOption[] = [
       [0.42, '#06142d'],
       [1.0, '#13051f'],
     ],
-    gameFill: '#04101f',
+    gameFill: '#041426',
     gameGradient: [
-      [0.0, 'rgba(8, 39, 70, 0.30)'],
-      [0.42, 'rgba(6, 20, 45, 0.62)'],
-      [1.0, 'rgba(19, 5, 31, 0.86)'],
+      [0.0, 'rgba(14, 52, 92, 0.30)'],
+      [0.45, 'rgba(7, 30, 62, 0.64)'],
+      [1.0, 'rgba(2, 12, 30, 0.88)'],
     ],
+    nebula: true,
     trianglePalette: null,
   },
   {
@@ -68,6 +74,7 @@ export const SPACE_COLOR_OPTIONS: readonly SpaceColorOption[] = [
       [0.68, 'rgba(3, 1, 10, 0.78)'],
       [1.0, 'rgba(1, 0, 5, 0.88)'],
     ],
+    nebula: true,
     trianglePalette: null,
   },
   {
@@ -80,6 +87,7 @@ export const SPACE_COLOR_OPTIONS: readonly SpaceColorOption[] = [
       [1.0, '#000000'],
     ],
     gameFill: '#000000',
+    nebula: false,
     gameGradient: null,
     trianglePalette: [
       [20, 22, 30],

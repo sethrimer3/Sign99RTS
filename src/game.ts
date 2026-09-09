@@ -2416,7 +2416,7 @@ export class Game {
     // Draw game world
     // Layer 1: distant suns / solar glow (deepest parallax background)
     this.distantSuns.draw(ctx, this.camera, w, h);
-    if (this.cinematicLevel > -2) this.nebula.draw(ctx, this.camera, w, h);
+    if (this.cinematicLevel > -2 && space.nebula) this.nebula.draw(ctx, this.camera, w, h);
     // Base territory glow — faint team-coloured halos that grow with the base.
     // Drawn before the starfield so the stars appear on top of the tinted space.
     drawBaseTerritoryGlow(ctx, this.camera, this.state, w, h);
