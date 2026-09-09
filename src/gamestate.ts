@@ -8,7 +8,7 @@ import { Shipyard } from './building.js';
 import { SynonymousMineLayer, TetherTurret, TurretBase } from './turret.js';
 import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
 import { isSynonymousDriftMine } from './synonymousMine.js';
-import { FighterShip, SwarmShip } from './fighter.js';
+import { FighterShip, SwarmShip, syncFighterResearchUpgrades } from './fighter.js';
 import { ParticleSystem } from './particles.js';
 import { RingEffectSystem } from './ringeffects.js';
 import { Camera } from './camera.js';
@@ -1441,7 +1441,7 @@ export class GameState {
   }
 
   private applyAdvancedFighterHazardAvoidance(fighter: FighterShip, dt: number): void {
-    if (!fighter.advancedTier || fighter.docked || !fighter.alive) return;
+    if (!fighter.targetingUpgraded || fighter.docked || !fighter.alive) return;
     for (const p of this.queryEntitiesInRange(fighter.position, 220, this.spatialQueryScratch)) {
       if (!(p instanceof MassDriverBullet) || !p.isBursting || p.team === fighter.team) continue;
       fighter.avoidHazard(p.position, p.radius, dt);
@@ -1632,15 +1632,16 @@ export class GameState {
   private applyResearchSideEffects(): void {
     const completed = this.researchedItems;
     this.player.syncResearchUpgrades(completed);
-    const advanced = completed.has('advancedFighters');
+    const yardFaster = completed.has('fighterYard1');
+    const yardBigger = completed.has('fighterYard2');
     for (const b of this.buildings) {
       if (!b.alive || b.team !== Team.Player || !(b instanceof Shipyard) || b.type === EntityType.SwarmYard) continue;
-      b.shipCapacity = advanced ? 7 : 5;
-      b.buildInterval = advanced ? 4 : 5;
+      b.buildInterval = yardFaster ? 4 : 5;
+      b.shipCapacity = yardBigger ? 7 : 5;
     }
     for (const f of this.fighters) {
       if (!f.alive || f.team !== Team.Player) continue;
-      if (advanced) f.upgradeToAdvanced(); else f.downgradeFromAdvanced();
+      syncFighterResearchUpgrades(f, completed);
       if (!completed.has('shipShield1')) f.disableShield();
     }
   }

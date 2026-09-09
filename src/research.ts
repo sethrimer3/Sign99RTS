@@ -2,7 +2,7 @@ export type ResearchCategory = 'S' | 'F' | 'D' | 'W';
 
 /** The only information an opponent gets from an upgrade lab. */
 export function researchCategory(item: string): ResearchCategory {
-  if (item === 'advancedFighters' || item === 'bomberyard' || item === 'swarmyard') return 'F';
+  if (item.startsWith('fighter') || item === 'bomberyard' || item === 'swarmyard') return 'F';
   if (item.includes('turret') || item === 'advancedRegenTurrets' || item === 'synonymousminelayer') return 'D';
   if (item.startsWith('weapon')) return 'W';
   return 'S';
@@ -15,7 +15,10 @@ export function researchIcon(item: string): string {
     shipSpeedEnergy1: 'E1', shipSpeedEnergy2: 'E2', shipSpeedEnergy3: 'E3', shipSpeedEnergy4: 'E4',
     shipShield1: 'Q1', shipShield2: 'Q2', shipDash: '>>',
     weaponCannon: 'CN', weaponGatling: 'GT', weaponLaser: 'LZ', weaponGuidedMissile: 'GM',
-    advancedFighters: 'AF', bomberyard: 'BM', swarmyard: 'SW',
+    fighterTargeting: 'FT', fighterWeapon1: 'W1', fighterWeapon2: 'W2',
+    fighterSpeed1: 'S1', fighterSpeed2: 'S2', fighterHp1: 'FH1', fighterHp2: 'FH2',
+    fighterYard1: 'Y1', fighterYard2: 'Y2',
+    bomberyard: 'BM', swarmyard: 'SW',
     missileturret: 'MS', exciterturret: 'PR', massdriverturret: 'SG', regenturret: 'RP',
     advancedRegenTurrets: 'R+', synonymousminelayer: 'MN',
     synonymousPierce: 'PI', synonymousSpeed: 'SP', synonymousVitality: 'VT',

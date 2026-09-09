@@ -5,7 +5,7 @@ import { Team, EntityType, ShipGroup, Entity } from './entities.js';
 import { GameState } from './gamestate.js';
 import { BuildingBase, CommandPost, Shipyard } from './building.js';
 import { TurretBase } from './turret.js';
-import { BomberShip, FighterShip, SwarmShip, SynonymousFighterShip, SynonymousNovaBomberShip } from './fighter.js';
+import { BomberShip, FighterShip, SwarmShip, SynonymousFighterShip, SynonymousNovaBomberShip, FIGHTER_UPGRADE_RESEARCH_KEYS, applyFighterResearchUpgrade } from './fighter.js';
 import { Bullet, BomberMissile, ExciterBeam, GatlingTurretBullet, Laser, MassDriverBullet, Missile, ProjectileBase, SwarmFighterLaser, SynonymousDroneLaser, SynonymousNovaBomb } from './projectile.js';
 import { HUD } from './hud.js';
 import { Colors } from './colors.js';
@@ -641,7 +641,7 @@ export class PracticeMode {
         const fighter = synonymous && b.type === EntityType.BomberYard
           ? new SynonymousNovaBomberShip(b.bayPosition(), Team.Enemy, spawnGroup, b)
           : synonymous
-            ? new SynonymousFighterShip(b.bayPosition(), Team.Enemy, spawnGroup, b, zenith || state.researchedItems.has('advancedFighters'))
+            ? new SynonymousFighterShip(b.bayPosition(), Team.Enemy, spawnGroup, b, zenith || state.researchedItems.has('fighterHp1'))
             : b.type === EntityType.BomberYard
               ? new BomberShip(b.bayPosition(), Team.Enemy, spawnGroup, b)
               : b.type === EntityType.SwarmYard
@@ -650,8 +650,10 @@ export class PracticeMode {
         if (zenith && !(fighter instanceof SynonymousNovaBomberShip)) {
           fighter.upgradeToAdvanced();
           fighter.enableShield();
-        } else if (state.researchedItems.has('advancedFighters') && fighter.team === Team.Player) {
-          fighter.upgradeToAdvanced();
+        } else if (fighter.team === Team.Player) {
+          for (const key of FIGHTER_UPGRADE_RESEARCH_KEYS) {
+            if (state.researchedItems.has(key)) applyFighterResearchUpgrade(fighter, key);
+          }
         }
         fighter.launch();
         b.activeShips++;
