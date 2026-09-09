@@ -6,6 +6,7 @@ export interface MenuTriangle {
   area: number;
   parent: number;
   phase: number;
+  opacity?: number;
   subdivided?: boolean;
   edgeTriangles?: Point[][];
 }
@@ -118,6 +119,17 @@ export function growMenuTriangles(w: number, h: number, random = Math.random): M
     (candidate.parent.edgeTriangles ??= []).push(candidate.points);
     area += candidate.area;
   }
+  // Keep the fade spatial and stable throughout growth/retraction. The seed
+  // stays at 90%; the most distant body tile reaches 5%.
+  const seedCenter = center(seed);
+  const distances = result.map(tile => {
+    const p = center(tile);
+    return Math.hypot(p.x - seedCenter.x, p.y - seedCenter.y);
+  });
+  const extent = Math.max(...distances, 1);
+  result.forEach((tile, index) => {
+    tile.opacity = 0.9 + (0.05 - 0.9) * distances[index] / extent;
+  });
   return result;
 }
 
@@ -174,7 +186,6 @@ export class MenuTriangleBackground {
         heat = Math.max(heat, Math.exp(-(dx * dx + dy * dy) * 1.5));
       }
       const value = 0.12 + 0.19 * (0.5 + 0.5 * Math.sin(this.time * 0.35 + tile.phase)) + heat * 0.78;
-      ctx.globalAlpha = amount * 0.85;
       const gradient = ctx.createLinearGradient(cx - 28, cy - 30, cx + 30, cy + 40);
       gradient.addColorStop(0, color(value + 0.07));
       gradient.addColorStop(1, color(value - 0.09));
@@ -190,20 +201,22 @@ export class MenuTriangleBackground {
       const shapes = tile.subdivided ? subdivideTriangle(tile.points) : [tile.points];
       shapes.push(...(tile.edgeTriangles ?? []));
       for (const shape of shapes) {
+        // All four subdivisions inherit their body's opacity; fringe tiles
+        // lie on the outer boundary and use the 5% endpoint.
+        ctx.globalAlpha = amount * (tile.edgeTriangles?.includes(shape) ? 0.05 : (tile.opacity ?? 0.9));
         ctx.beginPath();
         const points = shape.map(p => ({ x: anchor.x + (p.x - anchor.x) * scale, y: anchor.y + (p.y - anchor.y) * scale }));
-        const small = shape !== tile.points;
         ctx.moveTo((points[2].x + points[0].x) / 2, (points[2].y + points[0].y) / 2);
         for (let k = 0; k < 3; k++) {
           const p = points[k], next = points[(k + 1) % 3];
-          ctx.arcTo(p.x, p.y, (p.x + next.x) / 2, (p.y + next.y) / 2, radius * scale * (small ? 0.5 : 1));
+          ctx.arcTo(p.x, p.y, (p.x + next.x) / 2, (p.y + next.y) / 2, radius * scale);
         }
         ctx.closePath();
         ctx.fill();
         ctx.strokeStyle = 'rgba(8,8,24,0.42)';
         ctx.lineWidth = 1;
         ctx.stroke();
-        }
+      }
     }
     ctx.restore();
   }
