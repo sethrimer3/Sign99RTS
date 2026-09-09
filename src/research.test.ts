@@ -31,7 +31,7 @@ describe('physical upgrade labs', () => {
 
   it('exposes the four public categories and keeps exact owner icons distinct', () => {
     expect(researchCategory('shipDash')).toBe('S');
-    expect(researchCategory('advancedFighters')).toBe('F');
+    expect(researchCategory('fighterHp1')).toBe('F');
     expect(researchCategory('massdriverturret')).toBe('D');
     expect(researchCategory('weaponLaser')).toBe('W');
     expect(researchIcon('shipDash')).not.toBe(researchIcon('weaponLaser'));

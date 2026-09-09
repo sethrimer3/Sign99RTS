@@ -144,7 +144,7 @@ export function updateFighterWeaponFire(state: GameState, spaceFluid: SpaceFluid
 }
 
 function fighterTargetScore(fighter: FighterShip, target: Entity, distance: number): number {
-  if (!fighter.advancedTier) return distance;
+  if (!fighter.targetingUpgraded) return distance;
   if (target.type === EntityType.RegenTurret) return distance - 20_000;
   if (
     target.type === EntityType.GatlingTurret ||

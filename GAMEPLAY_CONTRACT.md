@@ -62,7 +62,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 
 - Fighter Yards produce fighters. Bomber Yards produce bombers after Bomber Yard research and are capped at 3 player yards. Swarm Yards are Terran-only 7x7 shipyards unlocked through Fighters research; each fields up to 20 tiny 5 HP Swarm ships with short-range instant lasers that linger visibly for 0.5 seconds. Swarm ships auto-break from waypoint/protect/idle movement toward nearby hostile ships, fighters, and buildings so they can close to laser range, and the player can place up to 5 Swarm Yards.
 - Shipyards only produce while finished, powered, and below capacity.
-- Advanced Fighters research raises player shipyard capacity and speeds player ship production.
+- Fighter Yard research is split into independent upgrades: Yard Speed (faster production) and Yard Capacity (+2 ship cap, requires Yard Speed), plus per-ship upgrades — Targeting (AI hazard avoidance and turret-priority targeting), Weapon Damage and Weapon Fire Rate (requires Weapon Damage), Speed and Dash (requires Speed, dashes ships forward on new move orders), and HP and Shield (requires HP, unlocks a 50%-of-max-HP shield).
 - Completing Shield I unlocks the 3x3 Shield Generator. A finished powered generator projects a square 9x9 field with one shared 90 HP pool; it regenerates 5 HP per second, and a fully depleted field waits 5 seconds before restarting regeneration.
 - C-menu orders are active: Protect Base defends the player Command Post, Set Waypoint uses the cursor location, Follow Player follows the player ship, and Dock returns ships to their home yard. While holding C or a number key, player shipyards show a large group number.
 
@@ -79,11 +79,10 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 
 ## Research
 
-- A finished, powered 9x9 Research Lab is required to begin placing Research Nodes. Losing the Lab prevents new nodes from being placed.
-- Choosing research enters a standard building-placement preview for a dedicated 3x3 Research Node; its construction time is the research time.
-- A completed, living Research Node grants its linked upgrade. Destroying or selling it immediately removes that upgrade and makes it available to build again.
-- Enemy Research Nodes reveal only S (ship), F (fighter), D (defense/turret), or W (weapon); the owner also sees the exact upgrade icon.
-- Active research items are turret unlocks, Bomber Yard, Advanced Fighters, and Main Ship upgrades including Dash.
+- `RESEARCH_MODE` selects between two research systems: 'classic' (research runs as a timer at a powered, finished Research Lab; the upgrade is kept permanently once it completes) and 'building' (each upgrade is a dedicated 3x3 Research Node placed like any other building; only a completed, living node grants its upgrade, and destroying or selling it immediately revokes that upgrade and makes it available to build again).
+- Classic mode: research requires at least one powered, finished Research Lab to progress, and one active research item can run at a time.
+- Building mode: a finished, powered 9x9 Research Lab is required to begin placing Research Nodes, and losing the Lab prevents new nodes from being placed. Enemy Research Nodes reveal only S (ship), F (fighter), D (defense/turret), or W (weapon); the owner also sees the exact upgrade icon.
+- Active research items are turret unlocks, Bomber Yard, the individual Fighter/Fighter-Yard upgrades, and Main Ship upgrades including Dash.
 - Mine Layer research and construction are exclusive to The Synonymous faction; Terran players do not see or unlock Mine Layers.
 - Completed research is hidden from the research menu and summarized on the HUD.
 - Gatling Turret is a starter long-range suppressive bullet turret. Missile Turret costs $80 to research before it appears in the build menu. Exciter Turret remains research-gated, uses a 4x4 footprint with a plus-shaped body, and fires a 2-second lock-on laser with a 3-second cooldown. Its target countdown shows converging arrows plus a clockwise-filling lock circle. It may lock ships, fighters, buildings, and interceptable hostile missiles, but it must not lock ordinary bullets.
