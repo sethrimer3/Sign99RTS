@@ -51,9 +51,9 @@ void main() {
   vec2 uv = (gl_FragCoord.xy / u_resolution.xy) - 0.5;
   uv.y *= u_resolution.y / u_resolution.x;
 
-  // Camera-position driven + slow time drift (replaces mouse rotation).
-  float a1 = 0.45 + u_camOffset.x * 0.000018 + u_time * 0.0140;
-  float a2 = 0.75 + u_camOffset.y * 0.000018 + u_time * 0.0090;
+  // Camera-position driven (no time drift).
+  float a1 = 0.45 + u_camOffset.x * 0.000018;
+  float a2 = 0.75 + u_camOffset.y * 0.000018;
 
   mat2 rot1 = mat2(cos(a1), sin(a1), -sin(a1), cos(a1));
   mat2 rot2 = mat2(cos(a2), sin(a2), -sin(a2), cos(a2));
@@ -62,9 +62,9 @@ void main() {
   dir.xz = rot1 * dir.xz;
   dir.xy = rot2 * dir.xy;
 
-  // Slow drift offset
   vec3 from = vec3(1.0, 0.5, 0.5);
-  from += vec3(u_time * 0.009, u_time * 0.006, -2.0);
+  // Replaced time offset with camera offset to drive parallax through space
+  from += vec3(u_camOffset.x * 0.0005, u_camOffset.y * 0.0005, -2.0);
   from.xz = rot1 * from.xz;
   from.xy = rot2 * from.xy;
 
@@ -102,7 +102,7 @@ void main() {
   // Additional clamp to keep it dark
   v = clamp(v * 0.16, 0.0, 1.0);
 
-  gl_FragColor = vec4(v, u_opacity);
+  gl_FragColor = vec4(v, 1.0);
 }
 `;
 }

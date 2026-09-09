@@ -167,6 +167,13 @@ export class PlayerShip extends Entity {
   laserChargeTimer: number = 0;
 
   /**
+   * Battery energy drained into the charged-laser burst so far (RMB held).
+   * Energy is spent progressively while charging, not on release; when it
+   * runs the battery dry the burst auto-fires with whatever accumulated.
+   */
+  laserChargeEnergy: number = 0;
+
+  /**
    * Per-weapon special-ability cooldown (seconds).  Used by swarm missiles
    * and cannon homing; decremented in update().
    */
@@ -275,6 +282,7 @@ export class PlayerShip extends Entity {
     this.gatlingOverheatTimer = 0;
     this.isLaserCharging = false;
     this.laserChargeTimer = 0;
+    this.laserChargeEnergy = 0;
     this.weaponSpecialCooldown = 0;
   }
 

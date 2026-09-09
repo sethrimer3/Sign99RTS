@@ -345,13 +345,13 @@ export class Game {
     this.crystalNebula.configure(this.visualPreset);
     this.distantSuns.configure(this.visualPreset);
     this.asteroidField.configure(this.visualPreset);
-    this.starNest.configure(this.visualPreset);
+    this.updateStarNestConfig();
     this.state?.ringEffects.setMaxLive(
-      quality === 'ultraLow' ? 16 : quality === 'low' ? 32 : quality === 'medium' ? 64 : 96,
+      quality === 'ultraLow' ? 16 : quality === 'low' ? 32 : quality === 'medium' ? 64 : quality === 'high' ? 96 : 128,
     );
     this.state?.particles.setParticleScale(this.visualPreset.particleScale);
     this.starfield.setShootingStarsEnabled(this.visualPreset.shootingStarsEnabled);
-    setProjectileTrailLayers(quality === 'high' ? 3 : quality === 'medium' ? 2 : 1);
+    setProjectileTrailLayers(quality === 'ultraHigh' ? 4 : quality === 'high' ? 3 : quality === 'medium' ? 2 : 1);
     this.mainMenu.visualQuality = quality;
     saveVisualQuality(quality);
   }
@@ -365,7 +365,22 @@ export class Game {
   private applyCinematicLevel(level: CinematicLevel): void {
     this.cinematicLevel = setCinematicLevel(level);
     this.mainMenu.cinematicLevel = this.cinematicLevel;
+    this.updateStarNestConfig();
     saveCinematicLevel(this.cinematicLevel);
+  }
+
+  private updateStarNestConfig(): void {
+    // Clone the visual preset so we can override properties dynamically based on cinematic level
+    const preset = { ...this.visualPreset };
+    
+    // For ultra high, we make it sparser on cinematic level -2.
+    if (this.visualQuality === 'ultraHigh' && this.cinematicLevel === -2) {
+      // Lower iterations/volsteps to make it sparser
+      preset.starNestIterations = 9;
+      preset.starNestVolsteps = 11;
+      preset.starNestOpacity = 0.05;
+    }
+    this.starNest.configure(preset);
   }
 
   private applyZoomSettings(gameZoom: number, uiZoom: number): void {
@@ -571,7 +586,8 @@ export class Game {
         ultraLow: 'low',
         low: 'medium',
         medium: 'high',
-        high: 'ultraLow',
+        high: 'ultraHigh',
+        ultraHigh: 'ultraLow',
       };
       this.applyVisualQuality(next[this.visualQuality]);
       this.hud.showMessage(`Visual quality: ${this.visualQuality.toUpperCase()}`, Colors.general_building, 2);
@@ -2438,7 +2454,8 @@ export class Game {
 
     // Star Nest volumetric background — rendered to an offscreen WebGL canvas
     // and composited here, before all other scene layers.
-    if (this.cinematicLevel > -2) {
+    const starNestMinLevel = this.visualQuality === 'ultraHigh' ? -3 : -2;
+    if (this.cinematicLevel > starNestMinLevel) {
       this.starNest.update(this.lastFrameMs / 1000, this.camera);
       this.starNest.drawTo(ctx, w, h);
     }

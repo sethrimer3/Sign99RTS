@@ -50,6 +50,7 @@ import {
   GUIDED_MISSILE_CONTROL_BATTERY_DRAIN,
   GUIDED_MISSILE_INITIAL_BATTERY_COST,
 } from './ship.js';
+import type { PlayerShip } from './ship.js';
 import { findClosestEnemy, damageLaserLine, damageLaserLineLimited } from './combatUtils.js';
 import { isSynonymousFaction } from './confluence.js';
 import type { SpaceFluid } from './spacefluid.js';
@@ -94,6 +95,7 @@ export function updatePlayerFiring(
     if (player.isLaserCharging && !Input.mouse2Down) {
       player.isLaserCharging = false;
       player.laserChargeTimer = 0;
+      player.laserChargeEnergy = 0;
     }
     return activeGuidedMissile;
   }
@@ -347,63 +349,86 @@ function handleGatlingSpecial(state: GameState, hud: HUD): void {
  * vermiculate piercing lasers. Every complete 10 battery creates one laser.
  */
 function handleLaserSpecial(ctx: WeaponFiringCtx, aimWorld: Vec2): void {
-  const { state, spaceFluid } = ctx;
+  const { state } = ctx;
   const player = state.player;
 
   if (player.weaponSpecialCooldown > 0) {
-    if (player.isLaserCharging && !Input.mouse2Down) {
+    if (player.isLaserCharging) {
       player.isLaserCharging = false;
       player.laserChargeTimer = 0;
+      player.laserChargeEnergy = 0;
     }
     return;
   }
+
+  // Energy is spent progressively while the button is held. A full charge
+  // (LASER_MAX_CHARGE_SECS) drains a full battery; a partial battery simply
+  // runs dry sooner and triggers an automatic release.
+  const drainPerSec = player.maxBattery / LASER_MAX_CHARGE_SECS;
 
   if (Input.mouse2Down) {
     if (!player.isLaserCharging) {
       if (player.battery > 0) {
         player.isLaserCharging = true;
         player.laserChargeTimer = 0;
+        player.laserChargeEnergy = 0;
       }
     } else {
       player.laserChargeTimer = Math.min(player.laserChargeTimer + DT, LASER_MAX_CHARGE_SECS);
+      const drain = Math.min(player.battery, drainPerSec * DT);
+      player.battery -= drain;
+      player.laserChargeEnergy += drain;
+      if (player.battery <= 0) {
+        player.battery = 0;
+        // Out of energy: fire automatically with whatever accumulated.
+        fireChargedLaser(ctx, player);
+      }
     }
   }
 
   if (player.isLaserCharging && !Input.mouse2Down) {
-    player.isLaserCharging = false;
-    if (player.battery > 0 && player.laserChargeTimer > 0.15) {
-      const energySpent = player.battery;
-      const chargeFraction = Math.min(1, player.laserChargeTimer / LASER_MAX_CHARGE_SECS);
-      // Damage scales with both energy available and charge fraction.
-      // LASER_BURST_BASE_MULTIPLIER is the floor at empty battery / no charge;
-      // LASER_BURST_ENERGY_SCALING adds up to 8× extra at full battery + full charge.
-      const burstDamage =
-        WEAPON_STATS.laser.damage * (LASER_BURST_BASE_MULTIPLIER + (energySpent / player.maxBattery) * LASER_BURST_ENERGY_SCALING * chargeFraction);
-      const laserCount = Math.floor(energySpent / 10);
-      if (laserCount === 0) {
-        player.laserChargeTimer = 0;
-        return;
-      }
-      player.battery = 0;
-      const start = player.position.clone();
-      const seedBase = hashLaserEnergy(energySpent);
-      for (let i = 0; i < laserCount; i++) {
-        const spread = laserCount <= 1 ? 0 : ((i / (laserCount - 1)) - 0.5) * 0.72;
-        const angle = player.angle + spread;
-        const end = start.add(new Vec2(Math.cos(angle), Math.sin(angle)));
-        state.addEntity(new ChargedLaserBurst(
-          Team.Player, start, end, player, chargeFraction, state, spaceFluid,
-          (seedBase ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0,
-        ));
-      }
-      state.particles.emitMuzzleFlash(start, player.angle);
-      player.weaponSpecialCooldown = LASER_CHARGE_COOLDOWN_SECS;
-      player.laserChargeTimer = 0;
-      Audio.playSound('laser');
-    } else {
-      player.laserChargeTimer = 0;
-    }
+    fireChargedLaser(ctx, player);
   }
+}
+
+/**
+ * Release the charged laser burst using the energy already drained into it.
+ * Ends the charging state and either spawns the vermiculate lasers (if enough
+ * energy accumulated) or fizzles, applying the special cooldown either way.
+ */
+function fireChargedLaser(ctx: WeaponFiringCtx, player: PlayerShip): void {
+  const { state, spaceFluid } = ctx;
+  player.isLaserCharging = false;
+
+  const energySpent = player.laserChargeEnergy;
+  const chargeFraction = Math.min(1, player.laserChargeTimer / LASER_MAX_CHARGE_SECS);
+  const laserCount = Math.floor(energySpent / 10);
+
+  player.laserChargeTimer = 0;
+  player.laserChargeEnergy = 0;
+
+  if (laserCount === 0) return;
+
+  // Damage scales with both energy available and charge fraction.
+  // LASER_BURST_BASE_MULTIPLIER is the floor at empty battery / no charge;
+  // LASER_BURST_ENERGY_SCALING adds up to 8× extra at full battery + full charge.
+  const burstDamage =
+    WEAPON_STATS.laser.damage * (LASER_BURST_BASE_MULTIPLIER + (energySpent / player.maxBattery) * LASER_BURST_ENERGY_SCALING * chargeFraction);
+
+  const start = player.position.clone();
+  const seedBase = hashLaserEnergy(energySpent);
+  for (let i = 0; i < laserCount; i++) {
+    const spread = laserCount <= 1 ? 0 : ((i / (laserCount - 1)) - 0.5) * 0.72;
+    const angle = player.angle + spread;
+    const end = start.add(new Vec2(Math.cos(angle), Math.sin(angle)));
+    state.addEntity(new ChargedLaserBurst(
+      Team.Player, start, end, player, chargeFraction, state, spaceFluid,
+      (seedBase ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0,
+    ));
+  }
+  state.particles.emitMuzzleFlash(start, player.angle);
+  player.weaponSpecialCooldown = LASER_CHARGE_COOLDOWN_SECS;
+  Audio.playSound('laser');
 }
 
 /** Stable seed that preserves fractional energy differences as well as whole units. */

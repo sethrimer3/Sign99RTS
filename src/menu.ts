@@ -1184,9 +1184,9 @@ export class MainMenu {
       y = this.drawLanguageDropdown(ctx, x, y, rowH);
       this.drawDiscordButton(ctx, cx, y + 62);
     } else if (this.settingsTab === 'graphics') {
-      const qualities: VisualQuality[] = ['ultraLow', 'low', 'medium', 'high'];
+      const qualities: VisualQuality[] = ['ultraLow', 'low', 'medium', 'high', 'ultraHigh'];
       y = this.drawCycleRow(ctx, x, y, rowH, tr('settings.graphicsQuality'), this.visualQuality, qualities,
-        (v) => { this.visualQuality = v; }, visualQualityLabel, qualities.indexOf(this.visualQuality) / 3);
+        (v) => { this.visualQuality = v; }, visualQualityLabel, qualities.indexOf(this.visualQuality) / 4);
       y = this.drawCinematicSliderRow(ctx, x, y, rowH, this.cinematicLevel, (v) => { this.cinematicLevel = v; });
       y = this.drawCheckboxRow(ctx, x, y, rowH, tr('settings.legacyGraphics'), this.legacyGraphics,
         (v) => { this.legacyGraphics = v; });

@@ -1,4 +1,4 @@
-export type VisualQuality = 'ultraLow' | 'low' | 'medium' | 'high';
+export type VisualQuality = 'ultraLow' | 'low' | 'medium' | 'high' | 'ultraHigh';
 
 export interface VisualQualityPreset {
   readonly glowEnabled: boolean;
@@ -255,6 +255,37 @@ export const VISUAL_QUALITY_PRESETS: Record<VisualQuality, VisualQualityPreset> 
     starNestIterations: 11,
     starNestVolsteps: 11,
   },
+  ultraHigh: {
+    glowEnabled: true,
+    glowScale: 0.4,
+    conduitShimmer: true,
+    shockwaveScale: 1.5,
+    scanlines: true,
+    fluidLowGraphics: false,
+    bulletGlow: true,
+    engineGlow: true,
+    colorFringe: true,
+    particleScale: 1.2,
+    shootingStarsEnabled: true,
+    cameraShakeEnabled: true,
+    conduitPulseEnabled: true,
+    crystalNebulaEnabled: true,
+    crystalNebulaDensityScale: 1.5,
+    crystalNebulaGlow: true,
+    crystalNebulaInteractionScale: 1.2,
+    crystalNebulaClumps: true,
+    distantSunsEnabled: true,
+    distantSunsRays: true,
+    distantSunsCorona: true,
+    distantSunsGlints: true,
+    asteroidFieldLayers: 0,
+    dustHazeEnabled: false,
+    starNestEnabled: true,
+    starNestRenderScale: 0.75,
+    starNestOpacity: 0.1,
+    starNestIterations: 17,
+    starNestVolsteps: 20,
+  },
 };
 
 export const DEFAULT_VISUAL_QUALITY: VisualQuality = 'high';
@@ -265,7 +296,7 @@ const VISUAL_QUALITY_STORAGE_KEY = 'sign99_visual_quality';
 export function loadVisualQuality(): VisualQuality {
   try {
     const raw = window.localStorage?.getItem(VISUAL_QUALITY_STORAGE_KEY);
-    if (raw === 'ultraLow' || raw === 'low' || raw === 'medium' || raw === 'high') return raw;
+    if (raw === 'ultraLow' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'ultraHigh') return raw;
   } catch {
     // localStorage unavailable (e.g. private browsing with strict settings)
   }

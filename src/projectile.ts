@@ -1549,9 +1549,12 @@ export class ChargedLaserBurst extends ProjectileBase {
   private readonly spaceFluid: SpaceFluid | null;
   private readonly hitIds = new Set<number>();
   private randomState: number;
+  /** Seconds until the next gentle re-tuning of the arc. */
   private turnTimer = 0;
-  private targetTurn = 0;
-  private turnVelocity = 0;
+  /** Constant steering sign (+1 / -1); a laser mostly holds one curl. */
+  private curveDir = 1;
+  /** Current angular velocity in rad/s. Broad, slowly-varying arcs. */
+  private curveRate = 1.05;
 
   constructor(
     team: Team,
@@ -1583,17 +1586,26 @@ export class ChargedLaserBurst extends ProjectileBase {
     this.trailLifetime = 0.72;
     this.trailMinDistance = 5;
     this.trailMaxPoints = 54;
-    this.chooseTurn();
+    // Deterministic per-laser arc: one curl direction, a broad constant-ish
+    // turn rate. This mirrors the circular tracers of TheroMathTD's
+    // VermiculateEffect rather than the old rapidly-reversing "worm" jitter.
+    this.curveDir = this.random() < 0.5 ? -1 : 1;
+    this.curveRate = 0.85 + this.random() * 0.6;
+    this.turnTimer = 1.1 + this.random() * 1.4;
   }
 
   update(dt: number): void {
     if (!this.alive) return;
     const previous = this.position.clone();
     this.turnTimer -= dt;
-    if (this.turnTimer <= 0) this.chooseTurn();
-    // Smooth but emphatic deterministic steering produces broad, vermiculate loops.
-    this.turnVelocity += (this.targetTurn - this.turnVelocity) * Math.min(1, dt * 7.5);
-    this.angle = wrapAngle(this.angle + this.turnVelocity * dt);
+    if (this.turnTimer <= 0) {
+      // Gentle re-tuning keeps the path wandering without worm-like jitter:
+      // nudge the arc radius and, rarely, reverse the curl.
+      this.turnTimer = 1.1 + this.random() * 1.4;
+      this.curveRate = 0.85 + this.random() * 0.6;
+      if (this.random() < 0.18) this.curveDir = -this.curveDir;
+    }
+    this.angle = wrapAngle(this.angle + this.curveDir * this.curveRate * dt);
     this.velocity.set(Math.cos(this.angle) * this.speed, Math.sin(this.angle) * this.speed);
     super.update(dt);
     this.targetPos = previous;
@@ -1605,12 +1617,6 @@ export class ChargedLaserBurst extends ProjectileBase {
     x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
     this.randomState = x >>> 0;
     return this.randomState / 0x100000000;
-  }
-
-  private chooseTurn(): void {
-    this.turnTimer += 0.055 + this.random() * 0.16;
-    const direction = this.random() < 0.5 ? -1 : 1;
-    this.targetTurn = direction * (1.4 + this.random() * 6.2);
   }
 
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
