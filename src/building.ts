@@ -47,7 +47,12 @@ export abstract class BuildingBase extends Entity {
   update(dt: number): void {
     if (!this.alive) return;
     this.animationTime += dt;
-    if (this.buildProgress < 1) {
+    // Construction consumes power just like a completed building's active
+    // behavior. Power sources and walls are self-powered by PowerGraph, while
+    // Synonymous structures are marked powered by their faction rules.
+    // Therefore an ordinary Terran structure pauses here whenever its conduit
+    // connection is interrupted, and resumes from the same progress later.
+    if (this.buildProgress < 1 && this.powered) {
       this.buildProgress = this.buildDurationSeconds <= 0 ? 1 : Math.min(1, this.buildProgress + dt / this.buildDurationSeconds);
       if (this.buildProgress >= 1) {
         this.completionEffectPending = true;

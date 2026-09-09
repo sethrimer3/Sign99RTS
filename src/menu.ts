@@ -315,6 +315,8 @@ export class MainMenu {
   private settingsScrollbarGrabOffset: number = 0;
   private menuInputOffsetY: number = 0;
   private menuInputViewport: HitRect | null = null;
+  /** Previewed while dragging so changing UI scale cannot move the slider under the pointer. */
+  private pendingUiZoom: number | null = null;
 
   // Output set by setup screens after the user clicks their start button.
   private pendingAction: MenuAction = 'none';
@@ -346,6 +348,7 @@ export class MainMenu {
     this.sliderDraggingKey = null;
     this.settingsScrollbarDragging = false;
     this.settingsScroll = 0;
+    this.pendingUiZoom = null;
     this.hits = [];
     this.openedAt = performance.now() * 0.001;
     Audio.playSound('menucursor');
@@ -413,6 +416,10 @@ export class MainMenu {
 
     if (this.state === 'none') return 'none';
     if (Input.mouseReleased || !Input.mouseDown) {
+      if (this.pendingUiZoom !== null) {
+        this.uiZoom = this.pendingUiZoom;
+        this.pendingUiZoom = null;
+      }
       this.rankedSliderDragging = false;
       this.sliderDraggingKey = null;
       this.settingsScrollbarDragging = false;
@@ -1190,8 +1197,8 @@ export class MainMenu {
     y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.gameZoom'), this.gameZoom, (v) => {
       this.gameZoom = v;
     });
-    y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.uiZoom'), this.uiZoom, (v) => {
-      this.uiZoom = v;
+    y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.uiZoom'), this.pendingUiZoom ?? this.uiZoom, (v) => {
+      this.pendingUiZoom = v;
     });
 
     ctx.font = gameFont(16);

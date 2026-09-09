@@ -54,7 +54,7 @@ export abstract class TurretBase extends BuildingBase {
 
   update(dt: number): void {
     super.update(dt);
-    if (!this.alive || this.buildProgress < 1) return;
+    if (!this.alive || this.buildProgress < 1 || !this.powered) return;
 
     // Rotate towards target
     if (this.targetEntity && this.targetEntity.alive) {
@@ -89,7 +89,7 @@ export abstract class TurretBase extends BuildingBase {
 
   /** Check if the turret can fire at its current target. */
   canFire(): boolean {
-    if (this.fireTimer > 0 || !isCombatTargetValid(this, this.targetEntity, this.range)) {
+    if (!this.powered || this.buildProgress < 1 || this.fireTimer > 0 || !isCombatTargetValid(this, this.targetEntity, this.range)) {
       return false;
     }
     if (!isTurretTargetableEntity(this.targetEntity)) return false;
@@ -356,7 +356,7 @@ export class ExciterTurret extends TurretBase {
 
   override update(dt: number): void {
     super.update(dt);
-    if (!this.alive || this.buildProgress < 1) return;
+    if (!this.alive || this.buildProgress < 1 || !this.powered) return;
 
     if (this.exciterState === 'cooldown') {
       this.cooldownRemaining = Math.max(0, this.cooldownRemaining - dt);
@@ -408,7 +408,7 @@ export class ExciterTurret extends TurretBase {
   }
 
   override canFire(): boolean {
-    if (this.exciterState !== 'ready') return false;
+    if (!this.powered || this.buildProgress < 1 || this.exciterState !== 'ready') return false;
     if (!isCombatTargetValid(this, this.lockTarget, this.range) || !isExciterLockTarget(this.lockTarget)) {
       this.cancelLockToCooldown();
       return false;
@@ -727,7 +727,7 @@ export class RegenTurret extends TurretBase {
 
   /** Override: targets the nearest damaged friendly unit or building. */
   override canFire(): boolean {
-    if (this.fireTimer > 0 || !this.targetEntity || !this.targetEntity.alive) return false;
+    if (!this.powered || this.buildProgress < 1 || this.fireTimer > 0 || !this.targetEntity || !this.targetEntity.alive) return false;
     if (this.targetEntity.team !== this.team || this.targetEntity.health >= this.targetEntity.maxHealth) return false;
     if (!isFiniteVec(this.position) || !isFiniteVec(this.targetEntity.position)) return false;
     return this.position.distanceTo(this.targetEntity.position) <= this.range;

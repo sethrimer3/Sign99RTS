@@ -27,7 +27,7 @@ export function fireTurretShots(state: GameState, localTeam: Team): void {
   const phase = Math.floor(state.gameTime * 12);
   for (const b of state.buildings) {
     if (!b.alive || b.team !== localTeam || !(b instanceof TurretBase)) continue;
-    if (b.buildProgress < 1) continue;
+    if (b.buildProgress < 1 || !b.powered) continue;
     if (!b.targetEntity || ((b.id + phase) % 3) === 0) {
       state.acquireTurretTarget(b);
     }
