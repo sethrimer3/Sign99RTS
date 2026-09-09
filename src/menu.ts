@@ -18,7 +18,8 @@
  */
 
 import { Colors, TextColors, colorToCSS } from './colors.js';
-import { MenuTriangleBackground } from './menuTriangles.js';
+import { MenuTriangleBackground, setMenuTrianglePalette } from './menuTriangles.js';
+import { SPACE_COLOR_OPTIONS, activeSpaceColor, saveSpaceThemeSettings, spaceColorLabel, spaceThemeSettings, type SpaceColorId } from './spaceTheme.js';
 import { Input, KEYBIND_DEFINITIONS, type BindableKey } from './input.js';
 import { Audio } from './audio.js';
 import { buildLabel } from './version.js';
@@ -323,6 +324,7 @@ export class MainMenu {
   private settingsOrigin: 'title' | 'pause' = 'title';
   private surrenderArmed = false;
   private languageDropdownOpen = false;
+  private spaceColorDropdownOpen = false;
   private awaitingBinding: BindableKey | null = null;
 
   // Output set by setup screens after the user clicks their start button.
@@ -348,6 +350,7 @@ export class MainMenu {
     this.settingsOrigin = origin;
     this.settingsTab = 'gameplay';
     this.languageDropdownOpen = false;
+    this.spaceColorDropdownOpen = false;
     this.awaitingBinding = null;
     this.setState('settings');
   }
@@ -629,10 +632,10 @@ export class MainMenu {
   // -------------------------------------------------------------------
 
   private drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const space = activeSpaceColor();
+    setMenuTrianglePalette(space.trianglePalette);
     const bg = ctx.createRadialGradient(w * 0.72, h * 0.18, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.78);
-    bg.addColorStop(0, '#082746');
-    bg.addColorStop(0.42, '#06142d');
-    bg.addColorStop(1, '#13051f');
+    for (const [offset, colour] of space.menuGradient) bg.addColorStop(offset, colour);
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
@@ -1152,7 +1155,9 @@ export class MainMenu {
     const viewportH = viewportBottom - viewportTop;
     const contentBottom = this.settingsTab === 'controls'
       ? 190 + KEYBIND_DEFINITIONS.length * rowH + 90
-      : this.settingsTab === 'gameplay' ? (this.languageDropdownOpen ? 620 : 390) : 520;
+      : this.settingsTab === 'gameplay' ? (this.languageDropdownOpen ? 620 : 390)
+      : this.settingsTab === 'graphics' ? (this.spaceColorDropdownOpen ? 564 + SPACE_COLOR_OPTIONS.length * 30 : 564)
+      : 520;
     const maxScroll = Math.max(0, contentBottom - viewportBottom);
     if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
       this.settingsScroll = Math.max(0, Math.min(maxScroll, this.settingsScroll + this.wheelDeltaLatched * 0.55));
@@ -1181,6 +1186,7 @@ export class MainMenu {
       y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.enemyColor'), themeSettings.enemyColor, themeSettings.playerColor, true, (v) => {
         themeSettings.enemyColor = v; applyThemeColors(); saveThemeSettings();
       });
+      y = this.drawSpaceColorDropdown(ctx, x, y, rowH);
       y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.gameZoom'), this.gameZoom, (v) => { this.gameZoom = v; });
       this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.uiZoom'), this.pendingUiZoom ?? this.uiZoom, (v) => { this.pendingUiZoom = v; });
     } else if (this.settingsTab === 'audio') {

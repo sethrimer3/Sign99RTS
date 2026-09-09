@@ -142,11 +142,21 @@ export function growMenuTriangles(w: number, h: number, random = Math.random): M
   return result;
 }
 
-const PALETTE = [[15, 35, 89], [58, 22, 101], [155, 30, 113], [255, 178, 112]];
+const DEFAULT_PALETTE: number[][] = [[15, 35, 89], [58, 22, 101], [155, 30, 113], [255, 178, 112]];
+let activePalette: number[][] = DEFAULT_PALETTE;
+
+/**
+ * Override the triangle palette (4 RGB triplets blended across the heat range),
+ * or pass null to restore the default. Driven by the selected space colour.
+ */
+export function setMenuTrianglePalette(palette: readonly (readonly [number, number, number])[] | null): void {
+  activePalette = palette ? palette.map((c) => [c[0], c[1], c[2]]) : DEFAULT_PALETTE;
+}
+
 function color(value: number): string {
   const v = Math.max(0, Math.min(0.9999, value)) * 3;
   const i = Math.floor(v), t = v - i;
-  return `rgb(${PALETTE[i].map((n, c) => Math.round(n + (PALETTE[i + 1][c] - n) * t)).join(',')})`;
+  return `rgb(${activePalette[i].map((n, c) => Math.round(n + (activePalette[i + 1][c] - n) * t)).join(',')})`;
 }
 
 export class MenuTriangleBackground {
