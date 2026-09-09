@@ -2053,6 +2053,7 @@ export class Game {
           b.researchItem = sb.researchItem ?? null;
           b.footprintCells = b.researchItem ? 3 : null;
           b.showExactUpgrade = b.team === this.localPlayerTeam();
+          if (sb.isResearching !== undefined) b.isResearching = sb.isResearching;
         }
         if (b instanceof ShieldGenerator) {
           b.shield = sb.shield ?? b.shield;
@@ -2074,6 +2075,7 @@ export class Game {
             newBuilding.researchItem = sb.researchItem ?? null;
             newBuilding.footprintCells = newBuilding.researchItem ? 3 : null;
             newBuilding.showExactUpgrade = newBuilding.team === this.localPlayerTeam();
+            if (sb.isResearching !== undefined) newBuilding.isResearching = sb.isResearching;
           }
           if (newBuilding instanceof ShieldGenerator) {
             newBuilding.shield = sb.shield ?? newBuilding.shield;
@@ -2240,6 +2242,7 @@ export class Game {
         powered: b.powered,
         alive: b.alive,
         researchItem: b instanceof ResearchLab ? b.researchItem ?? undefined : undefined,
+        isResearching: b instanceof ResearchLab ? b.isResearching : undefined,
         shield: b instanceof ShieldGenerator ? b.shield : undefined,
         shieldRestartDelay: b instanceof ShieldGenerator ? b.restartDelay : undefined,
       });

@@ -1555,6 +1555,28 @@ export class GameState {
   private tickResearch(dt: number): void {
     if (RESEARCH_MODE === 'building') this.tickResearchBuilding();
     else this.tickResearchClassic(dt);
+    this.updateResearchLabActivity();
+  }
+
+  private updateResearchLabActivity(): void {
+    const isPlayerResearching = RESEARCH_MODE === 'classic'
+      ? (this.researchProgress.item !== null && this.hasResearchLab())
+      : (this.researchProgress.item !== null);
+
+    for (const b of this.buildings) {
+      if (!b.alive || !(b instanceof ResearchLab)) continue;
+      if (b.team === Team.Player) {
+        if (RESEARCH_MODE === 'classic') {
+          b.isResearching = isPlayerResearching && b.powered && b.buildProgress >= 1;
+        } else {
+          if (b.researchItem !== null) {
+            b.isResearching = b.powered && b.buildProgress < 1;
+          } else {
+            b.isResearching = isPlayerResearching && b.powered && b.buildProgress >= 1;
+          }
+        }
+      }
+    }
   }
 
   /** Original mode: each upgrade is a physical 3x3 Research Node; losing the node revokes it. */

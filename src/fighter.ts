@@ -8,6 +8,8 @@ import { Shipyard } from './building.js';
 import { Colors, colorToCSS, Color } from './colors.js';
 import { ENTITY_RADIUS, HP_VALUES, PLAYER_SHIP_SCALE, SHIP_STATS, WEAPON_STATS } from './constants.js';
 import { teamColor } from './teamutils.js';
+import { isLegacyGraphics } from './graphicsmode.js';
+import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
 
 export type FighterOrder = 'idle' | 'attack' | 'dock' | 'defend' | 'escort' | 'harass' | 'protect' | 'waypoint' | 'follow';
 
@@ -584,67 +586,144 @@ export class FighterShip extends Entity {
     }
     this.trail.length = write;
     const last = this.trail[this.trail.length - 1];
-    if (!last || last.pos.distanceTo(this.position) >= TRAIL_MIN_DISTANCE) {
+    if (!last) {
       this.trail.push({ pos: this.position.clone(), age: 0 });
+    } else {
+      const dist = last.pos.distanceTo(this.position);
+      if (dist >= 4000) {
+        this.trail.length = 0;
+        this.trail.push({ pos: this.position.clone(), age: 0 });
+      } else if (dist >= TRAIL_MIN_DISTANCE) {
+        this.trail.push({ pos: this.position.clone(), age: 0 });
+      }
     }
-    if (this.trail.length > 20) this.trail.shift();
+    while (this.trail.length > 20) this.trail.shift();
 
-    for (const point of this.dashTrail) point.age += dt;
-    this.dashTrail = this.dashTrail.filter((point) => point.age <= DASH_TRAIL_LIFETIME);
+    let dashWrite = 0;
+    for (let read = 0; read < this.dashTrail.length; read++) {
+      const point = this.dashTrail[read];
+      point.age += dt;
+      if (point.age <= DASH_TRAIL_LIFETIME) this.dashTrail[dashWrite++] = point;
+    }
+    this.dashTrail.length = dashWrite;
+
     if (this.dashEffectTimer > 0) {
       this.dashEffectTimer = Math.max(0, this.dashEffectTimer - dt);
       const dashLast = this.dashTrail[this.dashTrail.length - 1];
-      if (!dashLast || dashLast.pos.distanceTo(this.position) >= DASH_TRAIL_MIN_DISTANCE) {
+      if (!dashLast) {
         this.dashTrail.push({ pos: this.position.clone(), age: 0 });
+      } else {
+        const dist = dashLast.pos.distanceTo(this.position);
+        if (dist >= 4000) {
+          this.dashTrail.length = 0;
+          this.dashTrail.push({ pos: this.position.clone(), age: 0 });
+        } else if (dist > DASH_TRAIL_MIN_DISTANCE * 4) {
+          const steps = Math.min(3, Math.floor(dist / DASH_TRAIL_MIN_DISTANCE));
+          for (let s = 1; s < steps; s++) {
+            const f = s / steps;
+            this.dashTrail.push({
+              pos: new Vec2(
+                dashLast.pos.x + (this.position.x - dashLast.pos.x) * f,
+                dashLast.pos.y + (this.position.y - dashLast.pos.y) * f,
+              ),
+              age: 0,
+            });
+          }
+          this.dashTrail.push({ pos: this.position.clone(), age: 0 });
+        } else if (dist >= DASH_TRAIL_MIN_DISTANCE) {
+          this.dashTrail.push({ pos: this.position.clone(), age: 0 });
+        }
       }
     }
     while (this.dashTrail.length > DASH_TRAIL_MAX_POINTS) this.dashTrail.shift();
   }
 
   protected drawMotionTrail(ctx: CanvasRenderingContext2D, camera: Camera, color: Color): void {
-    if (this.trail.length >= 2) {
-      const speedFraction = Math.max(0, Math.min(1, this.velocity.length() / Math.max(1, this.maxSpeed)));
-      const sizeScale = 0.2 + speedFraction * 0.8;
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = 5 * sizeScale;
-      for (let i = 1; i < this.trail.length; i++) {
-        const a = this.trail[i - 1];
-        const b = this.trail[i];
-        const fade = 1 - Math.max(a.age, b.age) / TRAIL_LIFETIME;
-        if (fade <= 0) continue;
-        const from = camera.worldToScreen(a.pos);
-        const to = camera.worldToScreen(b.pos);
-        ctx.strokeStyle = colorToCSS(color, 0.08 + fade * 0.28);
-        ctx.beginPath();
-        ctx.moveTo(from.x, from.y);
-        ctx.lineTo(to.x, to.y);
-        ctx.stroke();
+    if (this.trail.length >= 1) {
+      if (isLegacyGraphics()) {
+        if (this.trail.length >= 2) {
+          const speedFraction = Math.max(0, Math.min(1, this.velocity.length() / Math.max(1, this.maxSpeed)));
+          const sizeScale = 0.2 + speedFraction * 0.8;
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = 5 * sizeScale;
+          for (let i = 1; i < this.trail.length; i++) {
+            const a = this.trail[i - 1];
+            const b = this.trail[i];
+            const fade = 1 - Math.max(a.age, b.age) / TRAIL_LIFETIME;
+            if (fade <= 0) continue;
+            const from = camera.worldToScreen(a.pos);
+            const to = camera.worldToScreen(b.pos);
+            ctx.strokeStyle = colorToCSS(color, 0.08 + fade * 0.28);
+            ctx.beginPath();
+            ctx.moveTo(from.x, from.y);
+            ctx.lineTo(to.x, to.y);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      } else {
+        const speedFraction = Math.max(0, Math.min(1, this.velocity.length() / Math.max(1, this.maxSpeed)));
+        const sizeScale = 0.2 + speedFraction * 0.8;
+        const trailStyle: ProjectileTrailStyle = {
+          color: colorToCSS(color, 0.42),
+          coreColor: colorToCSS(color, 0.80),
+          fadeTime: TRAIL_LIFETIME,
+          width: Math.max(2, 8 * sizeScale),
+          outerWidthMultiplier: 2.2,
+          outerAlpha: 0.15 * sizeScale,
+          innerWidthMultiplier: 1.0,
+          innerAlpha: 0.38 * sizeScale,
+          coreWidthMultiplier: 0.35,
+          coreAlpha: 0.65 * sizeScale,
+          taperExponent: 1.05,
+          opacityExponent: 1.25,
+        };
+        renderProjectileTrail(ctx, camera, this.trail, this.position, trailStyle);
       }
-      ctx.restore();
     }
-    if (this.dashTrail.length >= 2) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = 6;
-      for (let i = 1; i < this.dashTrail.length; i++) {
-        const a = this.dashTrail[i - 1];
-        const b = this.dashTrail[i];
-        const fade = 1 - Math.max(a.age, b.age) / DASH_TRAIL_LIFETIME;
-        if (fade <= 0) continue;
-        const from = camera.worldToScreen(a.pos);
-        const to = camera.worldToScreen(b.pos);
-        ctx.strokeStyle = colorToCSS(Colors.general_building, 0.15 + fade * 0.5);
-        ctx.beginPath();
-        ctx.moveTo(from.x, from.y);
-        ctx.lineTo(to.x, to.y);
-        ctx.stroke();
+    if (this.dashTrail.length >= 1) {
+      if (isLegacyGraphics()) {
+        if (this.dashTrail.length >= 2) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = 6;
+          for (let i = 1; i < this.dashTrail.length; i++) {
+            const a = this.dashTrail[i - 1];
+            const b = this.dashTrail[i];
+            const fade = 1 - Math.max(a.age, b.age) / DASH_TRAIL_LIFETIME;
+            if (fade <= 0) continue;
+            const from = camera.worldToScreen(a.pos);
+            const to = camera.worldToScreen(b.pos);
+            ctx.strokeStyle = colorToCSS(Colors.general_building, 0.15 + fade * 0.5);
+            ctx.beginPath();
+            ctx.moveTo(from.x, from.y);
+            ctx.lineTo(to.x, to.y);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      } else {
+        const dashStyle: ProjectileTrailStyle = {
+          color: colorToCSS(Colors.general_building, 0.75),
+          coreColor: 'rgba(255, 255, 255, 0.95)',
+          fadeTime: DASH_TRAIL_LIFETIME,
+          width: 14,
+          outerWidthMultiplier: 2.4,
+          outerAlpha: 0.24,
+          innerWidthMultiplier: 1.0,
+          innerAlpha: 0.55,
+          coreWidthMultiplier: 0.35,
+          coreAlpha: 0.90,
+          taperExponent: 1.15,
+          opacityExponent: 1.25,
+        };
+        renderProjectileTrail(ctx, camera, this.dashTrail, this.position, dashStyle);
       }
-      ctx.restore();
     }
   }
 

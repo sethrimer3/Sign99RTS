@@ -191,6 +191,7 @@ export interface SerializedBuilding {
   alive: boolean;
   /** Upgrade housed by a physical research lab; absent for ordinary structures. */
   researchItem?: string;
+  isResearching?: boolean;
   shield?: number;
   shieldRestartDelay?: number;
 }

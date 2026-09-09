@@ -1594,23 +1594,42 @@ export class EnemyBasePlanner {
     if (idx < 2) return 0;
     if (!this.hasPoweredResearchLab(state)) return 0;
 
+    let costSpent = 0;
     if (this.aiResearchProgress) {
       this.aiResearchProgress.remaining -= dt * [0, 0, 1.0, 1.2, 1.45, 2.0][idx];
       if (this.aiResearchProgress.remaining <= 0) {
         this.aiResearchedItems.add(this.aiResearchProgress.item);
         this.aiResearchProgress = null;
       }
-      return 0;
+    } else {
+      const next = this.nextAIResearchItem(state);
+      if (next) {
+        const cost = RESEARCH_COST[next as keyof typeof RESEARCH_COST] ?? 0;
+        if (availableResources >= cost) {
+          const ticks = RESEARCH_TIME[next as keyof typeof RESEARCH_TIME];
+          if (ticks !== undefined) {
+            this.aiResearchProgress = { item: next, remaining: ticks / TICK_RATE };
+            costSpent = cost;
+          }
+        }
+      }
     }
 
-    const next = this.nextAIResearchItem(state);
-    if (!next) return 0;
-    const cost = RESEARCH_COST[next as keyof typeof RESEARCH_COST] ?? 0;
-    if (availableResources < cost) return 0;
-    const ticks = RESEARCH_TIME[next as keyof typeof RESEARCH_TIME];
-    if (ticks === undefined) return 0;
-    this.aiResearchProgress = { item: next, remaining: ticks / TICK_RATE };
-    return cost;
+    this.syncEnemyResearchLabActivity(state);
+    return costSpent;
+  }
+
+  private syncEnemyResearchLabActivity(state: GameState): void {
+    const isResearching = this.aiResearchProgress !== null;
+    for (const b of state.buildings) {
+      if (b.alive && b.team === this.team && b instanceof ResearchLab) {
+        b.isResearching = isResearching && b.powered && b.buildProgress >= 1;
+      }
+    }
+  }
+
+  isResearchActive(): boolean {
+    return this.aiResearchProgress !== null;
   }
 
   private hasPoweredResearchLab(state: GameState): boolean {

@@ -362,7 +362,8 @@ export class HUD {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
     ctx.fillStyle = colorToCSS(Colors.researchlab_detail, 0.75);
-    ctx.fillText(tr('hud.research'), x, y - barH - 8);
+    const label = `${tr('hud.research')} (${Math.floor(current.progress)}/${Math.ceil(current.timeNeeded)} sec)`;
+    ctx.fillText(label, x, y - barH - 8);
     const grad = ctx.createLinearGradient(x, 0, x + barW, 0);
     grad.addColorStop(0, colorToCSS(Colors.researchlab_detail, 0.58));
     grad.addColorStop(1, colorToCSS(Colors.radar_friendly_status, 0.88));

@@ -18,6 +18,7 @@ import { Input } from './input.js';
 import { getCinematicLevel } from './cinematic.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { researchCategory, researchIcon } from './research.js';
+import { renderProjectileTrail, type TrailSample, type ProjectileTrailStyle } from './projectileTrail.js';
 
 interface BaseVisual {
   side: number;
@@ -653,24 +654,175 @@ this.drawAssignedGroupLabel(ctx, screen, v); }
 private drawSynonymousShipyard(ctx:CanvasRenderingContext2D,camera:Camera,screen:Vec2):void{const v=this.getBaseVisual(camera);const color=teamColor(this.team);const nodeR=Math.max(2,v.side*0.055);const r=v.side*0.44;ctx.save();ctx.globalAlpha=Math.max(0.18,this.buildProgress);ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(color,this.powered?0.42:0.18);ctx.lineWidth=Math.max(1,v.side*0.016);ctx.beginPath();const nodes:Array<{x:number;y:number}>=[];for(let i=0;i<11;i++){const a=-Math.PI*0.92+i*(Math.PI*1.84/10);const x=screen.x+Math.cos(a)*r;const y=screen.y+Math.sin(a)*r;nodes.push({x,y});if(i>0){ctx.moveTo(nodes[i-1].x,nodes[i-1].y);ctx.lineTo(x,y);}if(i%2===0){ctx.moveTo(screen.x,screen.y-v.side*0.05);ctx.lineTo(x,y);}}ctx.stroke();ctx.strokeStyle=colorToCSS(Colors.particles_switch,this.powered?0.22:0.10);ctx.beginPath();ctx.arc(screen.x,screen.y-v.side*0.02,r*0.62,Math.PI*1.08,Math.PI*1.92);ctx.stroke();ctx.fillStyle='rgba(4,8,10,0.88)';ctx.beginPath();ctx.ellipse(screen.x,screen.y+r*0.72,v.side*0.24,v.side*0.10,0,0,Math.PI*2);ctx.fill();for(const n of nodes){ctx.fillStyle=colorToCSS(color,this.powered?0.82:0.38);ctx.beginPath();ctx.arc(n.x,n.y,nodeR,0,Math.PI*2);ctx.fill();}const shown=Math.min(this.dockedShips,this.shipCapacity);for(let i=0;i<shown;i++){const x=screen.x-v.side*0.23+(i%5)*v.side*0.115;const y=screen.y+v.side*0.24+Math.floor(i/5)*v.side*0.10;ctx.strokeStyle=colorToCSS(color,0.72);ctx.beginPath();ctx.moveTo(x,y-v.side*0.028);ctx.lineTo(x-v.side*0.032,y+v.side*0.028);ctx.lineTo(x+v.side*0.032,y+v.side*0.028);ctx.closePath();ctx.stroke();}this.drawAssignedGroupLabel(ctx, screen, v);ctx.restore();}
 private drawAssignedGroupLabel(ctx:CanvasRenderingContext2D,screen:Vec2,v:BaseVisual):void{if(this.team!==Team.Player)return;const label=`${this.assignedGroup+1}`;const labelColor=SHIP_GROUP_LABEL_COLORS[this.assignedGroup];const showLarge=Input.isDown('c')||Input.isDown('1')||Input.isDown('2')||Input.isDown('3')||Input.isDown('4');ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';if(showLarge){ctx.font=`bold ${Math.max(24,v.side*0.72)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;ctx.lineWidth=Math.max(3,v.side*0.075);ctx.strokeStyle='rgba(2,4,6,0.88)';ctx.strokeText(label,screen.x,screen.y);ctx.fillStyle=colorToCSS(labelColor,0.92);ctx.fillText(label,screen.x,screen.y);}else{ctx.fillStyle=colorToCSS(labelColor,0.9);ctx.font=`bold ${Math.max(10,v.side*0.15)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;ctx.fillText(label,screen.x+v.side*0.3,screen.y-v.side*0.32);}ctx.restore();}}
 
+interface LabDotConfig {
+  speed: number;
+  lobes: number;
+  meanR: number;
+  modR: number;
+  modPhase: number;
+  aspect: number;
+  precession: number;
+  precessionPhase: number;
+}
+
+const LAB_DOT_CONFIGS: readonly LabDotConfig[] = [
+  { speed: 1.15,  lobes: 3, meanR: 0.85, modR: 0.20, modPhase: 0.0, aspect: 0.65, precession: 0.22,  precessionPhase: 0.0 },
+  { speed: -0.95, lobes: 4, meanR: 1.05, modR: 0.18, modPhase: 1.2, aspect: 0.60, precession: -0.18, precessionPhase: 1.5 },
+  { speed: 1.30,  lobes: 5, meanR: 0.95, modR: 0.22, modPhase: 2.4, aspect: 0.70, precession: 0.26,  precessionPhase: 3.1 },
+  { speed: -1.10, lobes: 2, meanR: 0.75, modR: 0.25, modPhase: 3.6, aspect: 0.55, precession: -0.30, precessionPhase: 4.2 },
+  { speed: 1.05,  lobes: 3, meanR: 1.15, modR: 0.16, modPhase: 4.8, aspect: 0.65, precession: 0.15,  precessionPhase: 5.0 },
+  { speed: -1.25, lobes: 4, meanR: 0.80, modR: 0.20, modPhase: 0.8, aspect: 0.75, precession: -0.24, precessionPhase: 2.1 },
+];
+
+export interface LabOrbitalDot {
+  pos: Vec2;
+  trail: TrailSample[];
+  lastSamplePos: Vec2;
+  config: LabDotConfig;
+}
+
 export class ResearchLab extends BuildingBase {
   private spinPhase = 0;
+  private dotPhase = 0;
+  private activityRate = 0.5; // 0.5 = idle (50% speed), 1.0 = active research (100% speed)
+  isResearching = false;
+  readonly orbitalDots: LabOrbitalDot[];
   researchItem: string | null;
   /** Rendering permission set from the local viewer's team on network clients. */
   showExactUpgrade: boolean;
+
   constructor(position: Vec2, team: Team, researchItem: string | null = null) {
     super(EntityType.ResearchLab, team, position, HP_VALUES.researchLab);
     this.researchItem = researchItem;
     this.footprintCells = researchItem ? 3 : null;
     this.showExactUpgrade = team === Team.Player;
+    this.orbitalDots = LAB_DOT_CONFIGS.map((cfg) => ({
+      pos: position.clone(),
+      trail: [],
+      lastSamplePos: position.clone(),
+      config: cfg,
+    }));
   }
-  update(dt: number): void { super.update(dt); this.spinPhase += this.powered ? dt * 2 : dt * 0.35; }
+
+  getActivityRate(): number { return this.activityRate; }
+  getSpinPhase(): number { return this.spinPhase; }
+  getDotPhase(): number { return this.dotPhase; }
+
+  override destroy(): void {
+    super.destroy();
+    for (const dot of this.orbitalDots) {
+      dot.trail.length = 0;
+    }
+  }
+
+  override update(dt: number): void {
+    super.update(dt);
+    if (this.powered) {
+      const targetRate = this.isResearching ? 1.0 : 0.5;
+      // Smoothly transition between 50% idle speed and 100% research speed
+      const rampSpeed = 1.6;
+      this.activityRate += (targetRate - this.activityRate) * Math.min(1, dt * rampSpeed);
+
+      // Atomic symbol spins fast (2.0 rad/s = its current speed) when researching,
+      // and smoothly decelerates to 50% speed (1.0 rad/s) when idle
+      this.spinPhase += dt * (2.0 * this.activityRate);
+
+      // Dots move faster (2.7 rad/s base rate) when researching, and 50% speed when idle
+      this.dotPhase += dt * (2.7 * this.activityRate);
+    } else {
+      this.activityRate = Math.max(0.175, this.activityRate - dt * 1.5);
+      this.spinPhase += dt * 0.35;
+    }
+
+    // Update the 6 orbital dots
+    const worldSide = (this.footprintCells ?? footprintForBuilding(this)) * GRID_CELL_SIZE;
+    const baseR = worldSide * 0.22;
+    const fadeTime = 0.52;
+    const minSampleDist = Math.max(1.2, baseR * 0.07);
+    const minSampleDistSq = minSampleDist * minSampleDist;
+
+    for (let i = 0; i < this.orbitalDots.length; i++) {
+      const dot = this.orbitalDots[i];
+      const cfg = dot.config;
+
+      // Natural compound harmonic / precessing rosette movement formula
+      const theta = this.dotPhase * cfg.speed;
+      const omega = this.dotPhase * cfg.precession + cfg.precessionPhase;
+      const r = baseR * (cfg.meanR + cfg.modR * Math.cos(cfg.lobes * theta + cfg.modPhase));
+      const u = r * Math.cos(theta);
+      const v = r * Math.sin(theta) * cfg.aspect;
+      const cosP = Math.cos(omega);
+      const sinP = Math.sin(omega);
+      const lx = u * cosP - v * sinP;
+      const ly = (u * sinP + v * cosP) * 0.65;
+
+      dot.pos.x = this.position.x + lx;
+      dot.pos.y = this.position.y + ly;
+
+      // Age existing trail points
+      let write = 0;
+      for (let j = 0; j < dot.trail.length; j++) {
+        const point = dot.trail[j];
+        point.age += dt;
+        if (point.age <= fadeTime) {
+          dot.trail[write++] = point;
+        }
+      }
+      dot.trail.length = write;
+
+      // When powered and alive, sample position history into the trail
+      if (this.powered && this.alive && this.buildProgress >= 1) {
+        const dx = dot.pos.x - dot.lastSamplePos.x;
+        const dy = dot.pos.y - dot.lastSamplePos.y;
+        const distSq = dx * dx + dy * dy;
+
+        if (distSq >= minSampleDistSq) {
+          const dist = Math.sqrt(distSq);
+          // If moved rapidly, interpolate intermediate sample to prevent angular gaps
+          if (dist > minSampleDist * 4) {
+            const steps = Math.min(3, Math.floor(dist / minSampleDist));
+            for (let s = 1; s < steps; s++) {
+              const f = s / steps;
+              const ix = dot.lastSamplePos.x + (dot.pos.x - dot.lastSamplePos.x) * f;
+              const iy = dot.lastSamplePos.y + (dot.pos.y - dot.lastSamplePos.y) * f;
+              if (dot.trail.length >= 10) {
+                const recycled = dot.trail.shift()!;
+                recycled.pos.x = ix;
+                recycled.pos.y = iy;
+                recycled.age = 0;
+                dot.trail.push(recycled);
+              } else {
+                dot.trail.push({ pos: new Vec2(ix, iy), age: 0 });
+              }
+            }
+          }
+
+          // Append or recycle latest head point
+          if (dot.trail.length >= 10) {
+            const recycled = dot.trail.shift()!;
+            recycled.pos.x = dot.pos.x;
+            recycled.pos.y = dot.pos.y;
+            recycled.age = 0;
+            dot.trail.push(recycled);
+          } else {
+            dot.trail.push({ pos: dot.pos.clone(), age: 0 });
+          }
+
+          dot.lastSamplePos.x = dot.pos.x;
+          dot.lastSamplePos.y = dot.pos.y;
+        }
+      }
+    }
+  }
+
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
     const screen = camera.worldToScreen(this.position);
     const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.researchlab_detail), camera);
     if (v.simple) return;
     const glowColor = Colors.building_glow_research;
     const ringA = this.powered ? 0.85 : 0.45;
+
+    // Draw tech labels and atomic spinning rings (translated to building center)
     ctx.save();
     ctx.translate(screen.x, screen.y);
     if (this.researchItem) {
@@ -692,7 +844,7 @@ export class ResearchLab extends BuildingBase {
         ctx.fillText(icon, 0, v.side * 0.27);
       }
     }
-    // Three spinning elliptical rings
+    // Three spinning elliptical rings (atomic symbol)
     ctx.strokeStyle = colorToCSS(Colors.researchlab_detail, ringA);
     ctx.lineWidth = Math.max(0.8, v.side * 0.018);
     for (let i = 0; i < 3; i++) {
@@ -704,26 +856,72 @@ export class ResearchLab extends BuildingBase {
       ctx.stroke();
       ctx.restore();
     }
-    // Orbiting node dots — 3 nodes at staggered radii and speeds
+    ctx.restore();
+
+    // Orbiting node dots and luminous trails (drawn in world-to-screen untranslated coordinates)
     if (this.powered) {
+      const worldSide = (this.footprintCells ?? footprintForBuilding(this)) * GRID_CELL_SIZE;
+      const trailStyle: ProjectileTrailStyle = {
+        color: colorToCSS(glowColor, 0.58),
+        coreColor: 'rgba(215, 255, 245, 0.95)',
+        fadeTime: 0.52,
+        width: Math.max(1.6, worldSide * 0.022),
+        outerWidthMultiplier: 2.2,
+        outerAlpha: 0.18,
+        innerWidthMultiplier: 1.0,
+        innerAlpha: 0.42,
+        coreWidthMultiplier: 0.4,
+        coreAlpha: 0.85,
+        taperExponent: 1.1,
+        opacityExponent: 1.25,
+      };
+
+      // 1. Draw glowing trails behind the 6 dots
+      for (const dot of this.orbitalDots) {
+        if (dot.trail.length > 0) {
+          if (!isLegacyGraphics()) {
+            renderProjectileTrail(ctx, camera, dot.trail, dot.pos, trailStyle);
+          } else {
+            ctx.save();
+            ctx.strokeStyle = colorToCSS(glowColor, 0.4);
+            ctx.lineWidth = Math.max(1, v.side * 0.018);
+            ctx.beginPath();
+            const p0 = camera.worldToScreen(dot.trail[0].pos);
+            ctx.moveTo(p0.x, p0.y);
+            for (let t = 1; t < dot.trail.length; t++) {
+              const pt = camera.worldToScreen(dot.trail[t].pos);
+              ctx.lineTo(pt.x, pt.y);
+            }
+            const head = camera.worldToScreen(dot.pos);
+            ctx.lineTo(head.x, head.y);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      }
+
+      // 2. Draw the 6 dot heads
+      ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      const nodeR = Math.max(1.2, v.side * 0.045);
-      const orbits: Array<{ radius: number; speed: number; phase: number }> = [
-        { radius: v.side * 0.18, speed: 1.0, phase: 0 },
-        { radius: v.side * 0.26, speed: -0.65, phase: 2.1 },
-        { radius: v.side * 0.22, speed: 0.82, phase: 4.2 },
-      ];
-      for (const orbit of orbits) {
-        const a = this.spinPhase * orbit.speed + orbit.phase;
-        const nx = Math.cos(a) * orbit.radius;
-        const ny = Math.sin(a) * orbit.radius * 0.55;
-        ctx.fillStyle = colorToCSS(glowColor, 0.72);
+      const nodeR = Math.max(1.3, v.side * 0.038);
+      for (const dot of this.orbitalDots) {
+        const sx = camera.screenX(dot.pos.x);
+        const sy = camera.screenY(dot.pos.y);
+
+        // Soft outer glow
+        ctx.fillStyle = colorToCSS(glowColor, 0.75);
         ctx.beginPath();
-        ctx.arc(nx, ny, nodeR, 0, Math.PI * 2);
+        ctx.arc(sx, sy, nodeR, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bright luminous core
+        ctx.fillStyle = 'rgba(235, 255, 250, 0.95)';
+        ctx.beginPath();
+        ctx.arc(sx, sy, Math.max(0.8, nodeR * 0.45), 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.restore();
     }
-    ctx.restore();
   }
 }
 
