@@ -6,6 +6,17 @@ export interface MenuTriangle {
   area: number;
   parent: number;
   phase: number;
+  subdivided?: boolean;
+  edgeTriangles?: Point[][];
+}
+
+const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const samePoint = (a: Point, b: Point): boolean => Math.abs(a.x - b.x) < 0.001 && Math.abs(a.y - b.y) < 0.001;
+
+/** Three corner triangles and one inverted center tile exactly fill the parent. */
+export function subdivideTriangle([a, b, c]: Point[]): Point[][] {
+  const ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
+  return [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]];
 }
 
 function clippedArea(points: Point[], w: number, h: number): number {
@@ -79,6 +90,34 @@ export function growMenuTriangles(w: number, h: number, random = Math.random): M
       }
     }
   }
+  for (const tile of result) tile.subdivided = random() < 0.24;
+
+  // Use corner quarters of unoccupied frontier cells. They attach along half
+  // an exposed edge, cannot overlap the mass, and remain tied to their parent.
+  const candidates: { parent: MenuTriangle; points: Point[]; area: number }[] = [];
+  const used = new Set<string>();
+  for (const empty of frontier.values()) {
+    for (const parent of result) {
+      const shared = empty.points.filter(p => parent.points.some(q => samePoint(p, q)));
+      if (shared.length !== 2) continue;
+      for (const points of subdivideTriangle(empty.points).slice(0, 3)) {
+        if (!points.some(p => shared.some(q => samePoint(p, q)))) continue;
+        const key = points.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).sort().join(';');
+        const smallArea = clippedArea(points, w, h);
+        if (used.has(key) || smallArea < side * height / 8 * 0.95) continue;
+        used.add(key);
+        candidates.push({ parent, points, area: smallArea });
+      }
+    }
+  }
+  const count = Math.floor(random() * 21);
+  for (let i = 0; i < count && candidates.length; i++) {
+    const index = Math.floor(random() * candidates.length);
+    const [candidate] = candidates.splice(index, 1);
+    if (area + candidate.area > w * h * 0.5) continue;
+    (candidate.parent.edgeTriangles ??= []).push(candidate.points);
+    area += candidate.area;
+  }
   return result;
 }
 
@@ -140,7 +179,6 @@ export class MenuTriangleBackground {
       gradient.addColorStop(0, color(value + 0.07));
       gradient.addColorStop(1, color(value - 0.09));
       ctx.fillStyle = gradient;
-      ctx.beginPath();
       // Collapse the newest tile toward its attachment edge; its parent remains
       // present until this tile is gone, including during interrupted growth.
       const parent = this.tiles[tile.parent];
@@ -149,17 +187,23 @@ export class MenuTriangleBackground {
         ? { x: (shared[0].x + shared[1].x) / 2, y: (shared[0].y + shared[1].y) / 2 }
         : { x: cx, y: cy };
       const scale = amount * amount * (3 - 2 * amount);
-      const points = tile.points.map(p => ({ x: anchor.x + (p.x - anchor.x) * scale, y: anchor.y + (p.y - anchor.y) * scale }));
-      ctx.moveTo((points[2].x + points[0].x) / 2, (points[2].y + points[0].y) / 2);
-      for (let k = 0; k < 3; k++) {
-        const p = points[k], next = points[(k + 1) % 3];
-        ctx.arcTo(p.x, p.y, (p.x + next.x) / 2, (p.y + next.y) / 2, radius * scale);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(8,8,24,0.42)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      const shapes = tile.subdivided ? subdivideTriangle(tile.points) : [tile.points];
+      shapes.push(...(tile.edgeTriangles ?? []));
+      for (const shape of shapes) {
+        ctx.beginPath();
+        const points = shape.map(p => ({ x: anchor.x + (p.x - anchor.x) * scale, y: anchor.y + (p.y - anchor.y) * scale }));
+        const small = shape !== tile.points;
+        ctx.moveTo((points[2].x + points[0].x) / 2, (points[2].y + points[0].y) / 2);
+        for (let k = 0; k < 3; k++) {
+          const p = points[k], next = points[(k + 1) % 3];
+          ctx.arcTo(p.x, p.y, (p.x + next.x) / 2, (p.y + next.y) / 2, radius * scale * (small ? 0.5 : 1));
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(8,8,24,0.42)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        }
     }
     ctx.restore();
   }
