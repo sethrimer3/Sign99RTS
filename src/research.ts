@@ -1,9 +1,10 @@
-export type ResearchCategory = 'S' | 'F' | 'D';
+export type ResearchCategory = 'S' | 'F' | 'D' | 'W';
 
 /** The only information an opponent gets from an upgrade lab. */
 export function researchCategory(item: string): ResearchCategory {
   if (item === 'advancedFighters' || item === 'bomberyard' || item === 'swarmyard') return 'F';
   if (item.includes('turret') || item === 'advancedRegenTurrets' || item === 'synonymousminelayer') return 'D';
+  if (item.startsWith('weapon')) return 'W';
   return 'S';
 }
 

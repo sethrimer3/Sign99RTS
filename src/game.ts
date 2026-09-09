@@ -14,7 +14,7 @@ import { MainMenu, MenuAction } from './menu.js';
 import { Colors, colorToCSS } from './colors.js';
 import { Team, EntityType, ShipGroup, Entity } from './entities.js';
 import { DT, WORLD_WIDTH, WORLD_HEIGHT, RESEARCH_COST, RESEARCH_TIME, TICK_RATE, WEAPON_STATS, ACTIVE_RESEARCH_ITEMS, SHIP_STATS, BASELINE_RESOURCE_GAIN, RESOURCE_GAIN_RATE } from './constants.js';
-import { BuildingBase, CommandPost, Factory, ResearchLab } from './building.js';
+import { BuildingBase, CommandPost, Factory, ResearchLab, ShieldGenerator } from './building.js';
 import { Shipyard } from './building.js';
 import { EnemyBasePlanner } from './enemybaseplanner.js';
 import { TurretBase } from './turret.js';
@@ -1990,6 +1990,10 @@ export class Game {
           b.footprintCells = b.researchItem ? 3 : null;
           b.showExactUpgrade = b.team === this.localPlayerTeam();
         }
+        if (b instanceof ShieldGenerator) {
+          b.shield = sb.shield ?? b.shield;
+          b.restartDelay = sb.shieldRestartDelay ?? b.restartDelay;
+        }
         if (!sb.alive && b.alive) b.destroy();
       } else if (sb.alive) {
         // Building not known locally — create it from snapshot so remote clients
@@ -2006,6 +2010,10 @@ export class Game {
             newBuilding.researchItem = sb.researchItem ?? null;
             newBuilding.footprintCells = newBuilding.researchItem ? 3 : null;
             newBuilding.showExactUpgrade = newBuilding.team === this.localPlayerTeam();
+          }
+          if (newBuilding instanceof ShieldGenerator) {
+            newBuilding.shield = sb.shield ?? newBuilding.shield;
+            newBuilding.restartDelay = sb.shieldRestartDelay ?? newBuilding.restartDelay;
           }
           this.state.addEntity(newBuilding);
           this.state.power.markDirty();
@@ -2168,6 +2176,8 @@ export class Game {
         powered: b.powered,
         alive: b.alive,
         researchItem: b instanceof ResearchLab ? b.researchItem ?? undefined : undefined,
+        shield: b instanceof ShieldGenerator ? b.shield : undefined,
+        shieldRestartDelay: b instanceof ShieldGenerator ? b.restartDelay : undefined,
       });
     }
 

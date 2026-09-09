@@ -6,6 +6,7 @@ import { footprintForBuildingType } from './buildingfootprint.js';
 import { researchCategory, researchIcon } from './research.js';
 import { ResearchLab } from './building.js';
 import { footprintForBuilding } from './buildingfootprint.js';
+import { GameState } from './gamestate.js';
 
 describe('physical upgrade labs', () => {
   it('keeps the prerequisite lab at 9x9', () => {
@@ -13,10 +14,26 @@ describe('physical upgrade labs', () => {
     expect(footprintForBuilding(new ResearchLab(new Vec2(0, 0), Team.Player, 'shipDash'))).toBe(3);
   });
 
-  it('exposes only the three public categories and keeps exact owner icons distinct', () => {
+  it('does not let a Research Node satisfy the main Research Lab prerequisite', () => {
+    const state = new GameState(new Vec2(0, 0));
+    const node = new ResearchLab(new Vec2(100, 100), Team.Player, 'shipDash');
+    node.powered = true;
+    node.buildProgress = 1;
+    state.addEntity(node);
+    expect(state.hasResearchLab()).toBe(false);
+
+    const lab = new ResearchLab(new Vec2(400, 400), Team.Player);
+    lab.powered = true;
+    lab.buildProgress = 1;
+    state.addEntity(lab);
+    expect(state.hasResearchLab()).toBe(true);
+  });
+
+  it('exposes the four public categories and keeps exact owner icons distinct', () => {
     expect(researchCategory('shipDash')).toBe('S');
     expect(researchCategory('advancedFighters')).toBe('F');
     expect(researchCategory('massdriverturret')).toBe('D');
+    expect(researchCategory('weaponLaser')).toBe('W');
     expect(researchIcon('shipDash')).not.toBe(researchIcon('weaponLaser'));
   });
 

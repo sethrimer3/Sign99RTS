@@ -41,7 +41,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 ## Building Placement
 
 - The grid cell size is one third of the original port grid.
-- Buildings snap to grid footprints: Research Labs are 9x9, upgrade Research Nodes are 3x3, Factories are 4x4, and Command Posts are 6x6.
+- Buildings snap to grid footprints: Research Labs are 9x9, upgrade Research Nodes and Shield Generators are 3x3, Factories are 4x4, and Command Posts are 6x6.
 - Placement requires enough resources, an empty cell, world bounds, and adjacency to the player power network.
 - Concentroid placement instead requires the building footprint to sit on the race's frontier band.
 - Synonymous placement is freeform and does not require grid power or frontier bands, but the player must have enough free nanobots for the selected structure.
@@ -63,6 +63,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 - Fighter Yards produce fighters. Bomber Yards produce bombers after Bomber Yard research and are capped at 3 player yards. Swarm Yards are Terran-only 7x7 shipyards unlocked through Fighters research; each fields up to 20 tiny 5 HP Swarm ships with short-range instant lasers that linger visibly for 0.5 seconds. Swarm ships auto-break from waypoint/protect/idle movement toward nearby hostile ships, fighters, and buildings so they can close to laser range, and the player can place up to 5 Swarm Yards.
 - Shipyards only produce while finished, powered, and below capacity.
 - Advanced Fighters research raises player shipyard capacity and speeds player ship production.
+- Completing Shield I unlocks the 3x3 Shield Generator. A finished powered generator projects a square 9x9 field with one shared 90 HP pool; it regenerates 5 HP per second, and a fully depleted field waits 5 seconds before restarting regeneration.
 - C-menu orders are active: Protect Base defends the player Command Post, Set Waypoint uses the cursor location, Follow Player follows the player ship, and Dock returns ships to their home yard. While holding C or a number key, player shipyards show a large group number.
 
 ## Enemy AI
@@ -81,7 +82,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 - A finished, powered 9x9 Research Lab is required to begin placing Research Nodes. Losing the Lab prevents new nodes from being placed.
 - Choosing research enters a standard building-placement preview for a dedicated 3x3 Research Node; its construction time is the research time.
 - A completed, living Research Node grants its linked upgrade. Destroying or selling it immediately removes that upgrade and makes it available to build again.
-- Enemy Research Nodes reveal only S (ship), F (fighter), or D (defense/turret); the owner also sees the exact upgrade icon.
+- Enemy Research Nodes reveal only S (ship), F (fighter), D (defense/turret), or W (weapon); the owner also sees the exact upgrade icon.
 - Active research items are turret unlocks, Bomber Yard, Advanced Fighters, and Main Ship upgrades including Dash.
 - Mine Layer research and construction are exclusive to The Synonymous faction; Terran players do not see or unlock Mine Layers.
 - Completed research is hidden from the research menu and summarized on the HUD.

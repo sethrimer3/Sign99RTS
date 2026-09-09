@@ -600,6 +600,68 @@ export class PowerGenerator extends BuildingBase {
 
 export class Wall extends BuildingBase { shield=0; maxShield=0; private shieldRegenDelay=0; poweredWallUpgrade=false; constructor(position: Vec2, team: Team){ super(EntityType.Wall, team, position, HP_VALUES.wall); this.powered=true; } enablePoweredWall():void{this.poweredWallUpgrade=true;this.maxShield=20;this.shield=this.maxShield;this.shieldRegenDelay=0;} override update(dt:number):void{super.update(dt); if(this.poweredWallUpgrade&&this.alive){this.shieldRegenDelay=Math.max(0,this.shieldRegenDelay-dt); if(this.shieldRegenDelay<=0&&this.shield<this.maxShield)this.shield=Math.min(this.maxShield,this.shield+5*dt);}} override takeDamage(amount:number,source?:Entity):void{if(amount>0&&this.poweredWallUpgrade&&this.shield>0){this.shieldRegenDelay=5;const absorbed=Math.min(this.shield,amount);this.shield-=absorbed;amount-=absorbed;if(amount<=0)return;}super.takeDamage(amount,source);} draw(ctx:CanvasRenderingContext2D,camera:Camera):void{ const screen=camera.worldToScreen(this.position); const v=this.drawBuildingBase(ctx,screen,colorToCSS(Colors.advanced_building),camera); const x=screen.x-v.half,y=screen.y-v.half; const pulse=0.55+0.35*Math.sin(this.animationTime*4); ctx.save(); if(this.poweredWallUpgrade){ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(Colors.radar_friendly_status,0.22+0.28*(this.shield/Math.max(1,this.maxShield)));ctx.lineWidth=Math.max(2,v.side*0.06);ctx.strokeRect(x+2,y+2,v.side-4,v.side-4);} ctx.globalCompositeOperation='source-over'; ctx.strokeStyle=colorToCSS(Colors.powergenerator_detail,0.68+0.22*pulse); ctx.lineWidth=Math.max(2,v.side*0.05); ctx.beginPath(); ctx.moveTo(x+v.side*0.15,y+v.side*0.5); ctx.lineTo(x+v.side*0.85,y+v.side*0.5); ctx.moveTo(x+v.side*0.5,y+v.side*0.15); ctx.lineTo(x+v.side*0.5,y+v.side*0.85); ctx.stroke(); ctx.restore(); }}
 
+export class ShieldGenerator extends BuildingBase {
+  static readonly FIELD_CELLS = 9;
+  readonly maxShield = 90;
+  shield = this.maxShield;
+  restartDelay = 0;
+
+  constructor(position: Vec2, team: Team) {
+    super(EntityType.ShieldGenerator, team, position, HP_VALUES.shieldGenerator);
+  }
+
+  get fieldActive(): boolean {
+    return this.alive && this.powered && this.buildProgress >= 1 && this.shield > 0;
+  }
+
+  contains(pos: Vec2): boolean {
+    const half = ShieldGenerator.FIELD_CELLS * GRID_CELL_SIZE * 0.5;
+    return Math.abs(pos.x - this.position.x) <= half && Math.abs(pos.y - this.position.y) <= half;
+  }
+
+  absorbDamage(amount: number, source?: Entity): number {
+    if (!this.fieldActive || amount <= 0) return amount;
+    const absorbed = Math.min(this.shield, amount);
+    this.shield -= absorbed;
+    if (source) this.lastDamageSource = source;
+    if (this.shield <= 0) {
+      this.shield = 0;
+      this.restartDelay = 5;
+    }
+    return amount - absorbed;
+  }
+
+  override update(dt: number): void {
+    super.update(dt);
+    if (!this.alive || !this.powered || this.buildProgress < 1 || this.shield >= this.maxShield) return;
+    if (this.shield <= 0 && this.restartDelay > 0) {
+      this.restartDelay = Math.max(0, this.restartDelay - dt);
+      if (this.restartDelay > 0) return;
+    }
+    this.shield = Math.min(this.maxShield, this.shield + 5 * dt);
+  }
+
+  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+    const screen = camera.worldToScreen(this.position);
+    const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.radar_friendly_status), camera);
+    const ratio = this.shield / this.maxShield;
+    ctx.save();
+    const fieldSide = ShieldGenerator.FIELD_CELLS * GRID_CELL_SIZE * camera.zoom;
+    if (this.buildProgress >= 1 && this.powered) {
+      ctx.fillStyle = colorToCSS(Colors.radar_friendly_status, 0.025 + ratio * 0.035);
+      ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.18 + ratio * 0.42);
+      ctx.lineWidth = Math.max(1.5, 2.5 * camera.zoom);
+      ctx.fillRect(screen.x - fieldSide / 2, screen.y - fieldSide / 2, fieldSide, fieldSide);
+      ctx.strokeRect(screen.x - fieldSide / 2, screen.y - fieldSide / 2, fieldSide, fieldSide);
+    }
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.45 + ratio * 0.45);
+    ctx.lineWidth = Math.max(2, v.side * 0.045);
+    ctx.strokeRect(screen.x - v.side * 0.28, screen.y - v.side * 0.28, v.side * 0.56, v.side * 0.56);
+    ctx.restore();
+  }
+}
+
 export class Shipyard extends BuildingBase { shipCapacity=5; activeShips=0; buildTimer=0; buildInterval=5; assignedGroup: ShipGroup=ShipGroup.Red; holdDocked=false; dockedShips=0; fightersReleased=false; launchFlashTimer=0;
 constructor(type:EntityType.FighterYard|EntityType.BomberYard|EntityType.SwarmYard,position:Vec2,team:Team){super(type, team, position, type===EntityType.FighterYard ? HP_VALUES.fighterYard : type===EntityType.SwarmYard ? HP_VALUES.swarmYard : HP_VALUES.bomberYard);this.powered=false;if(type===EntityType.SwarmYard){this.shipCapacity=20;this.buildInterval=0.65;}} update(dt:number):void{super.update(dt);if(this.buildProgress>=1&&this.powered&&this.activeShips<this.shipCapacity)this.buildTimer-=dt;if(this.launchFlashTimer>0)this.launchFlashTimer=Math.max(0,this.launchFlashTimer-dt);} shouldSpawnShip():boolean{if(!this.alive||!this.powered||this.buildProgress<1)return false;if(this.buildTimer<=0&&this.activeShips<this.shipCapacity){this.buildTimer=this.buildInterval;this.launchFlashTimer=0.55;return true;}return false;} bayPosition():Vec2{return this.position.add(new Vec2(0, GRID_CELL_SIZE*1.15));} draw(ctx:CanvasRenderingContext2D,camera:Camera):void{ const screen=camera.worldToScreen(this.position); const isF=this.type===EntityType.FighterYard; const isSwarm=this.type===EntityType.SwarmYard; const detail=isF?Colors.fighteryard_detail:isSwarm?Colors.particles_switch:Colors.bomberyard_detail; if(this.synonymousVisualKind==='shipyard'){this.drawSynonymousShipyard(ctx,camera,screen);return;} const v=this.drawBuildingBase(ctx,screen,colorToCSS(detail),camera); const bayW=v.side*0.55,bayH=v.side*0.18; ctx.fillStyle=colorToCSS(Colors.enemy_background,0.8); ctx.fillRect(screen.x-bayW*0.5,screen.y+v.side*0.2,bayW,bayH); for(let i=0;i<Math.min(this.dockedShips,this.shipCapacity);i++){const col=i%5,row=Math.floor(i/5);const sx=screen.x-v.side*0.32+col*v.side*0.16;const sy=screen.y-v.side*0.23+row*v.side*0.115; ctx.strokeStyle=colorToCSS(detail, this.powered?0.9:0.45); ctx.beginPath(); if(isSwarm){ctx.arc(sx,sy,Math.max(1.2,v.side*0.025),0,Math.PI*2);} else if(isF){ctx.moveTo(sx+4,sy);ctx.lineTo(sx-3,sy-2);ctx.lineTo(sx-3,sy+2);} else {ctx.moveTo(sx+4,sy);ctx.lineTo(sx,sy-3);ctx.lineTo(sx-4,sy);ctx.lineTo(sx,sy+3);} ctx.closePath();ctx.stroke(); }
 if(this.launchFlashTimer>0){const f=this.launchFlashTimer/0.55;ctx.save();ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(detail,f*0.80);ctx.lineWidth=Math.max(1,v.side*0.042);ctx.strokeRect(screen.x-bayW*0.5-1,screen.y+v.side*0.19,bayW+2,bayH+2);ctx.fillStyle=colorToCSS(detail,f*0.22);ctx.fillRect(screen.x-bayW*0.5-1,screen.y+v.side*0.19,bayW+2,bayH+2);ctx.restore();}

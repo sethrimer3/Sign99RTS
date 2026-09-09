@@ -6,6 +6,8 @@ export function footprintForBuildingType(type: EntityType): number {
       return 6;
     case EntityType.Wall:
       return 2;
+    case EntityType.ShieldGenerator:
+      return 3;
     case EntityType.FighterYard:
       return 5;
     case EntityType.BomberYard:

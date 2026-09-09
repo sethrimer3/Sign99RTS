@@ -23,6 +23,7 @@ import {
   CommandPost,
   PowerGenerator,
   Wall,
+  ShieldGenerator,
   Shipyard,
   ResearchLab,
   Factory,
@@ -125,6 +126,18 @@ export const BUILD_DEFS: Record<string, BuildDef> = {
     buildTime: BUILD_TIME.wall,
     tier: 'structure',
     factory: (pos, team) => new Wall(pos, team),
+  },
+  shieldgenerator: {
+    key: 'shieldgenerator',
+    label: 'Shield Generator',
+    description: 'Projects a shared 90 HP square shield across a 9x9 area. Regenerates 5 HP/s and restarts 5 seconds after depletion.',
+    cost: BUILDING_COST.shieldgenerator,
+    footprintCells: 3,
+    buildTime: BUILD_TIME.shieldgenerator,
+    tier: 'structure',
+    radialLabel: 'Shield\nGenerator',
+    researchKey: 'shipShield1',
+    factory: (pos, team) => new ShieldGenerator(pos, team),
   },
   fighteryard: {
     key: 'fighteryard',
@@ -274,6 +287,8 @@ export function buildCostForBuildingType(type: EntityType): number {
       return BUILDING_COST.powergenerator;
     case EntityType.Wall:
       return BUILDING_COST.wall;
+    case EntityType.ShieldGenerator:
+      return BUILDING_COST.shieldgenerator;
     case EntityType.GatlingTurret:
       return BUILDING_COST.gatlingturret;
     case EntityType.FighterYard:
@@ -311,6 +326,8 @@ export function buildDefForEntityType(type: EntityType): BuildDef | undefined {
       return BUILD_DEFS.powergenerator;
     case EntityType.Wall:
       return BUILD_DEFS.wall;
+    case EntityType.ShieldGenerator:
+      return BUILD_DEFS.shieldgenerator;
     case EntityType.GatlingTurret:
       return BUILD_DEFS.gatlingturret;
     case EntityType.FighterYard:

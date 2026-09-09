@@ -3,7 +3,7 @@
 import { pointToSegmentDistance, Vec2 } from './math.js';
 import { Entity, Team, EntityType } from './entities.js';
 import { PlayerShip } from './ship.js';
-import { BuildingBase, CommandPost, ResearchLab, Wall } from './building.js';
+import { BuildingBase, CommandPost, ResearchLab, ShieldGenerator, Wall } from './building.js';
 import { Shipyard } from './building.js';
 import { SynonymousMineLayer, TetherTurret, TurretBase } from './turret.js';
 import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
@@ -38,7 +38,7 @@ import { SpatialIndex, type SpatialIndexStats } from './spatialIndex.js';
 
 const FACTORY_COST_STEP = 25;
 const MAX_FACTORIES = 10;
-const MAX_RESEARCH_LABS = 32;
+const MAX_RESEARCH_LABS = 1;
 const MAX_TURRETS_PER_KIND = 20;
 
 export interface DestroyedBuildingRecord {
@@ -511,6 +511,7 @@ export class GameState {
         this.power.markDirty();
       }
     }
+    this.updateAreaShields();
     for (const b of this.buildings) {
       if (b instanceof SynonymousMineLayer) b.tickMineLayer(this);
     }
@@ -1586,6 +1587,32 @@ export class GameState {
       : { item: null, progress: 0, timeNeeded: 0 };
   }
 
+  private updateAreaShields(): void {
+    const shieldedEntities = [
+      ...this.playerShips.values(),
+      ...this.buildings,
+      ...this.fighters,
+    ];
+    for (const entity of shieldedEntities) entity.areaShield = null;
+    const generators = this.buildings.filter(
+      (building): building is ShieldGenerator => building instanceof ShieldGenerator && building.fieldActive,
+    );
+    for (const entity of shieldedEntities) {
+      if (!entity.alive || entity.team === Team.Neutral) continue;
+      let closest: ShieldGenerator | null = null;
+      let closestDistance = Infinity;
+      for (const generator of generators) {
+        if (generator.team !== entity.team || !generator.contains(entity.position)) continue;
+        const distance = generator.position.distanceTo(entity.position);
+        if (distance < closestDistance) {
+          closest = generator;
+          closestDistance = distance;
+        }
+      }
+      entity.areaShield = closest;
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Cleanup
   // -----------------------------------------------------------------------
@@ -2221,6 +2248,7 @@ export class GameState {
       : def.key === 'massdriverturret' ? EntityType.MassDriverTurret
       : def.key === 'regenturret' ? EntityType.RegenTurret
       : def.key === 'tetherturret' ? EntityType.TetherTurret
+      : def.key === 'shieldgenerator' ? EntityType.ShieldGenerator
       : null;
     if (type === null) return { valid: true, reason: 'OK' };
     const cap = type === EntityType.Factory ? MAX_FACTORIES
@@ -2230,7 +2258,9 @@ export class GameState {
       : type === EntityType.BomberYard && team === Team.Player ? 3
       : type === EntityType.SwarmYard ? 5
       : 5;
-    const count = this.countBuildingsOfType(type, team);
+    const count = type === EntityType.ResearchLab
+      ? this.buildings.filter((b) => b.alive && b.team === team && b instanceof ResearchLab && b.researchItem === null).length
+      : this.countBuildingsOfType(type, team);
     if (count >= cap) {
       return {
         valid: false,
