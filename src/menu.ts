@@ -3162,8 +3162,8 @@ export class MainMenu {
   }
 
   private menuPointerInRect(x: number, y: number, rect: HitRect): boolean {
-    if (this.menuInputViewport && !pointInRect(x, y - this.menuInputOffsetY, this.menuInputViewport)) return false;
-    return pointInRect(x, y, rect);
+    if (this.menuInputViewport && !pointInRect(x, y, this.menuInputViewport)) return false;
+    return pointInRect(x, y + this.menuInputOffsetY, rect);
   }
 }
 
