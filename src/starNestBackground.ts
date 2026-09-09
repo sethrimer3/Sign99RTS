@@ -65,11 +65,9 @@ void main() {
   dir.xy = rot2 * dir.xy;
 
   vec3 from = vec3(1.0, 0.5, 0.5);
-  // Replaced time offset with camera offset to drive parallax through space
-  // Slowed down by 5x and inverted Y-axis to match 2D canvas coordinates
-  from += vec3(u_camOffset.x * 0.0001, u_camOffset.y * -0.0001, -2.0);
-  from.xz = rot1 * from.xz;
-  from.xy = rot2 * from.xy;
+  // Removed camera translation/rotation on 'from' so we only rotate our view.
+  // This keeps the 3D fractal perfectly static relative to the camera,
+  // preventing stars from morphing or fading in/out of existence.
 
   float s  = 0.1;
   float fade = 1.0;
@@ -99,7 +97,23 @@ void main() {
   }
 
   v = mix(vec3(length(v)), v, SATURATION);
-  gl_FragColor = vec4(v * 0.01, 1.0);
+  v *= 0.01;
+
+  // Make the largest (brightest) 80% of stars have warm tones,
+  // leaving the smallest/faintest 20% as a mix of neutral/cool.
+  float intensity = length(v);
+  
+  // Create a warm golden/orange/red tone based on the pixel's brightness
+  vec3 warmTone = intensity * vec3(1.2, 0.7, 0.3);
+  
+  // Smoothly blend towards the warm tone for the top 80% of intensity
+  // Assuming intensity ranges roughly 0.0 to 1.5+ for visible stars.
+  // We use a smoothstep to transition the brighter spots to warm tones.
+  float warmBlend = smoothstep(0.02, 0.15, intensity);
+  
+  v = mix(v, warmTone, warmBlend * 0.95);
+
+  gl_FragColor = vec4(v, 1.0);
 }
 `;
 }
