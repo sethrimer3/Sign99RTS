@@ -87,17 +87,36 @@ describe('ResearchLab visual effects, speeds, and orbital dots', () => {
     expect(lab.getActivityRate()).toBeCloseTo(0.5, 1);
   });
 
-  it('generates, moves, and caps world-space trails for all 6 dots', () => {
-    // Run for several frames so dots traverse world coordinates and build trails
-    for (let i = 0; i < 40; i++) {
+  it('smoothly scales dot and trail opacity from 50% idle to 75% when researching', () => {
+    expect(lab.isResearching).toBe(false);
+    expect(lab.getDotOpacity()).toBeCloseTo(0.50, 2);
+
+    // Start research
+    lab.isResearching = true;
+    for (let i = 0; i < 25; i++) lab.update(0.1);
+
+    // Opacity smoothly reaches 75%
+    expect(lab.getDotOpacity()).toBeCloseTo(0.75, 2);
+
+    // Stop research
+    lab.isResearching = false;
+    for (let i = 0; i < 25; i++) lab.update(0.1);
+
+    // Opacity smoothly returns to 50%
+    expect(lab.getDotOpacity()).toBeCloseTo(0.50, 2);
+  });
+
+  it('generates, moves, and caps world-space trails for all 6 dots across extended 6x history', () => {
+    // Run for several frames so dots traverse world coordinates and build extended trails
+    for (let i = 0; i < 60; i++) {
       lab.update(0.05);
     }
 
-    // All 6 dots should have moved away from lab center and accumulated trails
+    // All 6 dots should have moved away from lab center and accumulated extended trails
     for (const dot of lab.orbitalDots) {
       expect(dot.pos.distanceTo(lab.position)).toBeGreaterThan(5);
-      expect(dot.trail.length).toBeGreaterThan(0);
-      expect(dot.trail.length).toBeLessThanOrEqual(10);
+      expect(dot.trail.length).toBeGreaterThan(10); // Verifies trails exceed the previous 10-sample limit
+      expect(dot.trail.length).toBeLessThanOrEqual(75);
 
       // Verify each trail point is stored in world coordinates
       for (const sample of dot.trail) {

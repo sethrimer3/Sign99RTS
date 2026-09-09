@@ -72,6 +72,15 @@ const THIRD_STAR_PLACEMENT: SunPlacement = {
 const PARALLAX_X = 0.036;
 const PARALLAX_Y = 0.036;
 
+/**
+ * Largest parallax offset (px) the sun center can ever be pushed from its
+ * screen-fraction anchor, reached when the camera sits against a world edge.
+ * The baked glow canvas is padded by this much on every side so the parallax
+ * blit never exposes an uncovered strip at the screen border.
+ */
+const PARALLAX_MAX_X = Math.ceil(WORLD_WIDTH  * 0.5 * PARALLAX_X);
+const PARALLAX_MAX_Y = Math.ceil(WORLD_HEIGHT * 0.5 * PARALLAX_Y);
+
 export function getDistantSunScreenPosition(camera: Camera, screenW: number, screenH: number): { x: number; y: number } {
   const dx = (camera.position.x - WORLD_WIDTH  * 0.5) * PARALLAX_X;
   const dy = (camera.position.y - WORLD_HEIGHT * 0.5) * PARALLAX_Y;
@@ -225,18 +234,21 @@ export class DistantSuns {
       this.lightCtx = this.lightCanvas.getContext('2d');
     }
 
-    // Tiny parallax offset (sun barely moves with the camera — deep background).
-    const dx = (camera.position.x - WORLD_WIDTH  * 0.5) * PARALLAX_X;
-    const dy = (camera.position.y - WORLD_HEIGHT * 0.5) * PARALLAX_Y;
+    // Effective screen-space sun center.  Sourced from the SAME helper the
+    // building/ship shading uses so the glow, rays, core and orbit lines can
+    // never drift apart from each other (or from the lit scene) after a resize
+    // or a long camera pan.
+    const { x: cx, y: cy } = getDistantSunScreenPosition(camera, screenW, screenH);
+    // Parallax shift of the sun center from its plain screen-fraction anchor.
+    const dx = screenW * SUN_PLACEMENT.cx - cx;
+    const dy = screenH * SUN_PLACEMENT.cy - cy;
 
-    // Effective screen-space sun center, shifted by parallax.
-    const cx = screenW * SUN_PLACEMENT.cx - dx;
-    const cy = screenH * SUN_PLACEMENT.cy - dy;
-
-    // 1 — Baked radial glow (all quality levels).
+    // 1 — Baked radial glow (all quality levels).  The bake is padded by the
+    // maximum parallax on every side; blit it back shifted by the current
+    // parallax so the glow stays welded to `cx,cy` without exposing an edge.
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
-    ctx.drawImage(this.glowCanvas, 0, 0, screenW, screenH);
+    ctx.drawImage(this.glowCanvas, -PARALLAX_MAX_X - dx, -PARALLAX_MAX_Y - dy);
     ctx.restore();
 
     if (getCinematicLevel() >= 5) {
@@ -285,8 +297,8 @@ export class DistantSuns {
     }
 
     // 4 - Back half of atomic orbit lines (high only).
-    if (this.coronaEnabled) {
-      this.drawAtomicOrbitLayer(ctx, cx, cy, screenW, screenH, false);
+    if (this.coronaEnabled && this.lightCtx) {
+      this.compositeAtomicOrbitLayer(ctx, cx, cy, screenW, screenH, false);
     }
 
     // 5 - Rare warm glints (legacy only — the cross "+" shine reads cheesy).
@@ -295,8 +307,8 @@ export class DistantSuns {
     }
 
     // 6 - Front half of atomic orbit lines (high only).
-    if (this.coronaEnabled) {
-      this.drawAtomicOrbitLayer(ctx, cx, cy, screenW, screenH, true);
+    if (this.coronaEnabled && this.lightCtx) {
+      this.compositeAtomicOrbitLayer(ctx, cx, cy, screenW, screenH, true);
     }
   }
 
@@ -312,15 +324,18 @@ export class DistantSuns {
   private bakeSunGlow(): void {
     const w = this.screenW;
     const h = this.screenH;
-    this.glowCanvas.width  = w;
-    this.glowCanvas.height = h;
+    // Pad the bake so the parallax blit in draw() never runs off the canvas.
+    const padX = PARALLAX_MAX_X;
+    const padY = PARALLAX_MAX_Y;
+    this.glowCanvas.width  = w + padX * 2;
+    this.glowCanvas.height = h + padY * 2;
 
     const ctx = this.glowCanvas.getContext('2d');
     if (!ctx) return;
-    ctx.clearRect(0, 0, w, h);
+    ctx.clearRect(0, 0, this.glowCanvas.width, this.glowCanvas.height);
 
-    const cx = w * SUN_PLACEMENT.cx;
-    const cy = h * SUN_PLACEMENT.cy;
+    const cx = w * SUN_PLACEMENT.cx + padX;
+    const cy = h * SUN_PLACEMENT.cy + padY;
     const level = Math.min(2, getCinematicLevel());
     // Radius generous enough to bathe the whole screen in warmth.
     const r  = Math.hypot(w, h) * (level === 0 ? 1.18 : level === 1 ? 1.28 : level === 2 ? 1.38 : level === 3 ? 1.48 : level === 4 ? 1.55 : level === 5 ? 1.62 : level === 6 ? 1.68 : level === 7 ? 1.74 : level === 8 ? 1.80 : 1.86);
@@ -349,7 +364,7 @@ export class DistantSuns {
     grad.addColorStop(1.000, 'rgba(0,0,0,0)');
 
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, this.glowCanvas.width, this.glowCanvas.height);
   }
 
   // -------------------------------------------------------------------------
@@ -553,10 +568,47 @@ export class DistantSuns {
   // -------------------------------------------------------------------------
 
   /**
-   * Draw bright, partial, slowly shifting orbit lines around the sun.  The
-   * front/back split makes some strokes appear to pass behind the solar core.
+   * Render one half (front / back of the solar core) of the spinning orbit
+   * "trails" into the shared half-resolution light buffer, then composite it
+   * back over the scene through a blur filter — the exact soft-shaft technique
+   * the volumetric rays use.  Each arc itself is drawn by
+   * {@link drawAtomicOrbitTrail} as a tapered, additively-layered ribbon in the
+   * style of the ship / projectile motion trails.
    */
-  private drawAtomicOrbitLayer(
+  private compositeAtomicOrbitLayer(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    screenW: number,
+    screenH: number,
+    front: boolean,
+  ): void {
+    const lc = this.lightCtx;
+    if (!lc) return;
+
+    lc.clearRect(0, 0, this.lightW, this.lightH);
+    // Half-resolution buffer — scale the sun center to match.
+    this.drawAtomicOrbitTrails(lc, cx * 0.5, cy * 0.5, this.lightW, this.lightH, front);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    // Slightly tighter than the ray blur so the trails still read as strokes.
+    ctx.filter = 'blur(5px)';
+    ctx.drawImage(this.lightCanvas, 0, 0, screenW, screenH);
+    ctx.restore();
+  }
+
+  /**
+   * Draw bright, partial, slowly shifting orbit trails around the sun.  The
+   * front/back split makes some strokes appear to pass behind the solar core.
+   *
+   * Each arc is sampled into a short polyline and stroked as 3 overlapping
+   * additive layers (outer glow → inner glow → bright core) whose per-vertex
+   * width and opacity taper from a bright, wide leading head to a vanishing
+   * tail — the same construction {@link renderProjectileTrail} uses for ship
+   * and projectile trails.
+   */
+  private drawAtomicOrbitTrails(
     ctx: CanvasRenderingContext2D,
     cx: number,
     cy: number,
@@ -567,9 +619,23 @@ export class DistantSuns {
     const level = getCinematicLevel();
     const baseR = Math.max(w, h) * (level === 0 ? 0.052 : level === 1 ? 0.064 : level === 2 ? 0.078 : 0.092);
     const orbitCount = level === 0 ? 7 : level === 1 ? 9 : level === 2 ? 11 : 14;
+    const baseLineW = Math.max(0.6, Math.max(w, h) * (level === 0 ? (front ? 0.00125 : 0.00085) : level === 1 ? (front ? 0.00155 : 0.00105) : level === 2 ? (front ? 0.0019 : 0.0013) : (front ? 0.0023 : 0.0016)));
+
+    // Trail glow layers: [width multiplier, alpha multiplier, colour].
+    const glow = level === 0
+      ? (front ? '255,245,176' : '255,178,68')
+      : (front ? '227,138,74' : '198,90,46');
+    const coreCol = front ? '255,239,205' : '255,214,158';
+    const layers: Array<[number, number, string]> = [
+      [3.6, 0.16, glow],
+      [1.7, 0.40, glow],
+      [0.6, 0.82, coreCol],
+    ];
 
     ctx.save();
-    ctx.globalCompositeOperation = 'screen';
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
     for (let orbit = 0; orbit < orbitCount; orbit++) {
       const seed = orbit * 1.71;
@@ -580,7 +646,6 @@ export class DistantSuns {
       const lengthPulse = 0.58 + 0.28 * Math.sin(this.time * (0.28 + orbit * 0.03) + seed);
       const arcLength = Math.PI * Math.max(0.32, lengthPulse);
       const startA = phase + Math.sin(this.time * 0.21 + seed) * 0.65;
-      const endA = startA + arcLength;
       const r = baseR * (0.82 + orbit * 0.16) * (1 + 0.055 * Math.sin(this.time * 0.34 + seed));
       const yScale = 0.24 + (orbit % 4) * 0.105;
       const tilt = orbit * Math.PI / orbitCount + this.time * (0.022 - orbit * 0.0018);
@@ -588,21 +653,40 @@ export class DistantSuns {
       const alpha = (level === 0 ? (front ? 0.46 : 0.22) : level === 1 ? (front ? 0.58 : 0.30) : level === 2 ? (front ? 0.72 : 0.40) : (front ? 0.84 : 0.50)) * alphaPulse;
       if (alpha < 0.035) continue;
 
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(tilt);
-      ctx.strokeStyle = level === 0
-        ? (front ? `rgba(255,245,176,${alpha.toFixed(3)})` : `rgba(255,178,68,${alpha.toFixed(3)})`)
-        : (front ? `rgba(227,138,74,${alpha.toFixed(3)})` : `rgba(198,90,46,${alpha.toFixed(3)})`);
-      ctx.lineWidth = Math.max(0.8, Math.max(w, h) * (level === 0 ? (front ? 0.00125 : 0.00085) : level === 1 ? (front ? 0.00155 : 0.00105) : level === 2 ? (front ? 0.0019 : 0.0013) : (front ? 0.0023 : 0.0016)));
-      ctx.shadowColor = level === 0
-        ? (front ? 'rgba(255,236,146,0.52)' : 'rgba(255,135,34,0.30)')
-        : (front ? 'rgba(227,138,74,0.68)' : 'rgba(163,71,40,0.42)');
-      ctx.shadowBlur = level === 0 ? (front ? 10 : 6) : level === 1 ? (front ? 13 : 8) : level === 2 ? (front ? 18 : 12) : (front ? 24 : 16);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, r, r * yScale, 0, startA, endA);
-      ctx.stroke();
-      ctx.restore();
+      // Sample the arc into a polyline (oldest tail → leading head).
+      const SEG = 30;
+      const rx = r;
+      const ry = r * yScale;
+      const cosT = Math.cos(tilt);
+      const sinT = Math.sin(tilt);
+      const px: number[] = [];
+      const py: number[] = [];
+      for (let s = 0; s <= SEG; s++) {
+        const ang = startA + arcLength * (s / SEG);
+        const ex = Math.cos(ang) * rx;
+        const ey = Math.sin(ang) * ry;
+        px.push(cx + ex * cosT - ey * sinT);
+        py.push(cy + ex * sinT + ey * cosT);
+      }
+
+      for (const [wMul, aMul, col] of layers) {
+        ctx.strokeStyle = `rgba(${col},1)`;
+        for (let s = 1; s <= SEG; s++) {
+          // head = 1 at the leading tip, 0 at the oldest tail sample.
+          const t0 = (s - 1) / SEG;
+          const t1 = s / SEG;
+          const segAlpha = alpha * aMul * (Math.pow(t0, 1.4) + Math.pow(t1, 1.4)) * 0.5;
+          if (segAlpha <= 0.004) continue;
+          const lw = baseLineW * wMul * (Math.pow(t0, 1.05) + Math.pow(t1, 1.05)) * 0.5;
+          if (lw <= 0.2) continue;
+          ctx.globalAlpha = segAlpha > 1 ? 1 : segAlpha;
+          ctx.lineWidth = lw;
+          ctx.beginPath();
+          ctx.moveTo(px[s - 1], py[s - 1]);
+          ctx.lineTo(px[s], py[s]);
+          ctx.stroke();
+        }
+      }
     }
 
     ctx.restore();

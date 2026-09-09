@@ -707,6 +707,10 @@ export class ResearchLab extends BuildingBase {
   getActivityRate(): number { return this.activityRate; }
   getSpinPhase(): number { return this.spinPhase; }
   getDotPhase(): number { return this.dotPhase; }
+  getDotOpacity(): number {
+    const researchProgressFactor = Math.max(0, Math.min(1, (this.activityRate - 0.5) / 0.5));
+    return 0.50 + 0.25 * researchProgressFactor;
+  }
 
   override destroy(): void {
     super.destroy();
@@ -737,9 +741,10 @@ export class ResearchLab extends BuildingBase {
     // Update the 6 orbital dots
     const worldSide = (this.footprintCells ?? footprintForBuilding(this)) * GRID_CELL_SIZE;
     const baseR = worldSide * 0.22;
-    const fadeTime = 0.52;
-    const minSampleDist = Math.max(1.2, baseR * 0.07);
+    const fadeTime = 3.12; // 6x longer than previous 0.52s to show extended rosette loops
+    const minSampleDist = Math.max(1.5, baseR * 0.08);
     const minSampleDistSq = minSampleDist * minSampleDist;
+    const maxTrailSamples = 75; // Expanded capacity for 6x longer trail history
 
     for (let i = 0; i < this.orbitalDots.length; i++) {
       const dot = this.orbitalDots[i];
@@ -785,7 +790,7 @@ export class ResearchLab extends BuildingBase {
               const f = s / steps;
               const ix = dot.lastSamplePos.x + (dot.pos.x - dot.lastSamplePos.x) * f;
               const iy = dot.lastSamplePos.y + (dot.pos.y - dot.lastSamplePos.y) * f;
-              if (dot.trail.length >= 10) {
+              if (dot.trail.length >= maxTrailSamples) {
                 const recycled = dot.trail.shift()!;
                 recycled.pos.x = ix;
                 recycled.pos.y = iy;
@@ -798,7 +803,7 @@ export class ResearchLab extends BuildingBase {
           }
 
           // Append or recycle latest head point
-          if (dot.trail.length >= 10) {
+          if (dot.trail.length >= maxTrailSamples) {
             const recycled = dot.trail.shift()!;
             recycled.pos.x = dot.pos.x;
             recycled.pos.y = dot.pos.y;
@@ -861,19 +866,21 @@ export class ResearchLab extends BuildingBase {
     // Orbiting node dots and luminous trails (drawn in world-to-screen untranslated coordinates)
     if (this.powered) {
       const worldSide = (this.footprintCells ?? footprintForBuilding(this)) * GRID_CELL_SIZE;
+      const dotOpacity = this.getDotOpacity();
+
       const trailStyle: ProjectileTrailStyle = {
-        color: colorToCSS(glowColor, 0.58),
-        coreColor: 'rgba(215, 255, 245, 0.95)',
-        fadeTime: 0.52,
-        width: Math.max(1.6, worldSide * 0.022),
+        color: colorToCSS(glowColor, 1.0),
+        coreColor: 'rgba(215, 255, 245, 1.0)',
+        fadeTime: 3.12, // 6x longer than previous 0.52s
+        width: Math.max(1.8, worldSide * 0.022),
         outerWidthMultiplier: 2.2,
-        outerAlpha: 0.18,
+        outerAlpha: dotOpacity * 0.45,
         innerWidthMultiplier: 1.0,
-        innerAlpha: 0.42,
+        innerAlpha: dotOpacity,
         coreWidthMultiplier: 0.4,
-        coreAlpha: 0.85,
-        taperExponent: 1.1,
-        opacityExponent: 1.25,
+        coreAlpha: dotOpacity,
+        taperExponent: 0.85,
+        opacityExponent: 0.85,
       };
 
       // 1. Draw glowing trails behind the 6 dots
@@ -883,7 +890,7 @@ export class ResearchLab extends BuildingBase {
             renderProjectileTrail(ctx, camera, dot.trail, dot.pos, trailStyle);
           } else {
             ctx.save();
-            ctx.strokeStyle = colorToCSS(glowColor, 0.4);
+            ctx.strokeStyle = colorToCSS(glowColor, dotOpacity);
             ctx.lineWidth = Math.max(1, v.side * 0.018);
             ctx.beginPath();
             const p0 = camera.worldToScreen(dot.trail[0].pos);
@@ -900,24 +907,25 @@ export class ResearchLab extends BuildingBase {
         }
       }
 
-      // 2. Draw the 6 dot heads
+      // 2. Draw the 6 dot heads (30% smaller, and 50% opaque fading to 75% when researching)
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      const nodeR = Math.max(1.3, v.side * 0.038);
+      ctx.globalAlpha = dotOpacity;
+      const nodeR = Math.max(0.9, v.side * 0.038 * 0.7);
       for (const dot of this.orbitalDots) {
         const sx = camera.screenX(dot.pos.x);
         const sy = camera.screenY(dot.pos.y);
 
         // Soft outer glow
-        ctx.fillStyle = colorToCSS(glowColor, 0.75);
+        ctx.fillStyle = colorToCSS(glowColor, 1.0);
         ctx.beginPath();
         ctx.arc(sx, sy, nodeR, 0, Math.PI * 2);
         ctx.fill();
 
         // Bright luminous core
-        ctx.fillStyle = 'rgba(235, 255, 250, 0.95)';
+        ctx.fillStyle = 'rgba(235, 255, 250, 1.0)';
         ctx.beginPath();
-        ctx.arc(sx, sy, Math.max(0.8, nodeR * 0.45), 0, Math.PI * 2);
+        ctx.arc(sx, sy, Math.max(0.5, nodeR * 0.45), 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
