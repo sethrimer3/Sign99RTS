@@ -1225,8 +1225,10 @@ class ShipMenu {
   open = false;
   private openedAt = 0;
   private readonly weaponRects: Array<{ id: ShipWeaponId; x: number; y: number; w: number; h: number }> = [];
+  private readonly wheelRects: Array<{ id: ShipWeaponId; x: number; y: number; r: number }> = [];
+  private panelRect: { x: number; y: number; w: number; h: number } | null = null;
 
-  update(state: GameState): boolean {
+  update(state: GameState, camera: Camera): boolean {
     const keyDown = Input.isDown('z');
     if (keyDown && !this.open) {
       this.open = true;
@@ -1257,33 +1259,67 @@ class ShipMenu {
     }
 
     if (Input.mousePressed) {
+      let handled = false;
+      for (const option of this.wheelRects) {
+        if (Math.hypot(Input.mousePos.x - option.x, Input.mousePos.y - option.y) <= option.r) {
+          this.selectWeapon(state, option.id);
+          handled = true;
+          break;
+        }
+      }
       for (const rect of this.weaponRects) {
+        if (handled) break;
         if (
           Input.mousePos.x >= rect.x && Input.mousePos.x <= rect.x + rect.w &&
           Input.mousePos.y >= rect.y && Input.mousePos.y <= rect.y + rect.h
         ) {
           if (this.weaponUnlocked(state, rect.id) && state.player.canSwitchWeapon()) {
-            state.player.selectPrimaryWeapon(rect.id);
-            Audio.playSound('menuselection');
+            this.selectWeapon(state, rect.id);
           } else {
             Audio.playSound('menucursor');
           }
-          Input.consumeMouseButton(0);
+          handled = true;
           break;
         }
       }
+      // A click anywhere in game space chooses the wheel option nearest the
+      // click's direction from the ship. The information panel is excluded so
+      // its non-weapon rows remain inert.
+      if (!handled && !this.pointInPanel(Input.mousePos.x, Input.mousePos.y)) {
+        const options = this.unlockedWeapons(state);
+        const shipScreen = camera.worldToScreen(state.player.position);
+        if (options.length > 0 && Math.hypot(Input.mousePos.x - shipScreen.x, Input.mousePos.y - shipScreen.y) > 1) {
+          const clickAngle = Math.atan2(Input.mousePos.y - shipScreen.y, Input.mousePos.x - shipScreen.x);
+          let closest = options[0];
+          let closestDelta = Infinity;
+          for (let i = 0; i < options.length; i++) {
+            const optionAngle = -Math.PI / 2 + i * Math.PI * 2 / options.length;
+            const delta = Math.abs(Math.atan2(Math.sin(clickAngle - optionAngle), Math.cos(clickAngle - optionAngle)));
+            if (delta < closestDelta) {
+              closest = options[i];
+              closestDelta = delta;
+            }
+          }
+          this.selectWeapon(state, closest.id);
+          handled = true;
+        }
+      }
+      if (handled) Input.consumeMouseButton(0);
     }
 
     return true;
   }
 
-  draw(ctx: CanvasRenderingContext2D, state: GameState, screenW: number, screenH: number): void {
+  draw(ctx: CanvasRenderingContext2D, state: GameState, camera: Camera, screenW: number, screenH: number): void {
     if (!this.open) return;
     this.weaponRects.length = 0;
+    this.wheelRects.length = 0;
     const panelW = Math.min(360, Math.max(300, screenW - 24));
     const x = 12;
     const panelH = Math.min(screenH - 150, Math.max(440, screenH - 190));
     const y = Math.max(10, Math.min(48, (screenH - panelH) * 0.5 - 18));
+    this.panelRect = { x, y, w: panelW, h: panelH };
+    this.drawWeaponWheel(ctx, state, camera);
     ctx.save();
     fillMenuPanel(ctx, x, y, panelW, panelH);
 
@@ -1405,6 +1441,92 @@ class ShipMenu {
     if (id === 'synonymousLaser') return false;
     const weapon = SHIP_WEAPON_OPTIONS.find((item) => item.id === id);
     return !weapon?.researchKey || state.researchedItems.has(weapon.researchKey);
+  }
+
+  private unlockedWeapons(state: GameState): typeof SHIP_WEAPON_OPTIONS[number][] {
+    return SHIP_WEAPON_OPTIONS
+      .filter((weapon) => this.weaponUnlocked(state, weapon.id))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  private pointInPanel(x: number, y: number): boolean {
+    const panel = this.panelRect;
+    return !!panel && x >= panel.x && x <= panel.x + panel.w && y >= panel.y && y <= panel.y + panel.h;
+  }
+
+  private selectWeapon(state: GameState, id: ShipWeaponId): void {
+    if (state.player.canSwitchWeapon()) {
+      state.player.selectPrimaryWeapon(id);
+      Audio.playSound('menuselection');
+    } else {
+      Audio.playSound('menucursor');
+    }
+  }
+
+  private drawWeaponWheel(ctx: CanvasRenderingContext2D, state: GameState, camera: Camera): void {
+    const options = this.unlockedWeapons(state);
+    if (options.length === 0) return;
+    const center = camera.worldToScreen(state.player.position);
+    const radius = 112;
+    const optionRadius = 30;
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < options.length; i++) {
+      const weapon = options[i];
+      const angle = -Math.PI / 2 + i * Math.PI * 2 / options.length;
+      const x = center.x + Math.cos(angle) * radius;
+      const y = center.y + Math.sin(angle) * radius;
+      const selected = state.player.primaryWeaponId === weapon.id;
+      this.wheelRects.push({ id: weapon.id, x, y, r: optionRadius });
+
+      ctx.beginPath();
+      ctx.moveTo(center.x + Math.cos(angle) * 42, center.y + Math.sin(angle) * 42);
+      ctx.lineTo(x - Math.cos(angle) * optionRadius, y - Math.sin(angle) * optionRadius);
+      ctx.strokeStyle = selected ? UI_GOLD + '0.64)' : UI_CYAN + '0.24)';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, optionRadius, 0, Math.PI * 2);
+      ctx.fillStyle = selected ? UI_GOLD + '0.25)' : UI_PANEL_DARK + '0.88)';
+      ctx.strokeStyle = selected ? UI_GOLD + '0.96)' : UI_CYAN + '0.72)';
+      ctx.fill();
+      ctx.stroke();
+      this.drawWeaponStubIcon(ctx, state, weapon.id, x, y - 4);
+      ctx.font = '11px "Poiret One", "Segoe UI", sans-serif';
+      ctx.fillStyle = selected ? UI_GOLD + '1)' : UI_CYAN + '0.95)';
+      const label = weapon.id === 'cannon'
+        ? (state.researchedItems.has('weaponCannon') ? 'Cannon V2' : 'Cannon V1')
+        : weapon.label;
+      ctx.fillText(label, x, y + 17);
+    }
+    ctx.restore();
+  }
+
+  private drawWeaponStubIcon(ctx: CanvasRenderingContext2D, state: GameState, id: ShipWeaponId, x: number, y: number): void {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.strokeStyle = UI_CYAN + '0.95)';
+    ctx.fillStyle = UI_CYAN + '0.26)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (id === 'cannon') {
+      const v2 = state.researchedItems.has('weaponCannon');
+      ctx.rect(-10, -5, 13, 10);
+      ctx.moveTo(3, 0); ctx.lineTo(13, 0);
+      if (v2) { ctx.moveTo(-7, -8); ctx.lineTo(8, -8); ctx.lineTo(12, -4); }
+    } else if (id === 'gatling') {
+      ctx.rect(-10, -5, 9, 10);
+      for (let n = -1; n <= 1; n++) { ctx.moveTo(-1, n * 4); ctx.lineTo(13, n * 4); }
+    } else if (id === 'guidedmissile') {
+      ctx.moveTo(-12, 5); ctx.lineTo(7, -7); ctx.lineTo(13, 0); ctx.lineTo(7, 7); ctx.closePath();
+    } else {
+      ctx.moveTo(-13, 0); ctx.lineTo(13, 0);
+      ctx.moveTo(-7, -5); ctx.lineTo(7, 5);
+    }
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -1998,7 +2120,7 @@ export class ActionMenu {
     let rr: MenuResult = { action: 'none' };
     let shipOpen = false;
     if (!paintOpen) {
-      shipOpen = this.shipMenu.update(state);
+      shipOpen = this.shipMenu.update(state, camera);
       rr = this.researchMenu.update(state, camera);
     }
 
@@ -2020,7 +2142,7 @@ export class ActionMenu {
     screenW: number,
     screenH: number,
   ): void {
-    this.shipMenu.draw(ctx, state, screenW, screenH);
+    this.shipMenu.draw(ctx, state, camera, screenW, screenH);
     this.researchMenu.draw(ctx, state, screenW, screenH);
     this.paintMenu.draw(ctx, state, camera, screenW, screenH);
   }
