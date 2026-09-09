@@ -11,7 +11,14 @@
  * the pattern used by theme.ts for player/enemy colours.
  */
 
-export type SpaceColorId = 'menuBlue' | 'ingameGradient' | 'black';
+export type SpaceColorId =
+  | 'menuBlue'
+  | 'ingameGradient'
+  | 'black'
+  | 'emberFall'
+  | 'auroraDream'
+  | 'violetHaze'
+  | 'roseGold';
 
 /** A radial-gradient stop: [offset 0..1, CSS colour]. */
 export type GradientStop = [number, string];
@@ -56,7 +63,14 @@ export const SPACE_COLOR_OPTIONS: readonly SpaceColorOption[] = [
       [1.0, 'rgba(2, 12, 30, 0.88)'],
     ],
     nebula: true,
-    trianglePalette: null,
+    // Deep blue → azure → sky → white: stays on-theme but the bright tip pops
+    // hard against the dark blue ground.
+    trianglePalette: [
+      [10, 40, 95],
+      [35, 92, 178],
+      [92, 182, 240],
+      [212, 245, 255],
+    ],
   },
   {
     id: 'ingameGradient',
@@ -75,7 +89,13 @@ export const SPACE_COLOR_OPTIONS: readonly SpaceColorOption[] = [
       [1.0, 'rgba(1, 0, 5, 0.88)'],
     ],
     nebula: true,
-    trianglePalette: null,
+    // Teal → cyan → aqua → near-white against the indigo ground.
+    trianglePalette: [
+      [8, 50, 72],
+      [22, 112, 142],
+      [96, 205, 214],
+      [224, 255, 248],
+    ],
   },
   {
     id: 'black',
@@ -89,11 +109,108 @@ export const SPACE_COLOR_OPTIONS: readonly SpaceColorOption[] = [
     gameFill: '#000000',
     nebula: false,
     gameGradient: null,
+    // Neon on pure black — slate → violet → magenta → electric cyan.
     trianglePalette: [
-      [20, 22, 30],
-      [40, 44, 58],
-      [90, 96, 120],
-      [180, 190, 210],
+      [28, 28, 44],
+      [92, 40, 144],
+      [214, 62, 182],
+      [120, 240, 255],
+    ],
+  },
+  {
+    id: 'emberFall',
+    label: 'Ember Fall',
+    swatch: '#a83a12',
+    menuGradient: [
+      [0.0, '#6b2c0a'],
+      [0.5, '#3a1006'],
+      [1.0, '#160305'],
+    ],
+    gameFill: '#1a0705',
+    gameGradient: [
+      [0.0, 'rgba(150, 64, 22, 0.30)'],
+      [0.45, 'rgba(92, 28, 14, 0.64)'],
+      [1.0, 'rgba(30, 6, 8, 0.9)'],
+    ],
+    nebula: false,
+    // Glowing coals: deep red → burnt orange → amber → pale gold.
+    trianglePalette: [
+      [58, 18, 10],
+      [156, 52, 16],
+      [238, 138, 32],
+      [255, 240, 172],
+    ],
+  },
+  {
+    id: 'auroraDream',
+    label: 'Aurora Dream',
+    swatch: '#0f7a6a',
+    menuGradient: [
+      [0.0, '#0a3f3a'],
+      [0.5, '#06281f'],
+      [1.0, '#050f1c'],
+    ],
+    gameFill: '#03121a',
+    gameGradient: [
+      [0.0, 'rgba(20, 92, 90, 0.28)'],
+      [0.45, 'rgba(14, 60, 50, 0.6)'],
+      [1.0, 'rgba(4, 16, 32, 0.88)'],
+    ],
+    nebula: false,
+    // Complementary pink curtains over the teal-green ground.
+    trianglePalette: [
+      [18, 40, 58],
+      [82, 42, 122],
+      [206, 66, 162],
+      [255, 186, 224],
+    ],
+  },
+  {
+    id: 'violetHaze',
+    label: 'Violet Haze',
+    swatch: '#7a3ab0',
+    menuGradient: [
+      [0.0, '#3d1454'],
+      [0.5, '#231038'],
+      [1.0, '#0d0a24'],
+    ],
+    gameFill: '#120b22',
+    gameGradient: [
+      [0.0, 'rgba(110, 42, 142, 0.28)'],
+      [0.45, 'rgba(64, 28, 96, 0.6)'],
+      [1.0, 'rgba(16, 10, 34, 0.88)'],
+    ],
+    nebula: false,
+    // Amber-gold heat against the violet ground.
+    trianglePalette: [
+      [34, 16, 54],
+      [96, 42, 116],
+      [224, 124, 62],
+      [255, 226, 146],
+    ],
+  },
+  {
+    id: 'roseGold',
+    label: 'Rose Gold',
+    swatch: '#b05070',
+    menuGradient: [
+      [0.0, '#4a1832'],
+      [0.5, '#3a1424'],
+      [1.0, '#1a0a16'],
+    ],
+    gameFill: '#1a0a14',
+    gameGradient: [
+      [0.0, 'rgba(150, 62, 92, 0.28)'],
+      [0.45, 'rgba(96, 40, 60, 0.6)'],
+      [1.0, 'rgba(24, 10, 22, 0.88)'],
+    ],
+    nebula: false,
+    // Plum → mauve → gold → pale gold.
+    trianglePalette: [
+      [40, 18, 30],
+      [112, 50, 62],
+      [222, 152, 92],
+      [255, 236, 184],
     ],
   },
 ];
