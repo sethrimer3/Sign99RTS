@@ -97,7 +97,7 @@ export abstract class BuildingBase extends Entity {
     this.drawUnpoweredWarning(ctx, x, y, v.side);
     if (this.powered && this.buildProgress >= 1 && !v.simple) this.drawPoweredScanLine(ctx, x, y, v.side);
     if (getCinematicLevel() >= 2 && this.buildProgress >= 1) this.drawCinematicBloom(ctx, x, y, v.side, camera);
-    if (this.buildProgress < 1) this.drawConstructionOverlay(ctx, x, y, v.side);
+    if (this.buildProgress < 1 && !this.synonymousVisualKind) this.drawConstructionOverlay(ctx, x, y, v.side);
     if (this.deleting) this.drawDeletionOverlay(ctx, x, y, v.side);
     ctx.restore();
     return v;
@@ -266,7 +266,6 @@ export abstract class BuildingBase extends Entity {
     const x = screen.x - v.half;
     const y = screen.y - v.half;
     this.drawSquareHealthFrame(ctx, x, y, v.side);
-    if (this.buildProgress < 1) this.drawConstructionOverlay(ctx, x, y, v.side);
     if (this.deleting) this.drawDeletionOverlay(ctx, x, y, v.side);
     ctx.restore();
   }
@@ -436,14 +435,41 @@ export abstract class BuildingBase extends Entity {
     }
     ctx.restore();
   }
-  private drawConstructionOverlay(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): void {
-    const t = this.buildProgress; const arm = s * 0.22;
-    ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.6); ctx.lineWidth = 1.2; ctx.beginPath();
-    ctx.moveTo(x, y + arm); ctx.lineTo(x, y); ctx.lineTo(x + arm, y);
-    ctx.moveTo(x + s, y + arm); ctx.lineTo(x + s, y); ctx.lineTo(x + s - arm, y);
-    ctx.moveTo(x, y + s - arm); ctx.lineTo(x, y + s); ctx.lineTo(x + arm, y + s);
-    ctx.moveTo(x + s, y + s - arm); ctx.lineTo(x + s, y + s); ctx.lineTo(x + s - arm, y + s); ctx.stroke();
-    const sy = y + s * (1 - t); ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.4); ctx.beginPath(); ctx.moveTo(x, sy); ctx.lineTo(x + s, sy); ctx.stroke();
+  protected drawConstructionOverlay(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): void {
+    const progress = Math.max(0, Math.min(1, this.buildProgress));
+    const points = [
+      { x: x + s * 0.5, y },
+      { x: x + s, y },
+      { x: x + s, y: y + s },
+      { x, y: y + s },
+      { x, y },
+      { x: x + s * 0.5, y },
+    ];
+
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = colorToCSS(Colors.radar_gridlines, 0.42);
+    ctx.lineWidth = Math.max(1.2, s * 0.025);
+    ctx.strokeRect(x, y, s, s);
+
+    let remaining = progress * s * 4;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length && remaining > 0; i++) {
+      const from = points[i - 1];
+      const to = points[i];
+      const length = Math.hypot(to.x - from.x, to.y - from.y);
+      const drawn = Math.min(length, remaining);
+      const ratio = length > 0 ? drawn / length : 0;
+      ctx.lineTo(from.x + (to.x - from.x) * ratio, from.y + (to.y - from.y) * ratio);
+      remaining -= drawn;
+    }
+    ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, this.powered ? 0.95 : 0.62);
+    ctx.lineWidth = Math.max(2, s * 0.045);
+    ctx.stroke();
+    ctx.restore();
   }
   private drawDeletionOverlay(ctx: CanvasRenderingContext2D, x: number, y: number, s: number): void {
     const t = this.deletionProgress;

@@ -548,8 +548,7 @@ export class ExciterTurret extends TurretBase {
     if (this.buildProgress < 1) {
       ctx.fillStyle = colorToCSS(Colors.radar_gridlines, 0.18);
       ctx.fillRect(x, y + v.side * this.buildProgress, v.side, v.side * (1 - this.buildProgress));
-      ctx.strokeStyle = colorToCSS(Colors.radar_gridlines, 0.58);
-      ctx.strokeRect(x, y, v.side, v.side);
+      if (!this.synonymousVisualKind) this.drawConstructionOverlay(ctx, x, y, v.side);
     }
     if (this.deleting) {
       ctx.fillStyle = colorToCSS(Colors.alert1, 0.18 + this.deletionProgress * 0.22);

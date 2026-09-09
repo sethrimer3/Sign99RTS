@@ -1,9 +1,8 @@
 /**
  * Overlay and glow-layer drawing helpers extracted from game.ts.
  *
- * All functions are stateless except for drawScreenOverlays, which updates the
- * mutable OverlayCache so the caller can re-use cached canvas gradients across
- * frames.
+ * Most functions are stateless. drawScreenOverlays updates its mutable cache,
+ * and drawBuildingHoverHitpoints retains per-building textbox fade values.
  */
 
 import { Vec2 } from './math.js';
@@ -68,6 +67,16 @@ function fighterMaxSpeed(fighter: FighterShip): number {
 }
 
 let ghostLensCanvas: HTMLCanvasElement | null = null;
+interface BuildingHealthTextFade {
+  alpha: number;
+  startAlpha: number;
+  elapsed: number;
+  directlyHovered: boolean;
+}
+
+const buildingHealthTextFades = new Map<number, BuildingHealthTextFade>();
+const BUILDING_HEALTH_HOVER_ALPHA = 0.8;
+const BUILDING_HEALTH_HOVER_FADE_SECONDS = 0.3;
 
 // ---------------------------------------------------------------------------
 // Public drawing functions
@@ -355,17 +364,40 @@ export function drawBuildingHoverHitpoints(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
   state: GameState,
+  frameDt: number,
 ): void {
   const world = camera.screenToWorld(Input.mousePos);
   const fadeRadius = GRID_CELL_SIZE * 6;
   const maxOverlayAlpha = 0.3;
+  const liveBuildingIds = new Set<number>();
 
   for (const b of state.buildings) {
     if (!b.alive) continue;
+    liveBuildingIds.add(b.id);
     const d = Math.hypot(world.x - b.position.x, world.y - b.position.y);
-    if (d > fadeRadius) continue;
+    if (d > fadeRadius) {
+      buildingHealthTextFades.delete(b.id);
+      continue;
+    }
 
     const hoverAlpha = maxOverlayAlpha * (1 - d / fadeRadius);
+    const footprintHalfSize = footprintForBuildingType(b.type) * GRID_CELL_SIZE * 0.5;
+    const directlyHovered = Math.abs(world.x - b.position.x) <= footprintHalfSize
+      && Math.abs(world.y - b.position.y) <= footprintHalfSize;
+    const targetTextAlpha = directlyHovered ? BUILDING_HEALTH_HOVER_ALPHA : hoverAlpha;
+    let fade = buildingHealthTextFades.get(b.id);
+    if (!fade) {
+      fade = { alpha: hoverAlpha, startAlpha: hoverAlpha, elapsed: 0, directlyHovered };
+      buildingHealthTextFades.set(b.id, fade);
+    } else if (fade.directlyHovered !== directlyHovered) {
+      fade.startAlpha = fade.alpha;
+      fade.elapsed = 0;
+      fade.directlyHovered = directlyHovered;
+    }
+    fade.elapsed = Math.min(BUILDING_HEALTH_HOVER_FADE_SECONDS, fade.elapsed + Math.max(0, frameDt));
+    const fadeProgress = fade.elapsed / BUILDING_HEALTH_HOVER_FADE_SECONDS;
+    fade.alpha = fade.startAlpha + (targetTextAlpha - fade.startAlpha) * fadeProgress;
+    const textAlpha = fade.alpha;
     const screen = camera.worldToScreen(b.position);
     const range = buildingEffectRange(b);
     const tint = b.team === Team.Player ? Colors.radar_friendly_status : Colors.enemyfire;
@@ -409,23 +441,27 @@ export function drawBuildingHoverHitpoints(
     const boxH = shieldText ? 38 : 22;
     const x = screen.x;
     const y = screen.y - b.radius * camera.zoom - 18;
-    ctx.fillStyle = colorToCSS(Colors.friendly_background, hoverAlpha * 0.72);
-    ctx.strokeStyle = colorToCSS(tint, hoverAlpha);
+    ctx.fillStyle = colorToCSS(Colors.friendly_background, textAlpha * 0.72);
+    ctx.strokeStyle = colorToCSS(tint, textAlpha);
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(x - boxW / 2, y - boxH / 2, boxW, boxH, 4);
     ctx.fill();
     ctx.stroke();
     if (shieldText) {
-      ctx.fillStyle = colorToCSS(Colors.radar_friendly_status, hoverAlpha);
+      ctx.fillStyle = colorToCSS(Colors.radar_friendly_status, textAlpha);
       ctx.fillText(shieldText, x, y - 8);
-      ctx.fillStyle = colorToCSS(b.team === Team.Enemy ? Colors.enemyfire : Colors.general_building, hoverAlpha);
+      ctx.fillStyle = colorToCSS(b.team === Team.Enemy ? Colors.enemyfire : Colors.general_building, textAlpha);
       ctx.fillText(text, x, y + 10);
     } else {
-      ctx.fillStyle = colorToCSS(b.team === Team.Enemy ? Colors.enemyfire : Colors.general_building, hoverAlpha);
+      ctx.fillStyle = colorToCSS(b.team === Team.Enemy ? Colors.enemyfire : Colors.general_building, textAlpha);
       ctx.fillText(text, x, y + 1);
     }
     ctx.restore();
+  }
+
+  for (const id of buildingHealthTextFades.keys()) {
+    if (!liveBuildingIds.has(id)) buildingHealthTextFades.delete(id);
   }
 }
 

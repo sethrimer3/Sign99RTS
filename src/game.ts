@@ -2400,7 +2400,7 @@ export class Game {
       this.hud.drawAIChat(ctx, uiW, uiH);
       this.fighterGroupStatus.draw(ctx, this.state, uiW, uiH, this.state.gameTime);
     });
-    drawBuildingHoverHitpoints(ctx, this.camera, this.state);
+    drawBuildingHoverHitpoints(ctx, this.camera, this.state, this.lastFrameMs / 1000);
     ctx.save();
     ctx.scale(this.uiZoom, this.uiZoom);
     const synonymousPlayer = isSynonymousFaction(this.state.factionByTeam, Team.Player);
