@@ -16,6 +16,7 @@ import { teamColor } from './teamutils.js';
 import { getDistantSunScreenPosition } from './suns.js';
 import { Input } from './input.js';
 import { getCinematicLevel } from './cinematic.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 import { researchCategory, researchIcon } from './research.js';
 
 interface BaseVisual {
@@ -90,13 +91,15 @@ export abstract class BuildingBase extends Entity {
     ctx.globalAlpha = Math.max(0.15, this.buildProgress);
     const damage = 1 - Math.max(0, Math.min(1, this.healthFraction));
     this.drawCinematicBuildingFill(ctx, x, y, v.side, camera, damage);
-    this.drawSunEdgeGlare(ctx, x, y, v.side, v.simple, camera);
+    // Legacy-only: yellow sun-edge glare bands on the two sun-facing sides.
+    if (isLegacyGraphics()) this.drawSunEdgeGlare(ctx, x, y, v.side, v.simple, camera);
     if (damage > 0.02) this.drawDamageWear(ctx, x, y, v.side, damage);
     this.drawDimPanelLines(ctx, x, y, v.side);
     const c = v.side * 0.12;
     ctx.fillStyle = colorToCSS(Colors.menu_background_detail, 0.45);
     ctx.fillRect(x, y, c, c); ctx.fillRect(x + v.side - c, y, c, c); ctx.fillRect(x, y + v.side - c, c, c); ctx.fillRect(x + v.side - c, y + v.side - c, c, c);
-    if (!v.simple) {
+    // Legacy-only: the centre cross/plus that split the building into quadrants.
+    if (!v.simple && isLegacyGraphics()) {
       ctx.strokeStyle = colorToCSS(Colors.advanced_building, 0.45 * v.powerAlpha);
       ctx.beginPath();
       ctx.moveTo(screen.x, y + v.side * 0.15); ctx.lineTo(screen.x, y + v.side * 0.85);
@@ -520,37 +523,18 @@ export class CommandPost extends BuildingBase {
     if (v.simple) return;
     const x = screen.x - v.half;
     const y = screen.y - v.half;
-    const pulse = 0.45 + 0.18 * Math.sin(this.animationTime * 2.4);
-    // Cross antenna
-    ctx.strokeStyle = colorToCSS(Colors.friendly_status, 0.55 + pulse * 0.25);
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(screen.x, y + v.side * 0.18); ctx.lineTo(screen.x, y + v.side * 0.82);
-    ctx.moveTo(x + v.side * 0.18, screen.y); ctx.lineTo(x + v.side * 0.82, screen.y);
-    ctx.stroke();
+    if (isLegacyGraphics()) {
+      // Legacy-only cross antenna.
+      const pulse = 0.45 + 0.18 * Math.sin(this.animationTime * 2.4);
+      ctx.strokeStyle = colorToCSS(Colors.friendly_status, 0.55 + pulse * 0.25);
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(screen.x, y + v.side * 0.18); ctx.lineTo(screen.x, y + v.side * 0.82);
+      ctx.moveTo(x + v.side * 0.18, screen.y); ctx.lineTo(x + v.side * 0.82, screen.y);
+      ctx.stroke();
+    }
     ctx.strokeStyle = colorToCSS(Colors.radar_gridlines, 0.22);
     ctx.strokeRect(x + v.side * 0.27, y + v.side * 0.27, v.side * 0.46, v.side * 0.46);
-    // Rotating radar sweep (arc + fading trail)
-    const sweepAngle = this.animationTime * 0.85;
-    const sweepR = v.side * 0.28;
-    ctx.save();
-    ctx.translate(screen.x, screen.y);
-    // Fading wedge behind the sweep
-    const trailSpan = Math.PI * 0.65;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.arc(0, 0, sweepR, sweepAngle - trailSpan, sweepAngle);
-    ctx.closePath();
-    ctx.fillStyle = colorToCSS(Colors.radar_friendly_status, 0.08 * (0.6 + pulse * 0.4));
-    ctx.fill();
-    // Leading sweep line
-    ctx.strokeStyle = colorToCSS(Colors.radar_friendly_status, 0.52 + pulse * 0.28);
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(Math.cos(sweepAngle) * sweepR, Math.sin(sweepAngle) * sweepR);
-    ctx.stroke();
-    ctx.restore();
   }
 }
 

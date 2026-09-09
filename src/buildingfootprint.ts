@@ -3,7 +3,7 @@ import { EntityType } from './entities.js';
 export function footprintForBuildingType(type: EntityType): number {
   switch (type) {
     case EntityType.CommandPost:
-      return 6;
+      return 7;
     case EntityType.Wall:
       return 2;
     case EntityType.ShieldGenerator:

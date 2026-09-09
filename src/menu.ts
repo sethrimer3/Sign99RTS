@@ -823,15 +823,17 @@ export class MainMenu {
     this.drawBuildBadge(ctx, w);
 
     const cx = w * 0.5;
+    const headerY = Math.max(70, h * 0.16);
+
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = 'bold 38px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
     ctx.fillStyle = colorToCSS(TextColors.title);
     const title = this.state === 'lan_type' ? 'LAN MULTIPLAYER' : 'PLAY';
-    ctx.fillText(title, cx, h * 0.22);
+    ctx.fillText(title, cx, headerY);
 
     const opts = this.currentSimpleOptions()!;
-    this.drawClickableOptions(ctx, cx, h * 0.45, opts);
+    this.drawClickableOptions(ctx, cx, headerY + 80, opts);
   }
 
   // -------------------------------------------------------------------

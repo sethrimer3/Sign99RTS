@@ -11,6 +11,8 @@ import type { VisualQuality } from './visualquality.js';
 import { teamColor } from './teamutils.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderLockward } from './lockwardEffect.js';
+import { footprintForBuilding } from './buildingfootprint.js';
+import { GRID_CELL_SIZE } from './grid.js';
 
 export type ShipCommandGroup = ShipGroup | 'all';
 export type WaypointMarker = { pos: Vec2; issuedAt: number; kind?: 'group' | 'move' };
@@ -35,11 +37,13 @@ export function drawWaypointMarkers(
     const moveCommand = marker.kind === 'move';
     const color = moveCommand ? Colors.radar_friendly_status : group === 'all' ? Colors.alert2 : GROUP_COLORS[group];
     const label = moveCommand ? '+' : group === 'all' ? 'A' : `${group + 1}`;
+    const legacy = isLegacyGraphics();
     const t = state.gameTime - marker.issuedAt;
     const phase = state.gameTime * 3.2 + (group === 'all' ? 1.8 : group);
     const pulse = 0.5 + 0.5 * Math.sin(phase);
-    const ring = Math.max(15, (18 + pulse * 5) * camera.zoom);
-    const lift = Math.sin(state.gameTime * 1.7 + t) * 3 * camera.zoom;
+    // Legacy markers breathe; the new lockward marker holds a steady size.
+    const ring = Math.max(15, (18 + (legacy ? pulse * 5 : 0)) * camera.zoom);
+    const lift = legacy ? Math.sin(state.gameTime * 1.7 + t) * 3 * camera.zoom : 0;
     const core = Math.max(5, 7 * camera.zoom);
     const tickInner = ring * 1.02;
     const tickOuter = ring * 1.34;
@@ -59,7 +63,7 @@ export function drawWaypointMarkers(
 
     // Lockward-inspired layers: stacked translucent combination-lock wards that
     // each spin at their own random speed/direction, blink, and overlap.
-    if (isLegacyGraphics()) {
+    if (legacy) {
       for (let layer = 0; layer < 3; layer++) {
         const direction = layer === 1 ? -1 : 1;
         const rotation = state.gameTime * (0.34 + layer * 0.17) * direction + layer * 1.91;
@@ -91,24 +95,27 @@ export function drawWaypointMarkers(
       });
     }
 
-    ctx.strokeStyle = colorToCSS(color, 0.68);
-    ctx.lineWidth = Math.max(1, 1.4 * camera.zoom);
-    for (let i = 0; i < 4; i++) {
-      const a = state.gameTime * -0.55 + i * Math.PI * 0.5;
-      const sx = Math.cos(a);
-      const sy = Math.sin(a);
+    if (legacy) {
+      // Four rotating ticks + a bottom stem — legacy marker only.
+      ctx.strokeStyle = colorToCSS(color, 0.68);
+      ctx.lineWidth = Math.max(1, 1.4 * camera.zoom);
+      for (let i = 0; i < 4; i++) {
+        const a = state.gameTime * -0.55 + i * Math.PI * 0.5;
+        const sx = Math.cos(a);
+        const sy = Math.sin(a);
+        ctx.beginPath();
+        ctx.moveTo(sx * tickInner, sy * tickInner);
+        ctx.lineTo(sx * tickOuter, sy * tickOuter);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = colorToCSS(color, 0.5);
+      ctx.lineWidth = Math.max(1, 1 * camera.zoom);
       ctx.beginPath();
-      ctx.moveTo(sx * tickInner, sy * tickInner);
-      ctx.lineTo(sx * tickOuter, sy * tickOuter);
+      ctx.moveTo(0, ring * 0.9);
+      ctx.lineTo(0, ring * 1.58);
       ctx.stroke();
     }
-
-    ctx.strokeStyle = colorToCSS(color, 0.5);
-    ctx.lineWidth = Math.max(1, 1 * camera.zoom);
-    ctx.beginPath();
-    ctx.moveTo(0, ring * 0.9);
-    ctx.lineTo(0, ring * 1.58);
-    ctx.stroke();
 
     ctx.fillStyle = colorToCSS(color, 0.48);
     ctx.beginPath();
@@ -499,10 +506,11 @@ export function drawBaseLockwardEffect(
   if (isLegacyGraphics()) return;
   for (const b of state.buildings) {
     if (!b.alive || b.type !== EntityType.CommandPost || b.team === Team.Neutral) continue;
-    const worldRadius = b.radius * 4.5;
+    // Effect radius = distance from the structure centre to one of its corners.
+    const worldRadius = (footprintForBuilding(b) * GRID_CELL_SIZE * Math.SQRT2) / 2;
     if (!camera.isOnScreen(b.position, worldRadius + 60)) continue;
     const screen = camera.worldToScreen(b.position);
-    const radiusPx = Math.max(56, worldRadius * camera.zoom);
+    const radiusPx = worldRadius * camera.zoom;
     renderLockward(ctx, screen.x, screen.y, state.gameTime, (b.team + 1) * 37 + 5, {
       color: teamColor(b.team),
       radiusPx,
