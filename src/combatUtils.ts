@@ -94,6 +94,7 @@ export function damageLaserLine(
   end: Vec2,
   damage: number,
   hitRadius = 2,
+  alreadyHit?: Set<number>,
 ): void {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -103,6 +104,7 @@ export function damageLaserLine(
   const queryRadius = hitRadius + 120;
   for (const target of state.queryEntitiesNearSegment(start, end, queryRadius, laserQueryScratch)) {
     if (!target.alive || target.team === source.team || target.team === Team.Neutral) continue;
+    if (alreadyHit?.has(target.id)) continue;
     const tx = target.position.x - start.x;
     const ty = target.position.y - start.y;
     const t = Math.max(0, Math.min(1, (tx * dx + ty * dy) / lenSq));
@@ -110,6 +112,7 @@ export function damageLaserLine(
     const py = start.y + dy * t;
     const dist = Math.hypot(target.position.x - px, target.position.y - py);
     if (dist <= target.radius + hitRadius) {
+      alreadyHit?.add(target.id);
       target.takeDamage(damage, source);
       state.recentlyDamaged.add(target.id);
       if (!target.alive) {

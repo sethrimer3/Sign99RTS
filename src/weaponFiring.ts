@@ -343,9 +343,8 @@ function handleGatlingSpecial(state: GameState, hud: HUD): void {
 }
 
 /**
- * Laser special (RMB): hold to charge, release to fire a wide energy burst.
- * Consumes all current battery; damage and beam width scale with charge
- * fraction and energy spent.
+ * Laser special (RMB): hold to charge, release to fire deterministic,
+ * vermiculate piercing lasers. Every complete 10 battery creates one laser.
  */
 function handleLaserSpecial(ctx: WeaponFiringCtx, aimWorld: Vec2): void {
   const { state, spaceFluid } = ctx;
@@ -380,17 +379,24 @@ function handleLaserSpecial(ctx: WeaponFiringCtx, aimWorld: Vec2): void {
       // LASER_BURST_ENERGY_SCALING adds up to 8× extra at full battery + full charge.
       const burstDamage =
         WEAPON_STATS.laser.damage * (LASER_BURST_BASE_MULTIPLIER + (energySpent / player.maxBattery) * LASER_BURST_ENERGY_SCALING * chargeFraction);
-      const burstRange = WEAPON_STATS.laser.range * (1.5 + chargeFraction * 0.5);
-      const hitRadius = 2 + chargeFraction * 14; // wider beam hits larger area
-
+      const laserCount = Math.floor(energySpent / 10);
+      if (laserCount === 0) {
+        player.laserChargeTimer = 0;
+        return;
+      }
       player.battery = 0;
       const start = player.position.clone();
-      const end = new Vec2(
-        start.x + Math.cos(player.angle) * burstRange,
-        start.y + Math.sin(player.angle) * burstRange,
-      );
-      state.addEntity(new ChargedLaserBurst(Team.Player, start, end, player, chargeFraction));
-      damageLaserLine(state, spaceFluid, player, start, end, burstDamage, hitRadius);
+      const seedBase = hashLaserEnergy(energySpent);
+      for (let i = 0; i < laserCount; i++) {
+        const spread = laserCount <= 1 ? 0 : ((i / (laserCount - 1)) - 0.5) * 0.72;
+        const angle = player.angle + spread;
+        const end = start.add(new Vec2(Math.cos(angle), Math.sin(angle)));
+        state.addEntity(new ChargedLaserBurst(
+          Team.Player, start, end, player, chargeFraction, state, spaceFluid,
+          (seedBase ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0,
+        ));
+      }
+      state.particles.emitMuzzleFlash(start, player.angle);
       player.weaponSpecialCooldown = LASER_CHARGE_COOLDOWN_SECS;
       player.laserChargeTimer = 0;
       Audio.playSound('laser');
@@ -398,6 +404,17 @@ function handleLaserSpecial(ctx: WeaponFiringCtx, aimWorld: Vec2): void {
       player.laserChargeTimer = 0;
     }
   }
+}
+
+/** Stable seed that preserves fractional energy differences as well as whole units. */
+function hashLaserEnergy(energy: number): number {
+  const text = energy.toPrecision(15);
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 /**

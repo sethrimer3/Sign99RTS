@@ -43,7 +43,7 @@ export const SHIP_WEAPON_OPTIONS: ReadonlyArray<{
 }> = [
   { id: 'cannon', label: 'Cannon', description: 'Reliable medium-range primary weapon. Cannon V.2 adds homing shots.' },
   { id: 'gatling', label: 'Gatling', researchKey: 'weaponGatling', description: 'Very weak, very fast, short range.' },
-  { id: 'laser', label: 'Laser', researchKey: 'weaponLaser', description: 'Thin slow-firing beam with infinite pierce.' },
+  { id: 'laser', label: 'Laser', researchKey: 'weaponLaser', description: 'Piercing beam; hold RMB to charge deterministic worm lasers (one per 10 energy).' },
   { id: 'guidedmissile', label: 'Guided Missile', researchKey: 'weaponGuidedMissile', description: 'Hold fire to steer a heavy explosive missile.' },
   { id: 'synonymousLaser', label: 'Piercing Laser', description: 'Slow Synonymous beam that pierces clustered targets.' },
 ];

@@ -6,6 +6,9 @@ import { Entity, EntityType, Team } from './entities.js';
 import { Colors, colorToCSS } from './colors.js';
 import { ENTITY_RADIUS, HP_VALUES, WEAPON_STATS, SWARM_MISSILE_DAMAGE_MULTIPLIER } from './constants.js';
 import { getCinematicLevel } from './cinematic.js';
+import type { GameState } from './gamestate.js';
+import type { SpaceFluid } from './spacefluid.js';
+import { damageLaserLine } from './combatUtils.js';
 
 const BULLET_TRAIL_LIFETIME = 0.12;
 const BULLET_TRAIL_MIN_DISTANCE = 2;
@@ -1409,20 +1412,26 @@ export class SwarmMissile extends ProjectileBase {
 }
 
 // ---------------------------------------------------------------------------
-// ChargedLaserBurst – laser special: wide, bright charged energy beam (visual)
+// ChargedLaserBurst – traveling vermiculate laser special
 // ---------------------------------------------------------------------------
 
 /**
- * Visual entity for the charged laser burst (RMB ability for the laser weapon).
- * Damage is applied immediately by damageLaserLine() in game.ts before this
- * entity is spawned; this class only provides the visual effect that persists
- * for a short time so the burst feels impactful.
+ * A seeded, worm-like piercing laser. It sweeps damage along every movement
+ * segment and remembers hit entity IDs so a given laser damages each target
+ * at most once while passing through it.
  *
  * chargeFraction ∈ [0, 1] controls width and brightness.
  */
 export class ChargedLaserBurst extends ProjectileBase {
   targetPos: Vec2;
   readonly chargeFraction: number;
+  private readonly state: GameState;
+  private readonly spaceFluid: SpaceFluid | null;
+  private readonly hitIds = new Set<number>();
+  private randomState: number;
+  private turnTimer = 0;
+  private targetTurn = 0;
+  private turnVelocity = 0;
 
   constructor(
     team: Team,
@@ -1430,6 +1439,9 @@ export class ChargedLaserBurst extends ProjectileBase {
     targetPos: Vec2,
     source: Entity | null = null,
     chargeFraction: number = 1.0,
+    state: GameState,
+    spaceFluid: SpaceFluid | null,
+    seed: number = 1,
   ) {
     const angle = startPos.angleTo(targetPos);
     super({
@@ -1438,36 +1450,65 @@ export class ChargedLaserBurst extends ProjectileBase {
       position: startPos,
       angle,
       damage: 0, // damage handled externally by damageLaserLine()
-      speed: 0,
-      lifetime: 0.28,
+      speed: 570,
+      lifetime: 2.15,
       source,
     });
-    this.targetPos = targetPos.clone();
-    this.velocity.set(0, 0);
+    this.targetPos = startPos.clone();
     this.chargeFraction = Math.max(0, Math.min(1, chargeFraction));
+    this.state = state;
+    this.spaceFluid = spaceFluid;
+    this.randomState = seed || 1;
+    this.radius = 4 + this.chargeFraction * 2;
+    this.trailLifetime = 0.72;
+    this.trailMinDistance = 5;
+    this.trailMaxPoints = 54;
+    this.chooseTurn();
   }
 
   update(dt: number): void {
     if (!this.alive) return;
-    this.lifetime -= dt;
-    if (this.lifetime <= 0) this.destroy();
+    const previous = this.position.clone();
+    this.turnTimer -= dt;
+    if (this.turnTimer <= 0) this.chooseTurn();
+    // Smooth but emphatic deterministic steering produces broad, vermiculate loops.
+    this.turnVelocity += (this.targetTurn - this.turnVelocity) * Math.min(1, dt * 7.5);
+    this.angle = wrapAngle(this.angle + this.turnVelocity * dt);
+    this.velocity.set(Math.cos(this.angle) * this.speed, Math.sin(this.angle) * this.speed);
+    super.update(dt);
+    this.targetPos = previous;
+    damageLaserLine(this.state, this.spaceFluid, this.source ?? this, previous, this.position, this.damage, this.radius, this.hitIds);
+  }
+
+  private random(): number {
+    let x = this.randomState | 0;
+    x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    this.randomState = x >>> 0;
+    return this.randomState / 0x100000000;
+  }
+
+  private chooseTurn(): void {
+    this.turnTimer += 0.055 + this.random() * 0.16;
+    const direction = this.random() < 0.5 ? -1 : 1;
+    this.targetTurn = direction * (1.4 + this.random() * 6.2);
   }
 
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const from = camera.worldToScreen(this.position);
     const to = camera.worldToScreen(this.targetPos);
-    const fade = this.lifetime / 0.28; // 1 at spawn, 0 at expiry
-    const beamWidth = (3 + this.chargeFraction * 7) * camera.zoom * fade;
+    const fade = Math.min(1, this.lifetime / 0.32);
+    const beamWidth = (2.2 + this.chargeFraction * 2.3) * camera.zoom;
     const burstColor = this.team === Team.Player ? Colors.friendlyfire : Colors.enemyfire;
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
 
-    // Outer glow
+    // Lightweight additive glow over the fading worm trail.
+    this.drawTrail(ctx, camera, colorToCSS(burstColor, 0.8), this.trailLifetime, 11);
     ctx.strokeStyle = colorToCSS(burstColor, 0.28 * fade);
-    ctx.lineWidth = beamWidth * 4.2;
+    ctx.lineWidth = beamWidth * 3.4;
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
     ctx.lineTo(to.x, to.y);
@@ -1481,16 +1522,6 @@ export class ChargedLaserBurst extends ProjectileBase {
     ctx.lineTo(to.x, to.y);
     ctx.stroke();
 
-    ctx.setLineDash([14, 12]);
-    ctx.lineDashOffset = -this.lifetime * 90;
-    ctx.strokeStyle = colorToCSS(Colors.particles_switch, 0.32 * fade);
-    ctx.lineWidth = beamWidth * 0.55;
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
     // Bright white core
     ctx.strokeStyle = `rgba(255,255,255,${0.65 * fade})`;
     ctx.lineWidth = beamWidth * 0.35;
@@ -1502,7 +1533,7 @@ export class ChargedLaserBurst extends ProjectileBase {
     ctx.strokeStyle = colorToCSS(burstColor, 0.38 * fade);
     ctx.lineWidth = Math.max(1, 2 * camera.zoom);
     ctx.beginPath();
-    ctx.arc(to.x, to.y, (10 + this.chargeFraction * 12) * camera.zoom * fade, 0, Math.PI * 2);
+    ctx.arc(from.x, from.y, (7 + this.chargeFraction * 5) * camera.zoom * fade, 0, Math.PI * 2);
     ctx.stroke();
 
     ctx.restore();

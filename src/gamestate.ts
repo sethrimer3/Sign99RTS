@@ -6,7 +6,7 @@ import { PlayerShip } from './ship.js';
 import { BuildingBase, CommandPost, Wall } from './building.js';
 import { Shipyard } from './building.js';
 import { SynonymousMineLayer, TetherTurret, TurretBase } from './turret.js';
-import { MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
+import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
 import { isSynonymousDriftMine } from './synonymousMine.js';
 import { FighterShip, SwarmShip } from './fighter.js';
 import { ParticleSystem } from './particles.js';
@@ -675,7 +675,9 @@ export class GameState {
 
   private resolveMineProjectileDamage(): void {
     for (const shot of this.projectiles) {
-      if (!shot.alive || isSynonymousDriftMine(shot)) continue;
+      // Worm lasers own their swept, once-per-target collision handling and
+      // must pass through mines just as they pass through ships/buildings.
+      if (!shot.alive || shot instanceof ChargedLaserBurst || isSynonymousDriftMine(shot)) continue;
       const shotEnd = projectileSegmentEnd(shot);
       const queryRadius = shot.radius + ENTITY_RADIUS.missile + 12;
       const nearby = shotEnd === shot.position
@@ -702,6 +704,7 @@ export class GameState {
 
   /** Returns true if the projectile hit and was consumed. */
   private checkHit(proj: ProjectileBase, target: Entity, isRegen: boolean): boolean {
+    if (proj instanceof ChargedLaserBurst) return false;
     if (proj instanceof SynonymousNovaBomb) return false;
     if (proj instanceof MassDriverBullet && proj.isBursting) return false;
     // Regen bullets heal same-team, damage other-team

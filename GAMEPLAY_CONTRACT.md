@@ -13,7 +13,7 @@ This build targets a small playable Sign99 loop: direct ship control, grid-snapp
 
 - WASD moves the player ship. Mouse aims. Left mouse fires the primary weapon.
 - Shift boosts the player ship only while it has at least 10% energy. After Main Ship Dash research, first pressing Shift while above 75% energy spends 25% maximum energy and bursts the ship forward in its facing direction with a bright trail for roughly 1.6 seconds. Passive hull regeneration is doubled while the energy bar is full.
-- Right mouse fires the equipped special. Cannon drops a cross-laser mine, Gatling triggers overdrive, Laser charges a burst, and Guided Missile fires a missile swarm.
+- Right mouse fires the equipped special. Cannon drops a cross-laser mine, Gatling triggers overdrive, Laser charges a deterministic vermiculate burst (one piercing worm laser per complete 10 energy spent), and Guided Missile fires a missile swarm.
 - Hold Q for the build menu, choose a building from the left palette, then left click or drag over valid footprints to place it. Right mouse deletes player buildings.
 - Hold Z for the ship menu, view ship stats/upgrades, and select the active primary weapon by clicking or using the mouse wheel.
 - Hold Q for the quick-build palette. Conduit is first; mouse wheel or clicking a left-side palette icon selects what to place. With Conduit selected, left mouse queues player conduits with a 2x2 brush and right mouse erases with the same brush. With a building selected, left mouse places that building.
