@@ -1572,6 +1572,51 @@ export class MainMenu {
     return y + h;
   }
 
+  private drawSpaceColorDropdown(ctx: CanvasRenderingContext2D, x: number, y: number, h: number): number {
+    this.drawRowLabel(ctx, x, y, tr('settings.spaceColor'));
+    const rect: HitRect = { x: x + 200, y: y - 15, w: 240, h: 30 };
+    const current = spaceThemeSettings.spaceColor;
+
+    const drawSwatch = (r: HitRect, colour: string): void => {
+      const s = 14;
+      const sx = r.x + 12;
+      const sy = r.y + r.h / 2 - s / 2;
+      ctx.fillStyle = colour;
+      ctx.fillRect(sx, sy, s, s);
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx + 0.5, sy + 0.5, s - 1, s - 1);
+    };
+
+    this.drawControlWell(ctx, rect, pointInRect(this.mouseX(), this.mouseY(), rect), this.spaceColorDropdownOpen ? 1 : 0);
+    drawSwatch(rect, activeSpaceColor().swatch);
+    ctx.font = gameFont(17);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = colorToCSS(TextColors.normal);
+    ctx.fillText(`${spaceColorLabel(current)}  ▾`, rect.x + rect.w / 2 + 10, y);
+    if (this.handleClick(rect)) this.spaceColorDropdownOpen = !this.spaceColorDropdownOpen;
+
+    if (this.spaceColorDropdownOpen) {
+      let optionY = rect.y + rect.h;
+      for (const option of SPACE_COLOR_OPTIONS) {
+        const row: HitRect = { x: rect.x, y: optionY, w: rect.w, h: 30 };
+        this.drawControlWell(ctx, row, pointInRect(this.mouseX(), this.mouseY(), row), option.id === current ? 1 : 0);
+        drawSwatch(row, option.swatch);
+        ctx.fillStyle = colorToCSS(TextColors.normal);
+        ctx.fillText(option.label, row.x + row.w / 2 + 10, row.y + row.h / 2);
+        if (this.handleClick(row)) {
+          spaceThemeSettings.spaceColor = option.id as SpaceColorId;
+          saveSpaceThemeSettings();
+          this.spaceColorDropdownOpen = false;
+        }
+        optionY += row.h;
+      }
+      return y + h + SPACE_COLOR_OPTIONS.length * 30;
+    }
+    return y + h;
+  }
+
   private drawKeybindRow(ctx: CanvasRenderingContext2D, x: number, y: number, h: number, label: string, key: BindableKey): number {
     this.drawRowLabel(ctx, x, y, label);
     const rect: HitRect = { x: x + 200, y: y - 14, w: 240, h: 28 };

@@ -62,6 +62,7 @@ import { CrystalNebula } from './crystalnebula.js';
 import { DistantSuns } from './suns.js';
 import { AsteroidField } from './asteroidField.js';
 import { StarNestBackground } from './starNestBackground.js';
+import { activeSpaceColor } from './spaceTheme.js';
 import { fireTurretShots } from './turretCombat.js';
 import { updateFighterWeaponFire } from './fighterCombat.js';
 import { updatePlayerFiring, updateGuidedMissileControl } from './weaponFiring.js';
@@ -182,6 +183,7 @@ export class Game {
   private bgGradient: CanvasGradient | null = null;
   private bgGradientW = 0;
   private bgGradientH = 0;
+  private bgGradientKey = '';
 
   private playerRespawn: PlayerRespawnRuntime = createPlayerRespawnRuntime();
   /** Delay (seconds) before the player ship respawns. */
@@ -2373,23 +2375,26 @@ export class Game {
     ctx.globalCompositeOperation = 'source-over';
     ctx.font = gameFont(12);
 
-    // Clear with solid very-dark-blue, then overlay a cinematic blue→purple gradient
-    // so the space background has subtle depth without washing out gameplay objects.
-    ctx.fillStyle = this.cinematicLevel <= -2 ? '#000000' : colorToCSS(Colors.friendly_background);
+    // Clear with the selected space colour's solid fill, then overlay its
+    // radial depth gradient so the background has subtle depth without washing
+    // out gameplay objects.
+    const space = activeSpaceColor();
+    ctx.fillStyle = this.cinematicLevel <= -2 ? '#000000' : space.gameFill;
     ctx.fillRect(0, 0, w, h);
 
-    // Rebuild the background gradient when the canvas size changes.
-    if (this.bgGradient === null || this.bgGradientW !== w || this.bgGradientH !== h) {
+    // Rebuild the background gradient when the canvas size or space colour changes.
+    if (
+      space.gameGradient !== null &&
+      (this.bgGradient === null || this.bgGradientW !== w || this.bgGradientH !== h || this.bgGradientKey !== space.id)
+    ) {
       this.bgGradientW = w;
       this.bgGradientH = h;
+      this.bgGradientKey = space.id;
       const grad = ctx.createRadialGradient(w * 0.35, h * 0.25, 0, w * 0.5, h * 0.5, Math.hypot(w, h) * 0.72);
-      grad.addColorStop(0.00, 'rgba(0, 1, 4, 0.24)');    // darker centre while preserving subtle depth
-      grad.addColorStop(0.35, 'rgba(1, 1, 8, 0.66)');    // deep indigo tint
-      grad.addColorStop(0.68, 'rgba(3, 1, 10, 0.78)');   // dark violet
-      grad.addColorStop(1.00, 'rgba(1, 0, 5, 0.88)');    // near-black periphery
+      for (const [offset, colour] of space.gameGradient) grad.addColorStop(offset, colour);
       this.bgGradient = grad;
     }
-    if (this.cinematicLevel > -2) {
+    if (this.cinematicLevel > -2 && space.gameGradient !== null && this.bgGradient !== null) {
       ctx.fillStyle = this.bgGradient;
       ctx.fillRect(0, 0, w, h);
     }
