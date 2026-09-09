@@ -9,6 +9,8 @@ import { getShipPathDebugStats } from './shippath.js';
 import { renderBudget } from './renderBudget.js';
 import type { VisualQuality } from './visualquality.js';
 import { teamColor } from './teamutils.js';
+import { isLegacyGraphics } from './graphicsmode.js';
+import { renderLockward } from './lockwardEffect.js';
 
 export type ShipCommandGroup = ShipGroup | 'all';
 export type WaypointMarker = { pos: Vec2; issuedAt: number; kind?: 'group' | 'move' };
@@ -55,28 +57,38 @@ export function drawWaypointMarkers(
     ctx.arc(0, 0, ring * 1.8, 0, Math.PI * 2);
     ctx.fill();
 
-    // Lockward-inspired layers: offset combination-lock wards counter-rotate,
-    // blink independently, and overlap like a polarized backlit display.
-    for (let layer = 0; layer < 3; layer++) {
-      const direction = layer === 1 ? -1 : 1;
-      const rotation = state.gameTime * (0.34 + layer * 0.17) * direction + layer * 1.91;
-      const blink = 0.42 + 0.38 * Math.sin(state.gameTime * (2.1 + layer * 0.73) + layer * 2.4);
-      const wardRadius = ring * (0.72 + layer * 0.22);
-      const wardCount = 5 + layer * 2;
-      ctx.save();
-      ctx.rotate(rotation);
-      ctx.strokeStyle = colorToCSS(color, Math.max(0.12, blink));
-      ctx.lineWidth = Math.max(1, (1.8 - layer * 0.3) * camera.zoom);
-      ctx.beginPath();
-      for (let i = 0; i < wardCount; i++) {
-        const a = i * Math.PI * 2 / wardCount;
-        const notch = i % 2 === 0 ? 0.58 : 0.77;
-        ctx.moveTo(Math.cos(a) * wardRadius * notch, Math.sin(a) * wardRadius * notch);
-        ctx.lineTo(Math.cos(a) * wardRadius, Math.sin(a) * wardRadius);
-        ctx.arc(0, 0, wardRadius, a, a + Math.PI / wardCount * 0.62);
+    // Lockward-inspired layers: stacked translucent combination-lock wards that
+    // each spin at their own random speed/direction, blink, and overlap.
+    if (isLegacyGraphics()) {
+      for (let layer = 0; layer < 3; layer++) {
+        const direction = layer === 1 ? -1 : 1;
+        const rotation = state.gameTime * (0.34 + layer * 0.17) * direction + layer * 1.91;
+        const blink = 0.42 + 0.38 * Math.sin(state.gameTime * (2.1 + layer * 0.73) + layer * 2.4);
+        const wardRadius = ring * (0.72 + layer * 0.22);
+        const wardCount = 5 + layer * 2;
+        ctx.save();
+        ctx.rotate(rotation);
+        ctx.strokeStyle = colorToCSS(color, Math.max(0.12, blink));
+        ctx.lineWidth = Math.max(1, (1.8 - layer * 0.3) * camera.zoom);
+        ctx.beginPath();
+        for (let i = 0; i < wardCount; i++) {
+          const a = i * Math.PI * 2 / wardCount;
+          const notch = i % 2 === 0 ? 0.58 : 0.77;
+          ctx.moveTo(Math.cos(a) * wardRadius * notch, Math.sin(a) * wardRadius * notch);
+          ctx.lineTo(Math.cos(a) * wardRadius, Math.sin(a) * wardRadius);
+          ctx.arc(0, 0, wardRadius, a, a + Math.PI / wardCount * 0.62);
+        }
+        ctx.stroke();
+        ctx.restore();
       }
-      ctx.stroke();
-      ctx.restore();
+    } else {
+      const seed = (group === 'all' ? 97 : group + 1) * 31 + Math.floor(marker.issuedAt * 7) % 89;
+      renderLockward(ctx, 0, 0, state.gameTime, seed, {
+        color,
+        radiusPx: ring * 1.7,
+        opacity: 0.9,
+        rings: 5,
+      });
     }
 
     ctx.strokeStyle = colorToCSS(color, 0.68);
@@ -472,4 +484,30 @@ export function drawBaseTerritoryGlow(
   }
 
   ctx.restore();
+}
+
+/**
+ * Lockward effect that wraps each team's Command Post (main base). Same
+ * translucent, independently-spinning ward stack as the waypoint markers,
+ * scaled up to frame the building. Legacy Graphics disables it.
+ */
+export function drawBaseLockwardEffect(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  state: GameState,
+): void {
+  if (isLegacyGraphics()) return;
+  for (const b of state.buildings) {
+    if (!b.alive || b.type !== EntityType.CommandPost || b.team === Team.Neutral) continue;
+    const worldRadius = b.radius * 4.5;
+    if (!camera.isOnScreen(b.position, worldRadius + 60)) continue;
+    const screen = camera.worldToScreen(b.position);
+    const radiusPx = Math.max(56, worldRadius * camera.zoom);
+    renderLockward(ctx, screen.x, screen.y, state.gameTime, (b.team + 1) * 37 + 5, {
+      color: teamColor(b.team),
+      radiusPx,
+      opacity: 0.5,
+      rings: 6,
+    });
+  }
 }

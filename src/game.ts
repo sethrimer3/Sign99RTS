@@ -52,7 +52,7 @@ import { loadCinematicLevel, saveCinematicLevel, setCinematicLevel, type Cinemat
 import { loadLegacyGraphics, saveLegacyGraphics, setLegacyGraphics } from './graphicsmode.js';
 import { setProjectileTrailLayers } from './projectileTrail.js';
 import {
-  drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, type ShipCommandGroup, type WaypointMarker,
+  drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, drawBaseLockwardEffect, type ShipCommandGroup, type WaypointMarker,
 } from './gameRender.js';
 import { renderBudget } from './renderBudget.js';
 import type { NetInputSnapshot, NetGameSnapshot } from './net/protocol.js';
@@ -2474,6 +2474,7 @@ export class Game {
       );
     }
     this.state.drawEntities(ctx, this.camera);
+    drawBaseLockwardEffect(ctx, this.camera, this.state);
     drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn);
     drawWaypointMarkers(ctx, this.camera, this.state, this.waypointMarkers);
     drawGlowLayer(this.glowLayer, this.camera, this.state, this.visualPreset, renderBudget.renderLoadScale);
