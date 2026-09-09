@@ -52,8 +52,9 @@ void main() {
   uv.y *= u_resolution.y / u_resolution.x;
 
   // Camera-position driven (no time drift).
-  float a1 = 0.45 + u_camOffset.x * 0.000018;
-  float a2 = 0.75 + u_camOffset.y * 0.000018;
+  // Slowed down by 5x and inverted Y-axis to match 2D canvas coordinates
+  float a1 = 0.45 + u_camOffset.x * 0.0000036;
+  float a2 = 0.75 + u_camOffset.y * -0.0000036;
 
   mat2 rot1 = mat2(cos(a1), sin(a1), -sin(a1), cos(a1));
   mat2 rot2 = mat2(cos(a2), sin(a2), -sin(a2), cos(a2));
@@ -65,7 +66,8 @@ void main() {
 
   vec3 from = vec3(1.0, 0.5, 0.5);
   // Replaced time offset with camera offset to drive parallax through space
-  from += vec3(u_camOffset.x * 0.0005, u_camOffset.y * 0.0005, -2.0);
+  // Slowed down by 5x and inverted Y-axis to match 2D canvas coordinates
+  from += vec3(u_camOffset.x * 0.0001, u_camOffset.y * -0.0001, -2.0);
   from.xz = rot1 * from.xz;
   from.xy = rot2 * from.xy;
 
