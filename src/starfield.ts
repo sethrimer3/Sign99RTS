@@ -14,6 +14,7 @@ import { Camera } from './camera.js';
 import { Colors, colorToCSS, Color } from './colors.js';
 import { WORLD_WIDTH, WORLD_HEIGHT } from './constants.js';
 import { getCinematicLevel } from './cinematic.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 
 // ---------------------------------------------------------------------------
 // Star data
@@ -265,7 +266,8 @@ export class Starfield {
       }
 
       // Giant stars get a faint diffraction cross to make them pop.
-      if (star.isGiant && r > 1.2) {
+      // Legacy only — the "+" shine reads cheesy in the current look.
+      if (star.isGiant && r > 1.2 && isLegacyGraphics()) {
         const crossAlpha = alpha * 0.35;
         const crossLen   = r * 3.5;
         ctx.strokeStyle = cssColor + crossAlpha.toFixed(3) + ')';

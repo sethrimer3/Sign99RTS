@@ -25,6 +25,7 @@ import { WORLD_WIDTH, WORLD_HEIGHT } from './constants.js';
 import type { VisualQualityPreset } from './visualquality.js';
 import { renderBudget } from './renderBudget.js';
 import { getCinematicLevel } from './cinematic.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 
 // ---------------------------------------------------------------------------
 // Seeded PRNG — mulberry32 for stable, deterministic cloud layout
@@ -484,7 +485,21 @@ export class CrystalNebula {
         const ca = Math.cos(p.angle);
         const sa = Math.sin(p.angle);
 
-        if (p.shape === 2) {
+        if (p.shape === 2 && !isLegacyGraphics()) {
+          // Non-legacy: render the mote as a soft dot — the cross "+" shine
+          // (and its ring/starburst/halo flourishes) reads cheesy.
+          ctx.fillStyle = colorStr;
+          ctx.beginPath();
+          ctx.arc(sx, sy, Math.max(0.5, sr * 1.15), 0, Math.PI * 2);
+          ctx.fill();
+
+          if (glowCtx && (alpha > 0.50 || hotAlpha > 0.18 || velocityGlow > 0.16)) {
+            glowCtx.fillStyle = p.colorPrefix + Math.min(cinematicLevel >= 2 ? 0.72 : 0.52, alpha * 0.18 + hotAlpha * 0.30 + velocityGlow * (cinematicLevel >= 2 ? 0.30 : 0.18)).toFixed(3) + ')';
+            glowCtx.beginPath();
+            glowCtx.arc(sx, sy, sr * ((cinematicLevel >= 2 ? 4.4 : 3.0) + hotAlpha * 2.2 + velocityGlow * (cinematicLevel >= 2 ? 4.8 : 3.2)), 0, Math.PI * 2);
+            glowCtx.fill();
+          }
+        } else if (p.shape === 2) {
           // 4-point glint: two perpendicular line segments
           const len = sr * (cinematicLevel >= 2 ? 3.2 : 2.4);
           ctx.strokeStyle = hotAlpha > 0.22 ? p.colorPrefix + Math.min(1, alpha + hotAlpha * 0.4).toFixed(3) + ')' : colorStr;

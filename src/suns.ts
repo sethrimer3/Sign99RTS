@@ -23,6 +23,7 @@ import { Camera } from './camera.js';
 import { WORLD_WIDTH, WORLD_HEIGHT } from './constants.js';
 import type { VisualQualityPreset } from './visualquality.js';
 import { getCinematicLevel } from './cinematic.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 
 // ---------------------------------------------------------------------------
 // Sun placement (one randomized screen-fraction anchor per game load)
@@ -170,7 +171,8 @@ export class DistantSuns {
   update(dt: number): void {
     this.time += dt;
 
-    if (!this.enabled || !this.glintsEnabled) return;
+    // Cross-shine "+" glints are a legacy-only lens-flare effect now.
+    if (!this.enabled || !this.glintsEnabled || !isLegacyGraphics()) return;
 
     // Age existing glints.
     for (const g of this.glints) {
@@ -287,8 +289,8 @@ export class DistantSuns {
       this.drawAtomicOrbitLayer(ctx, cx, cy, screenW, screenH, false);
     }
 
-    // 5 - Rare warm glints (high only).
-    if (this.glintsEnabled) {
+    // 5 - Rare warm glints (legacy only — the cross "+" shine reads cheesy).
+    if (this.glintsEnabled && isLegacyGraphics()) {
       this.drawGlints(ctx, screenW, screenH);
     }
 
