@@ -1158,7 +1158,7 @@ export class MainMenu {
     const viewportH = viewportBottom - viewportTop;
     const contentBottom = this.settingsTab === 'controls'
       ? 190 + KEYBIND_DEFINITIONS.length * rowH + 90
-      : this.settingsTab === 'gameplay' ? 620 : 520;
+      : this.settingsTab === 'gameplay' ? (this.languageDropdownOpen ? 620 : 390) : 520;
     const maxScroll = Math.max(0, contentBottom - viewportBottom);
     if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
       this.settingsScroll = Math.max(0, Math.min(maxScroll, this.settingsScroll + this.wheelDeltaLatched * 0.55));

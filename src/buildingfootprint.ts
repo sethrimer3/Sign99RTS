@@ -16,6 +16,10 @@ export function footprintForBuildingType(type: EntityType): number {
       return 4;
     case EntityType.ExciterTurret:
       return 4;
+    case EntityType.TetherTurret:
+      return 4;
+    case EntityType.MassDriverTurret:
+      return 6;
     case EntityType.ResearchLab:
       return 9;
     default:

@@ -972,7 +972,12 @@ export class Game {
   }
 
   private updateGhostSpectator(dt: number): void {
-    updateGhostSpectator(this.state, this.playerRespawn, dt);
+    updateGhostSpectator(
+      this.state,
+      this.playerRespawn,
+      dt,
+      this.camera.screenToWorld(Input.mousePos),
+    );
   }
 
   private updatePlayerShipyards(): void {
@@ -2368,7 +2373,7 @@ export class Game {
       );
     }
     this.state.drawEntities(ctx, this.camera);
-    drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn.ghostPos);
+    drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn);
     drawWaypointMarkers(ctx, this.camera, this.state, this.waypointMarkers);
     drawCommandModeOverlay(
       ctx,

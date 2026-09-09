@@ -23,6 +23,8 @@ import { WORLD_WIDTH } from './constants.js';
 import type { VisualQualityPreset } from './visualquality.js';
 import { buildingBlocksShips, buildingFootprintOrigin } from './buildingCollision.js';
 import { t } from './i18n.js';
+import type { PlayerRespawnRuntime } from './respawnRuntime.js';
+import { teamColor } from './teamutils.js';
 
 // ---------------------------------------------------------------------------
 // Overlay cache — holds canvas gradients/patterns that are rebuilt only when
@@ -66,7 +68,6 @@ function fighterMaxSpeed(fighter: FighterShip): number {
     : SHIP_STATS.fighter.speed;
 }
 
-let ghostLensCanvas: HTMLCanvasElement | null = null;
 interface BuildingHealthTextFade {
   alpha: number;
   startAlpha: number;
@@ -93,111 +94,57 @@ export function drawGhostSpectator(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
   state: GameState,
-  ghostSpectatorPos: Vec2 | null,
+  runtime: PlayerRespawnRuntime,
 ): void {
-  if (state.player.alive || !ghostSpectatorPos) return;
-  const screen = camera.worldToScreen(ghostSpectatorPos);
-  const aimWorld = camera.screenToWorld(Input.mousePos);
-  const facing = ghostSpectatorPos.angleTo(aimWorld);
-  const pulse = 0.5 + 0.5 * Math.sin(state.gameTime * 2.8);
-  const shimmer = 0.5 + 0.5 * Math.sin(state.gameTime * 6.1);
-  const r = Math.max(12, 22 * camera.zoom);
-
-  // Sample the scene that has already been rendered and refract it through the
-  // hull. This makes stars and lights visibly bend inside the ghost instead of
-  // painting an opaque sketch over them.
-  const sourceRadius = Math.ceil(r * 1.7);
-  const sourceX = Math.max(0, Math.floor(screen.x - sourceRadius));
-  const sourceY = Math.max(0, Math.floor(screen.y - sourceRadius));
-  const sourceW = Math.min(ctx.canvas.width - sourceX, sourceRadius * 2);
-  const sourceH = Math.min(ctx.canvas.height - sourceY, sourceRadius * 2);
-  if (sourceW > 0 && sourceH > 0) {
-    const lens = ghostLensCanvas ?? (ghostLensCanvas = document.createElement('canvas'));
-    if (lens.width !== sourceW) lens.width = sourceW;
-    if (lens.height !== sourceH) lens.height = sourceH;
-    const lensCtx = lens.getContext('2d');
-    if (lensCtx) {
-      lensCtx.clearRect(0, 0, sourceW, sourceH);
-      lensCtx.drawImage(ctx.canvas, sourceX, sourceY, sourceW, sourceH, 0, 0, sourceW, sourceH);
-      ctx.save();
-      ctx.translate(screen.x, screen.y);
-      ctx.rotate(facing);
-      ctx.beginPath();
-      ctx.moveTo(r * 1.38, 0);
-      ctx.quadraticCurveTo(r * 0.48, -r * 0.68, -r * 0.9, -r * 0.72);
-      ctx.lineTo(-r * 0.52, 0);
-      ctx.lineTo(-r * 0.9, r * 0.72);
-      ctx.quadraticCurveTo(r * 0.48, r * 0.68, r * 1.38, 0);
-      ctx.clip();
-      ctx.rotate(-facing);
-      ctx.globalAlpha = 0.72;
-      for (let sourceBandY = 0; sourceBandY < sourceH; sourceBandY += 4) {
-        const localY = sourceY + sourceBandY - screen.y;
-        const bend = Math.sin(localY / Math.max(1, r) * Math.PI) * (3.5 + shimmer * 2);
-        ctx.drawImage(
-          lens,
-          0, sourceBandY, sourceW, Math.min(4, sourceH - sourceBandY),
-          sourceX - screen.x + bend, localY, sourceW * 1.035, 4.5,
-        );
-      }
-      ctx.restore();
-    }
-  }
+  if (state.player.alive || !runtime.ghostPos || runtime.ghostLights.length === 0) return;
+  const tint = teamColor(state.player.team);
+  const pulse = 0.86 + Math.sin(state.gameTime * 5.2) * 0.1;
+  const layers = [
+    { width: 5.8, alpha: 0.10 },
+    { width: 2.8, alpha: 0.24 },
+    { width: 1.1, alpha: 0.58 },
+  ] as const;
 
   ctx.save();
-  ctx.translate(screen.x, screen.y);
-  ctx.rotate(facing);
-
-  const glass = ctx.createLinearGradient(-r, -r, r, r);
-  glass.addColorStop(0, 'rgba(110, 235, 255, 0.04)');
-  glass.addColorStop(0.42, `rgba(225, 252, 255, ${0.10 + pulse * 0.06})`);
-  glass.addColorStop(0.58, 'rgba(100, 170, 255, 0.025)');
-  glass.addColorStop(1, 'rgba(170, 120, 255, 0.09)');
-  ctx.fillStyle = glass;
-  ctx.strokeStyle = `rgba(185, 246, 255, ${0.58 + pulse * 0.22})`;
-  ctx.lineWidth = Math.max(1, 1.25 * camera.zoom);
-  ctx.beginPath();
-  ctx.moveTo(r * 1.38, 0);
-  ctx.quadraticCurveTo(r * 0.48, -r * 0.68, -r * 0.9, -r * 0.72);
-  ctx.lineTo(-r * 0.52, 0);
-  ctx.lineTo(-r * 0.9, r * 0.72);
-  ctx.quadraticCurveTo(r * 0.48, r * 0.68, r * 1.38, 0);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
   ctx.globalCompositeOperation = 'lighter';
-  ctx.strokeStyle = `rgba(220, 252, 255, ${0.22 + shimmer * 0.18})`;
-  ctx.lineWidth = Math.max(0.7, 0.75 * camera.zoom);
-  ctx.beginPath();
-  ctx.moveTo(r * 1.08, 0);
-  ctx.quadraticCurveTo(r * 0.15, -r * 0.16, -r * 0.62, -r * 0.54);
-  ctx.moveTo(r * 1.08, 0);
-  ctx.quadraticCurveTo(r * 0.15, r * 0.16, -r * 0.62, r * 0.54);
-  ctx.moveTo(-r * 0.48, -r * 0.08);
-  ctx.quadraticCurveTo(r * 0.12, -r * 0.4, r * 0.7, -r * 0.08);
-  ctx.stroke();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
 
-  const core = ctx.createRadialGradient(r * 0.16, -r * 0.08, 0, r * 0.08, 0, r * 0.42);
-  core.addColorStop(0, `rgba(255, 255, 255, ${0.72 + shimmer * 0.2})`);
-  core.addColorStop(0.25, 'rgba(145, 240, 255, 0.28)');
-  core.addColorStop(1, 'rgba(100, 150, 255, 0)');
-  ctx.fillStyle = core;
-  ctx.beginPath();
-  ctx.ellipse(r * 0.08, 0, r * 0.38, r * 0.25, 0, 0, Math.PI * 2);
-  ctx.fill();
+  // Each light owns a tiny world-space history. Segment width and opacity
+  // increase toward the newest sample, producing a tapered luminous ribbon.
+  for (const light of runtime.ghostLights) {
+    const count = light.trail.length;
+    if (count >= 2) {
+      for (const layer of layers) {
+        ctx.strokeStyle = colorToCSS(tint);
+        for (let i = 1; i < count; i++) {
+          const a = light.trail[i - 1];
+          const b = light.trail[i];
+          const head = i / (count - 1);
+          const life = Math.max(0, 1 - (a.age + b.age) * 0.5 / 0.34);
+          const strength = head * head * life;
+          if (strength < 0.015) continue;
+          ctx.globalAlpha = layer.alpha * strength * pulse;
+          ctx.lineWidth = Math.max(0.35, layer.width * camera.zoom * (0.12 + head * 0.88));
+          ctx.beginPath();
+          ctx.moveTo(camera.screenX(a.x), camera.screenY(a.y));
+          ctx.lineTo(camera.screenX(b.x), camera.screenY(b.y));
+          ctx.stroke();
+        }
+      }
+    }
 
-  // Fine chromatic edge separation sells the glass/refraction without making
-  // the silhouette noisy.
-  ctx.lineWidth = Math.max(0.8, camera.zoom);
-  for (const [offset, color] of [[-1.8, 'rgba(80,220,255,0.24)'], [1.8, 'rgba(205,120,255,0.18)']] as const) {
-    ctx.strokeStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(-r * 0.75, offset * camera.zoom);
-    ctx.quadraticCurveTo(r * 0.38, -r * 0.66 + offset * camera.zoom, r * 1.32, offset * camera.zoom);
-    ctx.stroke();
+    const x = camera.screenX(light.x);
+    const y = camera.screenY(light.y);
+    const ballRadius = Math.max(1, 2.25 * camera.zoom);
+    ctx.globalAlpha = 0.12 * pulse;
+    ctx.fillStyle = colorToCSS(tint);
+    ctx.beginPath(); ctx.arc(x, y, ballRadius * 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.38 * pulse;
+    ctx.beginPath(); ctx.arc(x, y, ballRadius * 1.75, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.92 * pulse;
+    ctx.beginPath(); ctx.arc(x, y, ballRadius * 0.65, 0, Math.PI * 2); ctx.fill();
   }
-
   ctx.restore();
 }
 

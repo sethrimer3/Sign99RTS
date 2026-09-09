@@ -76,6 +76,7 @@ export enum EntityType {
   // Effects
   Explosion,
   SwarmYard,
+  TetherTurret,
 }
 
 let nextEntityId = 0;
@@ -93,6 +94,23 @@ export abstract class Entity {
   radius: number;
   alive: boolean;
   lastDamageSource: Entity | null = null;
+
+  /**
+   * Sum of all active Tether-turret slow fractions applied to this entity this
+   * frame (0 = unaffected, 0.2 per fully-charged Tether, >= 1 = frozen).
+   * Reset to 0 each tick by GameState before Tethers re-accumulate.
+   */
+  tetherSlowFrac = 0;
+  /**
+   * Incremented every time this entity performs a dash. Tether turrets watch
+   * this to detect a dash and halve their hold on the target.
+   */
+  dashCount = 0;
+
+  /** Speed-cap multiplier from Tether turrets. 0 => frozen in place. */
+  tetherSpeedMultiplier(): number {
+    return Math.max(0, 1 - this.tetherSlowFrac);
+  }
 
   constructor(
     type: EntityType,
