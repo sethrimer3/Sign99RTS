@@ -4,18 +4,20 @@ setlocal
 pushd "%~dp0"
 
 set "PACKAGE_RUNNER="
-set "PACKAGE_MODE=npm"
-where npm >nul 2>nul
-if not errorlevel 1 set "PACKAGE_RUNNER=npm"
+set "PACKAGE_MODE=bundled"
+set "BUNDLED_NODE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin"
+set "BUNDLED_PNPM=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd"
+
+if exist "%BUNDLED_NODE%\node.exe" if exist "%BUNDLED_PNPM%" (
+  set "PATH=%BUNDLED_NODE%;%PATH%"
+  set "PACKAGE_RUNNER=%BUNDLED_PNPM%"
+)
 
 if not defined PACKAGE_RUNNER (
-  set "BUNDLED_NODE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin"
-  set "BUNDLED_PNPM=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd"
-  if exist "%BUNDLED_NODE%\node.exe" if exist "%BUNDLED_PNPM%" (
-    set "PATH=%BUNDLED_NODE%;%PATH%"
-    set "PACKAGE_RUNNER=%BUNDLED_PNPM%"
-    set "PACKAGE_MODE=bundled"
-  )
+  set "PACKAGE_MODE=npm"
+  where npm >nul 2>nul
+  if not errorlevel 1 npm --version >nul 2>nul
+  if not errorlevel 1 set "PACKAGE_RUNNER=npm"
 )
 
 if not exist "package.json" (
