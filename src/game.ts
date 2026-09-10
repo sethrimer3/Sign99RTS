@@ -3,6 +3,7 @@
 import { Vec2 } from './math.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
+import { readThreatMetrics } from './musicThreat.js';
 import { Camera } from './camera.js';
 import { GameState } from './gamestate.js';
 import { Starfield } from './starfield.js';
@@ -670,6 +671,7 @@ export class Game {
     // Update core game state (entities, collision, power, resources, research, particles)
     const stateUpdateStart = performance.now();
     this.state.update(DT);
+    Audio.updateMusicThreat(readThreatMetrics(this.state, this.localPlayerTeam()), DT);
     this.state.recordGameStateUpdateMs(performance.now() - stateUpdateStart);
     while (this.state.completedResearchNotifications.length > 0) {
       const item = this.state.completedResearchNotifications.shift()!;

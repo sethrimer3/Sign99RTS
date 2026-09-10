@@ -911,6 +911,9 @@ export class SynonymousNovaBomb extends ProjectileBase {
 }
 
 export class Laser extends ProjectileBase {
+  /** Seconds the beam lingers and fades after firing. */
+  static readonly BEAM_LIFETIME = 0.2;
+
   targetPos: Vec2;
 
   constructor(
@@ -927,7 +930,7 @@ export class Laser extends ProjectileBase {
       angle,
       damage: WEAPON_STATS.laser.damage,
       speed: 0,
-      lifetime: 0.1,
+      lifetime: Laser.BEAM_LIFETIME,
       source,
     });
     this.targetPos = targetPos.clone();
@@ -944,7 +947,7 @@ export class Laser extends ProjectileBase {
     if (!this.alive) return;
     const from = camera.worldToScreen(this.position);
     const to = camera.worldToScreen(this.targetPos);
-    const fade = Math.max(0, this.lifetime / 0.1);
+    const fade = Math.max(0, this.lifetime / Laser.BEAM_LIFETIME);
     const fireColor =
       this.team === Team.Player
         ? colorToCSS(Colors.friendlyfire, 0.85 * fade)

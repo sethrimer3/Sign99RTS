@@ -1,3 +1,4 @@
+import { MusicThreatTracker, type ThreatMetrics } from './musicThreat.js';
 import { MUSIC_LOUDNESS_GAINS } from './musicLoudness';
 
 /** Audio manager for Sign99 – Web Audio API */
@@ -16,16 +17,8 @@ const SOUND_NAMES = [
 
 export type SoundName = typeof SOUND_NAMES[number];
 
-const IN_GAME_MUSIC_TRACKS = [
-  'absolutesound-guitar-music-guitar-528969.mp3',
-  'apalonbeats-guitar-guitar-music-549446.mp3',
-  'arpmedia-fast-dynamic-rhythmic-music-588478.mp3',
-  'arpmedia-guitar-guitar-music-561480.mp3',
-  'mondamusic-guitar-guitar-music-529564.mp3',
-  'monume-guitar-solo-guitar-music-556477.mp3',
-  'oceanframemusic-space-background-guitar-524596.mp3',
-  'soulprodmusic-spaceship-145869.mp3',
-] as const;
+const IN_GAME_MUSIC_TRACKS = Object.keys(MUSIC_LOUDNESS_GAINS)
+  .filter(path => /^music\/Music-InGame\/ThreatLevel[1-5]\//.test(path));
 
 const MENU_MUSIC_TRACK = 'absolutesound-acoustic-guitar-chill-516783.mp3';
 const MUSIC_CROSSFADE_SECONDS = 8;
@@ -77,6 +70,7 @@ class AudioManager {
   private musicVolume = 0.5;
   private sfxVolume = 0.5;
   private isMenuMusic = false;
+  private musicThreat = new MusicThreatTracker();
   private recentInGameTracks: string[] = [];
 
   // Listener (player) location for spatial sound effects.
@@ -236,6 +230,7 @@ class AudioManager {
   /** Start the randomized in-game music rotation. */
   startPlaylist(): void {
     this.isMenuMusic = false;
+    this.musicThreat.reset();
     this.recentInGameTracks = [];
     this.stopMusicElements();
     this.playNextInGameTrack(false);
@@ -255,28 +250,33 @@ class AudioManager {
     this.playNextInGameTrack(this.musicElement !== null);
   }
 
-  private pickNextInGameTrack(): string {
-    // Exclude as much of the two-song history as the library permits. Three or
-    // more tracks guarantee the full gap; two tracks alternate; one must repeat.
-    const historySize = Math.min(2, IN_GAME_MUSIC_TRACKS.length - 1);
+  updateMusicThreat(metrics: ThreatMetrics, dt: number): void {
+    if (this.isMenuMusic || !this.musicElement) return;
+    const previous = this.musicThreat.level;
+    if (this.musicThreat.update(metrics, dt) !== previous) this.playNextInGameTrack(true);
+  }
+
+  private pickNextInGameTrack(): string | undefined {
+    const prefix = `music/Music-InGame/ThreatLevel${this.musicThreat.level}/`;
+    const tracks = IN_GAME_MUSIC_TRACKS.filter(track => track.startsWith(prefix));
+    const historySize = Math.min(2, tracks.length - 1);
     const excluded = new Set(historySize > 0 ? this.recentInGameTracks.slice(-historySize) : []);
-    const choices = IN_GAME_MUSIC_TRACKS.filter((track) => !excluded.has(track));
+    const choices = tracks.filter(track => !excluded.has(track));
     return choices[Math.floor(Math.random() * choices.length)];
   }
 
   private playNextInGameTrack(crossfade: boolean): void {
     if (this.isMenuMusic) return;
     const track = this.pickNextInGameTrack();
+    if (!track) return;
     this.recentInGameTracks.push(track);
     if (this.recentInGameTracks.length > 2) this.recentInGameTracks.shift();
-    this.playMusicFile(`music/Music-InGame/ThreatLevel1/${track}`, false, crossfade);
+    this.playMusicFile(track, false, crossfade);
   }
 
   private playMusicFile(path: string, loop = false, crossfade = false): void {
     this.ensureContext();
     this.cancelCrossfadeSchedule();
-    for (const staleFade of this.fadingMusicElements) this.disposeMusicElement(staleFade);
-    this.fadingMusicElements.clear();
     const outgoing = this.musicElement;
     const el = new globalThis.Audio(assetUrl(path));
     const source = this.ctx!.createMediaElementSource(el);
@@ -313,17 +313,19 @@ class AudioManager {
   private fadeBetween(outgoing: HTMLAudioElement, incoming: HTMLAudioElement): void {
     this.fadingMusicElements.add(outgoing);
     const startedAt = performance.now();
-    const outgoingStartVolume = outgoing.volume;
+    const outgoingVolumes = new Map([...this.fadingMusicElements].map(el => [el, el.volume]));
     const step = (now: number): void => {
       const progress = Math.min(1, (now - startedAt) / (MUSIC_CROSSFADE_SECONDS * 1000));
-      outgoing.volume = outgoingStartVolume * (1 - progress);
+      for (const [el, volume] of outgoingVolumes) el.volume = volume * (1 - progress);
       incoming.volume = progress;
       if (progress < 1 && this.musicElement === incoming) {
         this.crossfadeFrame = requestAnimationFrame(step);
       } else {
         this.crossfadeFrame = null;
-        this.fadingMusicElements.delete(outgoing);
-        this.disposeMusicElement(outgoing);
+        for (const el of outgoingVolumes.keys()) {
+          this.fadingMusicElements.delete(el);
+          this.disposeMusicElement(el);
+        }
       }
     };
     this.crossfadeFrame = requestAnimationFrame(step);
