@@ -954,16 +954,6 @@ export class Laser extends ProjectileBase {
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
 
-    // Warm shader-style bloom along the beam (High / Ultra, non-legacy only) —
-    // the same glow used by building corner nodes, via the shared renderer.
-    if (!isLegacyGraphics()) {
-      renderWarmGlowLine(ctx, from.x, from.y, to.x, to.y, {
-        intensity: fade,
-        lineWidth: 2.2 * camera.zoom,
-        blur: 9 * camera.zoom,
-      });
-    }
-
     ctx.strokeStyle = this.team === Team.Player
       ? colorToCSS(Colors.friendlyfire, 0.16 * fade)
       : colorToCSS(Colors.enemyfire, 0.16 * fade);
@@ -1004,6 +994,19 @@ export class Laser extends ProjectileBase {
     ctx.beginPath();
     ctx.arc(to.x, to.y, 5 * camera.zoom, 0, Math.PI * 2);
     ctx.stroke();
+
+    // Warm shader-style bloom along the beam (High / Ultra, non-legacy only) —
+    // the same glow used by building corner nodes, via the shared renderer.
+    // Drawn last so it sits on top of the additive beam strokes and reads.
+    if (!isLegacyGraphics()) {
+      renderWarmGlowLine(ctx, from.x, from.y, to.x, to.y, {
+        intensity: fade,
+        alpha: 1,
+        lineWidth: Math.max(4, 5 * camera.zoom),
+        blur: Math.max(14, 16 * camera.zoom),
+        innerBlur: Math.max(5, 6 * camera.zoom),
+      });
+    }
     ctx.restore();
   }
 }

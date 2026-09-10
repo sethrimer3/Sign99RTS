@@ -1,3 +1,5 @@
+import { MUSIC_LOUDNESS_GAINS } from './musicLoudness';
+
 /** Audio manager for Sign99 – Web Audio API */
 
 const SOUND_NAMES = [
@@ -63,6 +65,7 @@ class AudioManager {
   private ctx: AudioContext | null = null;
   private soundBuffers = new Map<string, AudioBuffer>();
   private musicElement: HTMLAudioElement | null = null;
+  private musicNodes = new Map<HTMLAudioElement, { source: MediaElementAudioSourceNode; gain: GainNode }>();
   private fadingMusicElements = new Set<HTMLAudioElement>();
   private crossfadeTimer: ReturnType<typeof setTimeout> | null = null;
   private crossfadeFrame: number | null = null;
@@ -243,7 +246,7 @@ class AudioManager {
     this.isMenuMusic = true;
     this.recentInGameTracks = [];
     this.stopMusicElements();
-    this.playMusicFile(assetUrl(`music/Music-Menu/${MENU_MUSIC_TRACK}`), true);
+    this.playMusicFile(`music/Music-Menu/${MENU_MUSIC_TRACK}`, true);
   }
 
   /** Skip to the next song in the playlist. */
@@ -266,7 +269,7 @@ class AudioManager {
     const track = this.pickNextInGameTrack();
     this.recentInGameTracks.push(track);
     if (this.recentInGameTracks.length > 2) this.recentInGameTracks.shift();
-    this.playMusicFile(assetUrl(`music/Music-InGame/${track}`), false, crossfade);
+    this.playMusicFile(`music/Music-InGame/ThreatLevel1/${track}`, false, crossfade);
   }
 
   private playMusicFile(path: string, loop = false, crossfade = false): void {
@@ -275,12 +278,18 @@ class AudioManager {
     for (const staleFade of this.fadingMusicElements) this.disposeMusicElement(staleFade);
     this.fadingMusicElements.clear();
     const outgoing = this.musicElement;
-    const el = new globalThis.Audio(path);
+    const el = new globalThis.Audio(assetUrl(path));
+    const source = this.ctx!.createMediaElementSource(el);
+    const gain = this.ctx!.createGain();
+    gain.gain.value = MUSIC_LOUDNESS_GAINS[path] ?? 1;
+    source.connect(gain);
+    gain.connect(this.musicGain!);
+    this.musicNodes.set(el, { source, gain });
     this.musicElement = el;
     const generation = ++this.musicGeneration;
     el.loop = loop;
     el.preload = 'auto';
-    el.volume = crossfade && outgoing ? 0 : this.effectiveMusicVolume();
+    el.volume = crossfade && outgoing ? 0 : 1;
     const scheduleCrossfade = (): void => {
       if (loop || this.musicElement !== el || generation !== this.musicGeneration) return;
       const delayMs = Math.max(0, (el.duration - el.currentTime - MUSIC_CROSSFADE_SECONDS) * 1000);
@@ -308,7 +317,7 @@ class AudioManager {
     const step = (now: number): void => {
       const progress = Math.min(1, (now - startedAt) / (MUSIC_CROSSFADE_SECONDS * 1000));
       outgoing.volume = outgoingStartVolume * (1 - progress);
-      incoming.volume = this.effectiveMusicVolume() * progress;
+      incoming.volume = progress;
       if (progress < 1 && this.musicElement === incoming) {
         this.crossfadeFrame = requestAnimationFrame(step);
       } else {
@@ -329,6 +338,10 @@ class AudioManager {
 
   private disposeMusicElement(el: HTMLAudioElement): void {
     el.pause();
+    const nodes = this.musicNodes.get(el);
+    nodes?.source.disconnect();
+    nodes?.gain.disconnect();
+    this.musicNodes.delete(el);
     el.removeAttribute('src');
     el.load();
   }
@@ -358,10 +371,6 @@ class AudioManager {
     try { window.localStorage?.setItem('sign99:music-volume', String(this.musicVolume)); } catch { /* optional */ }
     const effectiveVolume = this.effectiveMusicVolume();
     if (this.musicGain) this.musicGain.gain.value = effectiveVolume;
-    if (this.musicElement) this.musicElement.volume = effectiveVolume;
-    for (const el of this.fadingMusicElements) {
-      el.volume = Math.min(el.volume, effectiveVolume);
-    }
   }
 
   getSfxVolume(): number {
