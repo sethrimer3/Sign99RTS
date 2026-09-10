@@ -97,6 +97,7 @@ const en: Dict = {
   'settings.playerColor': 'Player Color',
   'settings.enemyColor': 'Enemy Color',
   'settings.spaceColor': 'Space Color',
+  'settings.font': 'Font',
   'settings.musicVolume': 'Music Volume',
   'settings.sfxVolume': 'SFX Volume',
   'settings.gameZoom': 'Game Zoom',

@@ -50,19 +50,12 @@ uniform vec2  u_camOffset;   // camera world position * parallax scale
 void main() {
   vec2 uv = (gl_FragCoord.xy / u_resolution.xy) - 0.5;
   uv.y *= u_resolution.y / u_resolution.x;
-
-  // Camera-position driven (no time drift).
-  // Slowed down by 5x and inverted Y-axis to match 2D canvas coordinates
-  float a1 = 0.45 + u_camOffset.x * 0.0000036;
-  float a2 = 0.75 + u_camOffset.y * -0.0000036;
+  // Static viewing angle (no camera drift). Parallax is handled per-layer below.
+  float a1 = 0.45;
+  float a2 = 0.75;
 
   mat2 rot1 = mat2(cos(a1), sin(a1), -sin(a1), cos(a1));
   mat2 rot2 = mat2(cos(a2), sin(a2), -sin(a2), cos(a2));
-
-  // Increased zoom (2.5) to make stars smaller
-  vec3 dir = vec3(uv * 2.5, 1.0);
-  dir.xz = rot1 * dir.xz;
-  dir.xy = rot2 * dir.xy;
 
   vec3 from = vec3(1.0, 0.5, 0.5);
   // Removed camera translation/rotation on 'from' so we only rotate our view.
@@ -74,6 +67,16 @@ void main() {
   vec3  v   = vec3(0.0);
 
   for (int r = 0; r < ${volsteps}; r++) {
+    // True layered 2D parallax: shift the UV coordinates differently for each depth step!
+    // Closer layers (small s) scroll faster, distant layers (large s) scroll slower.
+    // Invert Y-axis to match 2D canvas coordinates.
+    float speed = 0.00002 + max(0.0, 2.0 - s) * 0.000065;
+    vec2 layerOffset = vec2(u_camOffset.x, -u_camOffset.y) * speed;
+    
+    vec3 dir = vec3((uv + layerOffset) * 2.5, 1.0);
+    dir.xz = rot1 * dir.xz;
+    dir.xy = rot2 * dir.xy;
+
     vec3 p = from + s * dir * 0.5;
     p = abs(vec3(0.850) - mod(p, vec3(1.700)));
 

@@ -171,6 +171,7 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
   const intensity = Math.max(0, Math.min(1, opts.intensity));
   if (intensity <= 0.001 || side < 6) return;
 
+  if (typeof document === 'undefined') return;
   if (!noiseTile) noiseTile = buildNoiseTile();
   const tile = noiseTile;
 

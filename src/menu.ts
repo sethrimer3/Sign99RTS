@@ -23,7 +23,14 @@ import { SPACE_COLOR_OPTIONS, activeSpaceColor, saveSpaceThemeSettings, spaceCol
 import { Input, KEYBIND_DEFINITIONS, type BindableKey } from './input.js';
 import { Audio } from './audio.js';
 import { buildLabel } from './version.js';
-import { gameFont } from './fonts.js';
+import {
+  gameFont,
+  GAME_FONT_OPTIONS,
+  getActiveFont,
+  setActiveFont,
+  fontLabel,
+  type GameFontId,
+} from './fonts.js';
 import { drawDecodedText } from './decodeText.js';
 import { t as tr, LOCALES, LOCALE_NAMES, getLocale, setLocale, type Locale } from './i18n.js';
 import { applyThemeColors, cycleThemeColor, saveThemeSettings, themeColor, themeColorLabel, themeSettings, type ThemeColorId } from './theme.js';
@@ -331,6 +338,7 @@ export class MainMenu {
   private surrenderArmed = false;
   private languageDropdownOpen = false;
   private spaceColorDropdownOpen = false;
+  private fontDropdownOpen = false;
   private awaitingBinding: BindableKey | null = null;
 
   // Output set by setup screens after the user clicks their start button.
@@ -357,6 +365,7 @@ export class MainMenu {
     this.settingsTab = 'gameplay';
     this.languageDropdownOpen = false;
     this.spaceColorDropdownOpen = false;
+    this.fontDropdownOpen = false;
     this.awaitingBinding = null;
     this.setState('settings');
   }
@@ -1149,10 +1158,10 @@ export class MainMenu {
     ctx.fillText(tr('settings.heading'), cx, 90);
 
     this.drawButtonRow(ctx, [
-      { label: tr('settings.tab.gameplay'), emphasis: this.settingsTab === 'gameplay', action: () => { this.settingsTab = 'gameplay'; this.settingsScroll = 0; } },
-      { label: tr('settings.tab.graphics'), emphasis: this.settingsTab === 'graphics', action: () => { this.settingsTab = 'graphics'; this.settingsScroll = 0; } },
-      { label: tr('settings.tab.audio'), emphasis: this.settingsTab === 'audio', action: () => { this.settingsTab = 'audio'; this.settingsScroll = 0; } },
-      { label: tr('settings.tab.controls'), emphasis: this.settingsTab === 'controls', action: () => { this.settingsTab = 'controls'; this.settingsScroll = 0; } },
+      { label: tr('settings.tab.gameplay'), emphasis: this.settingsTab === 'gameplay', action: () => { this.settingsTab = 'gameplay'; this.settingsScroll = 0; this.languageDropdownOpen = false; this.spaceColorDropdownOpen = false; this.fontDropdownOpen = false; } },
+      { label: tr('settings.tab.graphics'), emphasis: this.settingsTab === 'graphics', action: () => { this.settingsTab = 'graphics'; this.settingsScroll = 0; this.languageDropdownOpen = false; this.spaceColorDropdownOpen = false; this.fontDropdownOpen = false; } },
+      { label: tr('settings.tab.audio'), emphasis: this.settingsTab === 'audio', action: () => { this.settingsTab = 'audio'; this.settingsScroll = 0; this.languageDropdownOpen = false; this.spaceColorDropdownOpen = false; this.fontDropdownOpen = false; } },
+      { label: tr('settings.tab.controls'), emphasis: this.settingsTab === 'controls', action: () => { this.settingsTab = 'controls'; this.settingsScroll = 0; this.languageDropdownOpen = false; this.spaceColorDropdownOpen = false; this.fontDropdownOpen = false; } },
     ], cx, 130);
 
     const x = cx - 230;
@@ -1164,7 +1173,7 @@ export class MainMenu {
     const contentBottom = this.settingsTab === 'controls'
       ? 190 + (KEYBIND_DEFINITIONS.length + 1) * rowH + 90
       : this.settingsTab === 'gameplay' ? (this.languageDropdownOpen ? 620 : 390)
-      : this.settingsTab === 'graphics' ? (this.spaceColorDropdownOpen ? 608 + SPACE_COLOR_OPTIONS.length * 30 : 608)
+      : this.settingsTab === 'graphics' ? (652 + (this.spaceColorDropdownOpen ? SPACE_COLOR_OPTIONS.length * 30 : 0) + (this.fontDropdownOpen ? GAME_FONT_OPTIONS.length * 30 : 0))
       : 520;
     const maxScroll = Math.max(0, contentBottom - viewportBottom);
     if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
@@ -1197,6 +1206,7 @@ export class MainMenu {
         themeSettings.enemyColor = v; applyThemeColors(); saveThemeSettings();
       });
       y = this.drawSpaceColorDropdown(ctx, x, y, rowH);
+      y = this.drawFontDropdown(ctx, x, y, rowH);
       y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.gameZoom'), this.gameZoom, (v) => { this.gameZoom = v; });
       this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.uiZoom'), this.pendingUiZoom ?? this.uiZoom, (v) => { this.pendingUiZoom = v; });
     } else if (this.settingsTab === 'audio') {
@@ -1629,6 +1639,37 @@ export class MainMenu {
         optionY += row.h;
       }
       return y + h + SPACE_COLOR_OPTIONS.length * 30;
+    }
+    return y + h;
+  }
+
+  private drawFontDropdown(ctx: CanvasRenderingContext2D, x: number, y: number, h: number): number {
+    this.drawRowLabel(ctx, x, y, tr('settings.font'));
+    const rect: HitRect = { x: x + 200, y: y - 15, w: 240, h: 30 };
+    const current = getActiveFont();
+
+    this.drawControlWell(ctx, rect, pointInRect(this.mouseX(), this.mouseY(), rect), this.fontDropdownOpen ? 1 : 0);
+    ctx.font = gameFont(17);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = colorToCSS(TextColors.normal);
+    ctx.fillText(`${fontLabel(current)}  ▾`, rect.x + rect.w / 2, y);
+    if (this.handleClick(rect)) this.fontDropdownOpen = !this.fontDropdownOpen;
+
+    if (this.fontDropdownOpen) {
+      let optionY = rect.y + rect.h;
+      for (const option of GAME_FONT_OPTIONS) {
+        const row: HitRect = { x: rect.x, y: optionY, w: rect.w, h: 30 };
+        this.drawControlWell(ctx, row, pointInRect(this.mouseX(), this.mouseY(), row), option.id === current ? 1 : 0);
+        ctx.fillStyle = colorToCSS(TextColors.normal);
+        ctx.fillText(option.label, row.x + row.w / 2, row.y + row.h / 2);
+        if (this.handleClick(row)) {
+          setActiveFont(option.id as GameFontId);
+          this.fontDropdownOpen = false;
+        }
+        optionY += row.h;
+      }
+      return y + h + GAME_FONT_OPTIONS.length * 30;
     }
     return y + h;
   }

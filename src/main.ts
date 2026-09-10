@@ -1,12 +1,13 @@
 /** Entry point for Sign99 */
 
 import { Game } from './game.js';
-import { loadGameFonts } from './fonts.js';
+import { loadGameFonts, loadFontSettings } from './fonts.js';
 import { applyThemeColors, loadThemeSettings } from './theme.js';
 import { loadSpaceThemeSettings } from './spaceTheme.js';
 import { installTextOutline } from './textoutline.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
+  loadFontSettings();
   loadThemeSettings();
   applyThemeColors();
   loadSpaceThemeSettings();
