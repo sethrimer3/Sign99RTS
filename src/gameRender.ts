@@ -124,14 +124,22 @@ export function drawWaypointMarkers(
 
     ctx.globalCompositeOperation = 'source-over';
     ctx.font = `bold ${Math.max(9, 12 * camera.zoom)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    // `textBaseline='middle'` centres on the font's metric box, not the actual
+    // glyph ink — short glyphs (digits, 'A') sit low and '+' (drawn on the math
+    // axis) sits high, so the label looks off-centre inside the lockward rings,
+    // which are centred on the origin. Measure the real ink box and offset so
+    // the glyph's centre lands at (0, 0).
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    const m = ctx.measureText(label);
+    const glyphX = -(m.actualBoundingBoxLeft + m.actualBoundingBoxRight) / 2 + m.actualBoundingBoxLeft;
+    const glyphY = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
     ctx.lineJoin = 'round';
     ctx.lineWidth = Math.max(3, 4 * camera.zoom);
     ctx.strokeStyle = 'rgba(0,0,0,0.96)';
-    ctx.strokeText(label, 0, 0);
+    ctx.strokeText(label, glyphX, glyphY);
     ctx.fillStyle = colorToCSS(color, 1);
-    ctx.fillText(label, 0, 0);
+    ctx.fillText(label, glyphX, glyphY);
     ctx.restore();
   }
 }
@@ -516,6 +524,7 @@ export function drawBaseLockwardEffect(
       radiusPx,
       opacity: 0.5,
       rings: 6,
+      centerOpacityBias: 0.75,
     });
   }
 }

@@ -33,6 +33,47 @@ function emitBuildingDamageSparks(state: GameState, target: Entity, hitPoint: Ve
 }
 
 // ---------------------------------------------------------------------------
+// Splash / area-of-effect damage
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared 4-step ("ring") splash-damage falloff used by every AOE source in the
+ * game (missile-turret rockets, guided missile + its rocket swarm, singularity
+ * turret, bomber-fighter missiles, Nova Bombs, mines, …).
+ *
+ * Instead of a smooth gradient the blast is divided into four concentric bands
+ * measured as a fraction `t = distance / blastRadius`:
+ *
+ *   • inner 25%  (t ≤ 0.25)          → 100% damage
+ *   • 25%–50%    (0.25 < t ≤ 0.50)   →  75% damage
+ *   • 50%–75%    (0.50 < t ≤ 0.75)   →  50% damage
+ *   • outer 25%  (0.75 < t ≤ 1.00)   →  25% damage
+ *   • beyond the radius              →   0% damage
+ *
+ * Returns the raw multiplier; callers apply it via {@link ringSplashDamage}.
+ */
+export function ringSplashMultiplier(distance: number, blastRadius: number): number {
+  if (blastRadius <= 0) return 1;
+  const t = distance / blastRadius;
+  if (t <= 0.25) return 1;
+  if (t <= 0.5) return 0.75;
+  if (t <= 0.75) return 0.5;
+  if (t <= 1) return 0.25;
+  return 0;
+}
+
+/**
+ * Applies the {@link ringSplashMultiplier} band to `baseDamage`, rounding the
+ * result up to the nearest whole number (every band rounds up so a glancing
+ * outer hit still chips at least 1 point off a target it reaches).
+ */
+export function ringSplashDamage(baseDamage: number, distance: number, blastRadius: number): number {
+  const mult = ringSplashMultiplier(distance, blastRadius);
+  if (mult <= 0) return 0;
+  return Math.ceil(baseDamage * mult);
+}
+
+// ---------------------------------------------------------------------------
 // Target-selection helpers
 // ---------------------------------------------------------------------------
 

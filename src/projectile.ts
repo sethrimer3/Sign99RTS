@@ -65,6 +65,14 @@ export abstract class ProjectileBase extends Entity {
    */
   interceptable: boolean = false;
 
+  /**
+   * When true, ANY positive damage (a single bullet, a laser tick, a stray
+   * splash hit) destroys this projectile outright rather than whittling its
+   * health down.  Used by missile-turret rockets and bomber-fighter missiles:
+   * they carry a blast radius so the game loop detonates them on death.
+   */
+  fragile: boolean = false;
+
   constructor(opts: ProjectileOptions) {
     super(opts.type, opts.team, opts.position, 1, ENTITY_RADIUS.bullet);
     this.angle = opts.angle;
@@ -80,6 +88,16 @@ export abstract class ProjectileBase extends Entity {
       Math.sin(opts.angle) * opts.speed,
     );
     this.trail.push({ pos: this.position.clone(), age: 0 });
+  }
+
+  override takeDamage(amount: number, source?: Entity): void {
+    if (!this.alive) return;
+    if (this.fragile && amount > 0) {
+      this.health = 0;
+      this.destroy();
+      return;
+    }
+    super.takeDamage(amount, source);
   }
 
   update(dt: number): void {
@@ -540,6 +558,8 @@ export class GatlingTurretBullet extends ProjectileBase {
 export class Missile extends ProjectileBase {
   targetEntity: Entity | null = null;
   readonly turnRate: number = 2.5;
+  /** Small area-of-effect blast on impact (4-step ring falloff in GameState). */
+  readonly blastRadius: number = 30;
 
   constructor(
     team: Team,
@@ -560,6 +580,13 @@ export class Missile extends ProjectileBase {
     });
     this.radius = ENTITY_RADIUS.missile;
     this.targetEntity = target;
+    // Missile-turret rockets can be shot out of the air: any hit destroys them,
+    // then the blast-radius detonation path in GameState fires the AOE.
+    // maxHealth must be > 1 for turrets/fighters to consider it a valid target.
+    this.health = 2;
+    this.maxHealth = 2;
+    this.interceptable = true;
+    this.fragile = true;
   }
 
   update(dt: number): void {
@@ -739,6 +766,13 @@ export class BomberMissile extends ProjectileBase {
       source,
     });
     this.radius = ENTITY_RADIUS.missile * 1.25;
+    // Bomber-fighter missiles deal splash damage but, like missile-turret
+    // rockets, can be shot down mid-flight — any hit destroys them and the
+    // blast-radius detonation path in GameState applies the ring-falloff AOE.
+    this.health = 2;
+    this.maxHealth = 2;
+    this.interceptable = true;
+    this.fragile = true;
     if (this.isShipOrFighterFire()) {
       this.enableGlowTrail({
         color: colorToCSS(Colors.missile_trail, 0.8),

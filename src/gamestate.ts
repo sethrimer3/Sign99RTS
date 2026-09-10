@@ -16,7 +16,7 @@ import { Audio } from './audio.js';
 import { WorldGrid, GRID_CELL_SIZE, cellKey, footprintOrigin, footprintCenter } from './grid.js';
 import { PowerGraph } from './power.js';
 import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, CONDUIT_COST, DT } from './constants.js';
-import { findClosestEnemy } from './combatUtils.js';
+import { findClosestEnemy, ringSplashDamage } from './combatUtils.js';
 import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS, RESEARCH_MODE, RESEARCH_TIME, TICK_RATE } from './constants.js';
 import { buildCostForBuildingType, type BuildDef } from './builddefs.js';
 import { Colors, colorToCSS } from './colors.js';
@@ -1310,8 +1310,11 @@ export class GameState {
       if (!e.alive || e === proj || e.team === Team.Neutral || e.team === proj.team) continue;
       const d = e.position.distanceTo(proj.position);
       if (d > blastRadius + e.radius) continue;
-      const falloff = Math.max(0.35, 1 - d / Math.max(1, blastRadius));
-      e.takeDamage(e === directTarget ? proj.damage : proj.damage * falloff, proj);
+      // Direct impact target takes full damage; everything else caught in the
+      // blast uses the shared 4-step ring falloff.
+      const dmg = e === directTarget ? proj.damage : ringSplashDamage(proj.damage, d, blastRadius);
+      if (dmg <= 0) continue;
+      e.takeDamage(dmg, proj);
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else this.emitBuildingDamageSparks(e, proj.position);
@@ -1424,12 +1427,16 @@ export class GameState {
   }
 
   private applyNovaBombPulse(proj: SynonymousNovaBomb): void {
-    // Nova Bombs apply two fixed-damage pulses; radius/damage are already
-    // scaled by living bomber drones when the projectile is created.
+    // Nova Bombs apply two pulses; radius/damage are already scaled by living
+    // bomber drones when the projectile is created. Each pulse uses the shared
+    // 4-step ring falloff from the blast centre.
     for (const e of this.queryEntitiesInRange(proj.position, proj.aoeRadius + ENTITY_RADIUS.building, this.spatialQueryScratch)) {
       if (!e.alive || e === proj || e.team === Team.Neutral || e.team === proj.team) continue;
-      if (e.position.distanceTo(proj.position) > proj.aoeRadius + e.radius) continue;
-      e.takeDamage(proj.pulseDamage, proj);
+      const d = e.position.distanceTo(proj.position);
+      if (d > proj.aoeRadius + e.radius) continue;
+      const dmg = ringSplashDamage(proj.pulseDamage, d, proj.aoeRadius);
+      if (dmg <= 0) continue;
+      e.takeDamage(dmg, proj);
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else this.emitBuildingDamageSparks(e, proj.position);
@@ -1467,8 +1474,9 @@ export class GameState {
       if (!e.alive || e === proj || e.team === Team.Neutral || e.team === proj.team) continue;
       const d = e.position.distanceTo(proj.position);
       if (d > radius + e.radius) continue;
-      const falloff = Math.max(0.45, 1 - d / Math.max(1, radius));
-      e.takeDamage(proj.damage * falloff, proj);
+      const dmg = ringSplashDamage(proj.damage, d, radius);
+      if (dmg <= 0) continue;
+      e.takeDamage(dmg, proj);
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else this.emitBuildingDamageSparks(e, proj.position);

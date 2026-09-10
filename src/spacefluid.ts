@@ -97,6 +97,17 @@ const DYE_RETAIN_PER_SEC  = 0.28;
  */
 const MAX_GRID_VEL        = 48.0;
 const PARTICLE_FLOW_VARIATION_RAD = Math.PI / 90; // 2 degrees
+/**
+ * Per-particle mobility (inverse mass) range.  At wake / recycle each particle is
+ * randomly assigned a mass so it is propelled anywhere from 75 % as easily (more
+ * inertia, moves less) to 150 % as easily (less inertia, propelled faster and
+ * further) as the raw velocity field would otherwise carry it.
+ */
+const PARTICLE_MOBILITY_MIN   = 0.75;
+const PARTICLE_MOBILITY_MAX   = 1.5;
+function _randMobility(): number {
+  return PARTICLE_MOBILITY_MIN + Math.random() * (PARTICLE_MOBILITY_MAX - PARTICLE_MOBILITY_MIN);
+}
 
 // ── Colour helpers ─────────────────────────────────────────────────────────────
 /** Minimum RGB magnitude (0–255 space) for the dye field to influence a particle's colour. */
@@ -214,6 +225,11 @@ interface FluidParticle {
   maxAlphaScale: number;
   /** Tiny per-particle steering offset so disturbed particles do not stack exactly. */
   flowAngleOffset: number;
+  /**
+   * Inverse-mass factor (0.75–1.5) applied to the advecting velocity so heavier
+   * particles resist the flow and lighter ones are flung further.
+   */
+  mobility: number;
 }
 
 function _makeParticle(): FluidParticle {
@@ -236,6 +252,7 @@ function _makeParticle(): FluidParticle {
     activation:    0.0,
     maxAlphaScale: 0.7 + Math.random() * 0.3,
     flowAngleOffset: (Math.random() * 2 - 1) * PARTICLE_FLOW_VARIATION_RAD,
+    mobility: _randMobility(),
   };
 }
 
@@ -553,8 +570,10 @@ export function createSpaceFluid(): SpaceFluid {
       const rawVy = _bilerp(vyGrid, p.x, p.y);
       const cosVar = Math.cos(p.flowAngleOffset);
       const sinVar = Math.sin(p.flowAngleOffset);
-      const vx = rawVx * cosVar - rawVy * sinVar;
-      const vy = rawVx * sinVar + rawVy * cosVar;
+      // Per-particle inverse mass: lighter particles are propelled further/faster
+      // by the same field velocity, heavier ones resist it.
+      const vx = (rawVx * cosVar - rawVy * sinVar) * p.mobility;
+      const vy = (rawVx * sinVar + rawVy * cosVar) * p.mobility;
 
       // Euler-integrate position in grid space.
       p.x += vx * dt;

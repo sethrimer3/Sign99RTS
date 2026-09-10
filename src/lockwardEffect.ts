@@ -26,6 +26,14 @@ export interface LockwardStyle {
   opacity?: number;
   /** Number of concentric ward rings. Default 5. */
   rings?: number;
+  /**
+   * Bias tooth opacity toward the inner rings, 0..1. 0 (default) keeps every
+   * ring in the same opacity range. Higher values fade the outermost rings
+   * toward transparency while lifting the innermost rings above the baseline;
+   * the per-tooth random variation is preserved so neighbouring rings still
+   * overlap in opacity, they just trend brighter toward the centre.
+   */
+  centerOpacityBias?: number;
   /** Canvas composite op for the wards. Default 'lighter' (additive glow). */
   composite?: GlobalCompositeOperation;
 }
@@ -54,6 +62,7 @@ export function renderLockward(
   if (outer < 4) return;
   const rings = style.rings ?? 5;
   const opacity = style.opacity ?? 1;
+  const centerBias = Math.max(0, Math.min(1, style.centerOpacityBias ?? 0));
   const innerHole = outer * 0.14;
   const col = style.color;
 
@@ -76,6 +85,12 @@ export function renderLockward(
     const bandInner = innerHole + (outer - innerHole) * t0 * (0.90 + h1 * 0.16);
     const bandOuter = innerHole + (outer - innerHole) * t1 * (0.92 + h2 * 0.18);
 
+    // 1 at the innermost ring → 0 at the outermost. Lifts inner teeth slightly
+    // above the baseline and fades outer rings toward transparency, while the
+    // per-tooth `sa` term below keeps the ranges overlapping between rings.
+    const centerT = rings > 1 ? 1 - r / (rings - 1) : 1;
+    const radialMul = 1 + centerBias * (centerT * 0.35 - (1 - centerT) * 0.85);
+
     const segs = 5 + Math.floor(hash(seed + r * 3.1) * 9); // 5..13 teeth
     for (let s = 0; s < segs; s++) {
       const sa = hash(seed * 2.7 + r * 17.1 + s * 5.5);
@@ -85,7 +100,7 @@ export function renderLockward(
       // Independent blink for this tooth.
       const blink = 0.55 + 0.45 * Math.sin(timeSec * (0.6 + sb * 2.4) + sa * 12.0);
       const shade = 0.45 + sb * 0.55;                       // brightness of tooth
-      const alpha = (0.10 + sa * 0.30) * blink * opacity;   // translucency
+      const alpha = (0.10 + sa * 0.30) * blink * opacity * radialMul; // translucency
       if (alpha <= 0.012) continue;
 
       const step = (Math.PI * 2) / segs;
