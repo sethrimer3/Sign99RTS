@@ -3,6 +3,21 @@ setlocal
 
 pushd "%~dp0"
 
+set "PACKAGE_RUNNER="
+set "PACKAGE_MODE=npm"
+where npm >nul 2>nul
+if not errorlevel 1 set "PACKAGE_RUNNER=npm"
+
+if not defined PACKAGE_RUNNER (
+  set "BUNDLED_NODE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin"
+  set "BUNDLED_PNPM=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd"
+  if exist "%BUNDLED_NODE%\node.exe" if exist "%BUNDLED_PNPM%" (
+    set "PATH=%BUNDLED_NODE%;%PATH%"
+    set "PACKAGE_RUNNER=%BUNDLED_PNPM%"
+    set "PACKAGE_MODE=bundled"
+  )
+)
+
 if not exist "package.json" (
   echo Missing package.json. Run this launcher from the Sign99RTS repository root.
   goto error
@@ -15,10 +30,9 @@ if errorlevel 1 (
   goto error
 )
 
-where npm >nul 2>nul
-if errorlevel 1 (
-  echo npm is not installed or is not on PATH.
-  echo Reinstall Node.js 18 or newer with npm enabled, then run this file again.
+if not defined PACKAGE_RUNNER (
+  echo npm or pnpm is required but neither was found.
+  echo Install Node.js 18 or newer with npm enabled, then run this file again.
   goto error
 )
 
@@ -32,24 +46,34 @@ if %NODE_MAJOR% LSS 18 (
 
 if not exist "node_modules\" (
   echo Installing dependencies...
-  call npm install
+  call "%PACKAGE_RUNNER%" install
   if errorlevel 1 goto error
 )
 
 if not exist "node_modules\.bin\electron.cmd" (
   echo Electron is missing. Repairing dependencies...
-  call npm install
+  call "%PACKAGE_RUNNER%" install
   if errorlevel 1 goto error
 )
 
 if not exist "node_modules\.bin\tsx.cmd" (
   echo LAN helper runtime is missing. Repairing dependencies...
-  call npm install
+  call "%PACKAGE_RUNNER%" install
   if errorlevel 1 goto error
 )
 
 echo Starting Sign99RTS desktop build...
-call npm run build
+if "%PACKAGE_MODE%"=="bundled" (
+  node scripts\scan-music.mjs
+  if errorlevel 1 goto error
+  node node_modules\typescript\bin\tsc --noEmit
+  if errorlevel 1 goto error
+  node node_modules\vite\bin\vite.js build
+  if errorlevel 1 goto error
+  node node_modules\typescript\bin\tsc --project tsconfig.server.json
+) else (
+  call "%PACKAGE_RUNNER%" run build
+)
 if errorlevel 1 goto error
 
 echo Launching Sign99RTS desktop with LAN helper auto-start enabled...
