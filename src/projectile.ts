@@ -11,7 +11,7 @@ import type { SpaceFluid } from './spacefluid.js';
 import { damageLaserLine } from './combatUtils.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
-import { renderWarmGlowLine } from './warmGlow.js';
+import { renderWarmGlowLine, warmGlowFrameStyle } from './warmGlow.js';
 
 const BULLET_TRAIL_LIFETIME = 0.12;
 const BULLET_TRAIL_MIN_DISTANCE = 2;
@@ -954,57 +954,56 @@ export class Laser extends ProjectileBase {
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
 
-    ctx.strokeStyle = this.team === Team.Player
-      ? colorToCSS(Colors.friendlyfire, 0.16 * fade)
-      : colorToCSS(Colors.enemyfire, 0.16 * fade);
-    ctx.lineWidth = 8;
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
+    if (isLegacyGraphics()) {
+      // --- Legacy beam: layered additive strokes + crawling dashes. ---
+      ctx.strokeStyle = this.team === Team.Player
+        ? colorToCSS(Colors.friendlyfire, 0.16 * fade)
+        : colorToCSS(Colors.enemyfire, 0.16 * fade);
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
 
-    ctx.strokeStyle = fireColor;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
+      ctx.strokeStyle = fireColor;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
 
-    const crawl = ((performance.now() * 0.12) % 12) - 12;
-    ctx.setLineDash([8, 10]);
-    ctx.lineDashOffset = crawl;
-    ctx.strokeStyle = fireColor;
-    ctx.lineWidth = 1.25;
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
+      const crawl = ((performance.now() * 0.12) % 12) - 12;
+      ctx.setLineDash([8, 10]);
+      ctx.lineDashOffset = crawl;
+      ctx.strokeStyle = fireColor;
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-    // Bright core
-    ctx.strokeStyle = `rgba(255,255,255,${0.72 * fade})`;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
+      // Bright core
+      ctx.strokeStyle = `rgba(255,255,255,${0.72 * fade})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
 
-    ctx.strokeStyle = `rgba(255,255,255,${0.35 * fade})`;
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.arc(to.x, to.y, 5 * camera.zoom, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Warm shader-style bloom along the beam (High / Ultra, non-legacy only) —
-    // the same glow used by building corner nodes, via the shared renderer.
-    // Drawn last so it sits on top of the additive beam strokes and reads.
-    if (!isLegacyGraphics()) {
+      ctx.strokeStyle = `rgba(255,255,255,${0.35 * fade})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(to.x, to.y, 5 * camera.zoom, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      // The beam IS a building corner-node perimeter, stretched to a line:
+      // a thin warm amber stroke wrapped in the shared two-pass warm bloom,
+      // identical proportions to warmGlowFrameStyle().
+      const beamScale = Math.max(9, 11 * camera.zoom);
       renderWarmGlowLine(ctx, from.x, from.y, to.x, to.y, {
         intensity: fade,
-        alpha: 1,
-        lineWidth: Math.max(4, 5 * camera.zoom),
-        blur: Math.max(14, 16 * camera.zoom),
-        innerBlur: Math.max(5, 6 * camera.zoom),
+        ...warmGlowFrameStyle(beamScale),
       });
     }
     ctx.restore();

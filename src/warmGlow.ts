@@ -59,6 +59,20 @@ const DEFAULTS = {
 };
 
 /**
+ * Line-width / blur / inner-blur as fractions of a reference size — the exact
+ * ratios the building corner-node frame uses.  Feed a `scale` (the node edge
+ * for a building, the beam thickness for a laser) to get a glow with identical
+ * proportions to the node perimeter.
+ */
+export function warmGlowFrameStyle(scale: number): Pick<WarmGlowStyle, 'lineWidth' | 'blur' | 'innerBlur'> {
+  return {
+    lineWidth: scale * 0.14,
+    blur: scale * 0.9,
+    innerBlur: scale * 0.4,
+  };
+}
+
+/**
  * Trace the warm bloom along `path`.  No-op when the tier disables it or the
  * effective intensity rounds to nothing.  Leaves `ctx` state as it found it.
  */

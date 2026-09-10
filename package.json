@@ -21,7 +21,8 @@
     "test:watch": "vitest",
     "music:scan": "node scripts/scan-music.mjs",
     "prebuild": "npm run music:scan",
-    "predev": "npm run music:scan"
+    "predev": "npm run music:scan",
+    "predev:host": "npm run music:scan"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
