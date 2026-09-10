@@ -496,6 +496,69 @@ export class ParticleSystem {
   }
 
   /**
+   * Fiery spray released when a ship's hull takes a non-lethal hit.
+   *
+   * Particles originate from the point on the ship's perimeter nearest the
+   * damage source (`hitPoint` — a projectile impact, the centre of a splash
+   * blast, or a laser/perimeter crossing) and spray straight outward, away
+   * from the ship's core, like a burst of scorched exhaust.
+   */
+  emitShipDamageSpray(center: Vec2, radius: number, hitPoint: Vec2, intensity: number = 1): void {
+    let ox = hitPoint.x - center.x;
+    let oy = hitPoint.y - center.y;
+    let olen = Math.hypot(ox, oy);
+    if (olen <= 1e-4) {
+      ox = 1;
+      oy = 0;
+      olen = 1;
+    }
+    ox /= olen;
+    oy /= olen;
+    const outAngle = Math.atan2(oy, ox);
+    const originX = center.x + ox * radius;
+    const originY = center.y + oy * radius;
+    const tangentAngle = outAngle + Math.PI / 2;
+
+    // Warm thrust palette, hottest at the core of the spray.
+    const warmPalette: Color[] = [
+      Colors.thrust_core_hot,
+      Colors.thrust_warm_yellow,
+      Colors.thrust_warm_orange,
+      Colors.thrust_burnt_orange,
+      Colors.thrust_deep_red,
+    ];
+
+    const count = Math.max(1, Math.round(9 * intensity * this._effectiveScale));
+    for (let i = 0; i < count; i++) {
+      const p = this.acquire();
+      p.active = true;
+      p.additive = true;
+
+      // Cluster the emission along the hull around the perimeter contact point.
+      const along = randomRange(-radius * 0.35, radius * 0.35);
+      p.x = originX + Math.cos(tangentAngle) * along;
+      p.y = originY + Math.sin(tangentAngle) * along;
+
+      const spread = randomRange(-0.7, 0.7);
+      const spd = randomRange(60, 190) * (0.7 + 0.6 * intensity);
+      p.vx = Math.cos(outAngle + spread) * spd;
+      p.vy = Math.sin(outAngle + spread) * spd;
+
+      // Tighter (more central) particles run hotter; the fringes cool off.
+      const heat = 1 - Math.min(1, Math.abs(spread) / 0.7);
+      const ci = Math.min(
+        warmPalette.length - 1,
+        Math.floor((1 - heat) * warmPalette.length + Math.random()),
+      );
+      p.color = warmPalette[ci];
+      p.alpha = randomRange(0.75, 1);
+      p.life = randomRange(0.18, 0.5);
+      p.maxLife = p.life;
+      p.size = randomRange(1.2, 3.0);
+    }
+  }
+
+  /**
    * Emit a small directional shower from a building impact point.
    * `outwardAngle` points away from the building body.
    */

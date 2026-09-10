@@ -23,6 +23,7 @@ import { Colors, colorToCSS } from './colors.js';
 import { teamColor } from './teamutils.js';
 import { isHostile } from './teamutils.js';
 import { GatlingField } from './gatlingField.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 import { footprintForBuilding, footprintForBuildingType } from './buildingfootprint.js';
 import { type FactionType, type ConfluenceTerritoryCircle, CONFLUENCE_BASE_RADIUS, CONFLUENCE_PLACEMENT_DISTANCE, CONFLUENCE_PLACEMENT_TOLERANCE, CONFLUENCE_PARENT_EXPAND_DURATION, CONFLUENCE_NEW_CIRCLE_GROW_DURATION, CONFLUENCE_INCLUDE_MARGIN, isConfluenceFaction, isSynonymousFaction } from './confluence.js';
 import { SynonymousSwarmSystem, SYNONYMOUS_BASE_PRODUCTION, SYNONYMOUS_BUILD_COST, SYNONYMOUS_CURRENCY_SYMBOL, SYNONYMOUS_FACTORY_PRODUCTION } from './synonymous.js';
@@ -848,6 +849,7 @@ export class GameState {
       const hitAngle = Math.atan2(velY, velX);
       this._bulletHitScratch.set(hitX, hitY);
       this.emitBuildingDamageSparks(target, this._bulletHitScratch);
+      this.emitShipHitSpray(target, this._bulletHitScratch);
       this.particles.emitImpact(target.position, hitAngle);
       Audio.playSoundAt('bhit0', target.position);
     }
@@ -1295,6 +1297,7 @@ export class GameState {
     } else {
       const hitAngle = Math.atan2(proj.velocity.y, proj.velocity.x);
       this.emitBuildingDamageSparks(target, proj.position);
+      this.emitShipHitSpray(target, proj.position);
       this.particles.emitImpact(target.position, hitAngle);
       Audio.playSoundAt('bhit0', target.position);
     }
@@ -1317,7 +1320,10 @@ export class GameState {
       e.takeDamage(dmg, proj);
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
-      else this.emitBuildingDamageSparks(e, proj.position);
+      else {
+        this.emitBuildingDamageSparks(e, proj.position);
+        this.emitShipHitSpray(e, proj.position);
+      }
     }
   }
 
@@ -1439,7 +1445,10 @@ export class GameState {
       e.takeDamage(dmg, proj);
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
-      else this.emitBuildingDamageSparks(e, proj.position);
+      else {
+        this.emitBuildingDamageSparks(e, proj.position);
+        this.emitShipHitSpray(e, proj.position);
+      }
     }
     this.spawnExplosionGlow(proj.position, proj.aoeRadius);
     this.ringEffects.spawn('shockwave', proj.position, proj.aoeRadius * 0.05, proj.aoeRadius, 0.45, 0.9);
@@ -1479,7 +1488,10 @@ export class GameState {
       e.takeDamage(dmg, proj);
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
-      else this.emitBuildingDamageSparks(e, proj.position);
+      else {
+        this.emitBuildingDamageSparks(e, proj.position);
+        this.emitShipHitSpray(e, proj.position);
+      }
     }
     this.ringEffects.spawn('shockwave', proj.position.clone(), radius * 0.35, radius, 0.22, 1.1);
     Audio.playSoundAt('explode1', proj.position);
@@ -1569,6 +1581,18 @@ export class GameState {
       if (!(p instanceof MassDriverBullet) || !p.isBursting || p.team === fighter.team) continue;
       fighter.avoidHazard(p.position, p.radius, dt);
     }
+  }
+
+  /**
+   * Fiery hull spray when a ship takes a non-lethal hit.  `hitSource` is the
+   * point the spray should point away from the ship's core toward: the
+   * projectile impact for a direct hit, or the centre of the blast for splash
+   * damage.  Piercing-laser crossings are handled in {@link combatUtils}.
+   */
+  emitShipHitSpray(target: Entity, hitSource: Vec2, intensity: number = 1): void {
+    if (isLegacyGraphics()) return;
+    if (!(target instanceof PlayerShip || target instanceof FighterShip)) return;
+    this.particles.emitShipDamageSpray(target.position, target.radius, hitSource, intensity);
   }
 
   private emitBuildingDamageSparks(target: Entity, hitSource: Vec2): void {

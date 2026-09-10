@@ -11,6 +11,7 @@ import { Team, EntityType, Entity } from './entities.js';
 import type { GameState } from './gamestate.js';
 import { Vec2 } from './math.js';
 import { SpaceFluid } from './spacefluid.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 
 const targetQueryScratch: Entity[] = [];
 const laserQueryScratch: Entity[] = [];
@@ -30,6 +31,59 @@ function emitBuildingDamageSparks(state: GameState, target: Entity, hitPoint: Ve
   if (!(target instanceof BuildingBase)) return;
   const impact = buildingImpactFromPoint(target, hitPoint);
   state.particles.emitBuildingDamageSparks(impact.pos, impact.outwardAngle);
+}
+
+/**
+ * Fiery hull spray for a non-lethal beam hit on a ship.  A piercing laser
+ * crosses the circular hull at (up to) two points — entry and exit — and each
+ * crossing throws its own spray straight outward from the ship's core.  When
+ * the beam only grazes or starts/ends inside the hull, a single spray is thrown
+ * from the perimeter point nearest the beam.
+ */
+function emitShipLaserCrossSpray(state: GameState, target: Entity, start: Vec2, end: Vec2): void {
+  if (isLegacyGraphics()) return;
+  if (
+    target.type !== EntityType.PlayerShip &&
+    target.type !== EntityType.Fighter &&
+    target.type !== EntityType.Bomber
+  ) {
+    return;
+  }
+  const cx = target.position.x;
+  const cy = target.position.y;
+  const r = target.radius;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const a = dx * dx + dy * dy;
+  if (a <= 1e-6) return;
+  const fx = start.x - cx;
+  const fy = start.y - cy;
+  const b = 2 * (fx * dx + fy * dy);
+  const c = fx * fx + fy * fy - r * r;
+  let disc = b * b - 4 * a * c;
+  let emitted = 0;
+  if (disc >= 0) {
+    disc = Math.sqrt(disc);
+    for (const t of [(-b - disc) / (2 * a), (-b + disc) / (2 * a)]) {
+      if (t < 0 || t > 1) continue;
+      state.particles.emitShipDamageSpray(
+        target.position,
+        r,
+        new Vec2(start.x + dx * t, start.y + dy * t),
+        0.8,
+      );
+      emitted++;
+    }
+  }
+  if (emitted === 0) {
+    const t = Math.max(0, Math.min(1, ((cx - start.x) * dx + (cy - start.y) * dy) / a));
+    state.particles.emitShipDamageSpray(
+      target.position,
+      r,
+      new Vec2(start.x + dx * t, start.y + dy * t),
+      0.8,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +215,7 @@ export function damageLaserLine(
         spaceFluid?.addExplosion(target.position.x, target.position.y, 1.2, 214, 134, 48);
       } else {
         emitBuildingDamageSparks(state, target, new Vec2(px, py));
+        emitShipLaserCrossSpray(state, target, start, end);
         state.particles.emitSpark(target.position);
       }
     }
@@ -216,6 +271,7 @@ export function damageLaserLineLimited(
       const px = start.x + dx * hit.t;
       const py = start.y + dy * hit.t;
       emitBuildingDamageSparks(state, target, new Vec2(px, py));
+      emitShipLaserCrossSpray(state, target, start, end);
       state.particles.emitSpark(target.position);
     }
   }
