@@ -342,24 +342,24 @@ export class DistantSuns {
 
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     if (level === 0) {
-      grad.addColorStop(0.000, 'rgba(255,255,225,0.94)');
-      grad.addColorStop(0.012, 'rgba(255,235,145,0.86)');
-      grad.addColorStop(0.032, 'rgba(255,192,70,0.70)');
-      grad.addColorStop(0.068, 'rgba(242,132,34,0.48)');
-      grad.addColorStop(0.135, 'rgba(200,72,18,0.28)');
-      grad.addColorStop(0.270, 'rgba(148,32,48,0.14)');
-      grad.addColorStop(0.460, 'rgba(88,14,88,0.07)');
-      grad.addColorStop(0.720, 'rgba(42,7,62,0.03)');
+      grad.addColorStop(0.000, 'rgba(255,200,100,0.94)');
+      grad.addColorStop(0.012, 'rgba(255,178,76,0.86)');
+      grad.addColorStop(0.032, 'rgba(220,120,40,0.70)');
+      grad.addColorStop(0.068, 'rgba(180,80,25,0.48)');
+      grad.addColorStop(0.135, 'rgba(140,50,15,0.28)');
+      grad.addColorStop(0.270, 'rgba(100,30,10,0.14)');
+      grad.addColorStop(0.460, 'rgba(60,15,5,0.07)');
+      grad.addColorStop(0.720, 'rgba(30,5,0,0.03)');
     } else {
       const boost = level === 2 ? 1.18 : 1;
-      grad.addColorStop(0.000, `rgba(255,218,166,${Math.min(1, 0.98 * boost).toFixed(3)})`);
-      grad.addColorStop(0.014, `rgba(227,138,74,${Math.min(1, 0.96 * boost).toFixed(3)})`);
-      grad.addColorStop(0.040, `rgba(198,90,46,${Math.min(1, 0.92 * boost).toFixed(3)})`);
-      grad.addColorStop(0.082, `rgba(163,71,40,${Math.min(1, 0.72 * boost).toFixed(3)})`);
-      grad.addColorStop(0.165, `rgba(138,47,31,${Math.min(1, 0.50 * boost).toFixed(3)})`);
-      grad.addColorStop(0.330, `rgba(107,58,34,${Math.min(1, 0.30 * boost).toFixed(3)})`);
-      grad.addColorStop(0.590, `rgba(58,32,21,${Math.min(1, 0.150 * boost).toFixed(3)})`);
-      grad.addColorStop(0.830, `rgba(24,15,12,${Math.min(1, 0.065 * boost).toFixed(3)})`);
+      grad.addColorStop(0.000, `rgba(255,200,100,${Math.min(1, 0.98 * boost).toFixed(3)})`);
+      grad.addColorStop(0.014, `rgba(255,178,76,${Math.min(1, 0.96 * boost).toFixed(3)})`);
+      grad.addColorStop(0.040, `rgba(220,120,40,${Math.min(1, 0.92 * boost).toFixed(3)})`);
+      grad.addColorStop(0.082, `rgba(180,80,25,${Math.min(1, 0.72 * boost).toFixed(3)})`);
+      grad.addColorStop(0.165, `rgba(140,50,15,${Math.min(1, 0.50 * boost).toFixed(3)})`);
+      grad.addColorStop(0.330, `rgba(100,30,10,${Math.min(1, 0.30 * boost).toFixed(3)})`);
+      grad.addColorStop(0.590, `rgba(60,15,5,${Math.min(1, 0.150 * boost).toFixed(3)})`);
+      grad.addColorStop(0.830, `rgba(30,5,0,${Math.min(1, 0.065 * boost).toFixed(3)})`);
     }
     grad.addColorStop(1.000, 'rgba(0,0,0,0)');
 
@@ -390,15 +390,15 @@ export class DistantSuns {
     const r = Math.hypot(w, h) * (level === 0 ? 0.98 : level === 1 ? 1.08 : level === 2 ? 1.22 : level === 3 ? 1.36 : 1.50);
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     if (level === 0) {
-      grad.addColorStop(0.00, 'rgba(255,182,62,0.065)');
-      grad.addColorStop(0.30, 'rgba(220,122,40,0.042)');
-      grad.addColorStop(0.65, 'rgba(160,58,18,0.022)');
+      grad.addColorStop(0.00, 'rgba(255,178,76,0.065)');
+      grad.addColorStop(0.30, 'rgba(220,120,40,0.042)');
+      grad.addColorStop(0.65, 'rgba(180,80,25,0.022)');
     } else {
       const boost = level === 2 ? 1.34 : 1;
-      grad.addColorStop(0.00, `rgba(227,138,74,${(0.165 * boost).toFixed(3)})`);
-      grad.addColorStop(0.24, `rgba(198,90,46,${(0.112 * boost).toFixed(3)})`);
-      grad.addColorStop(0.56, `rgba(163,71,40,${(0.066 * boost).toFixed(3)})`);
-      grad.addColorStop(0.82, `rgba(107,58,34,${(0.038 * boost).toFixed(3)})`);
+      grad.addColorStop(0.00, `rgba(255,178,76,${(0.165 * boost).toFixed(3)})`);
+      grad.addColorStop(0.24, `rgba(220,120,40,${(0.112 * boost).toFixed(3)})`);
+      grad.addColorStop(0.56, `rgba(180,80,25,${(0.066 * boost).toFixed(3)})`);
+      grad.addColorStop(0.82, `rgba(100,30,10,${(0.038 * boost).toFixed(3)})`);
     }
     grad.addColorStop(1.00, 'rgba(0,0,0,0)');
 
@@ -424,9 +424,9 @@ export class DistantSuns {
     const r = Math.hypot(w, h) * 0.86;
     const grad = ctx.createRadialGradient(cx, cy, Math.max(w, h) * 0.055, cx, cy, r);
     grad.addColorStop(0.00, 'rgba(255,255,255,0)');
-    grad.addColorStop(0.26, 'rgba(107,58,34,0.045)');
-    grad.addColorStop(0.58, 'rgba(58,32,21,0.080)');
-    grad.addColorStop(1.00, 'rgba(24,15,12,0.115)');
+    grad.addColorStop(0.26, 'rgba(100,30,10,0.045)');
+    grad.addColorStop(0.58, 'rgba(60,15,5,0.080)');
+    grad.addColorStop(1.00, 'rgba(30,5,0,0.115)');
 
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
@@ -453,10 +453,10 @@ export class DistantSuns {
     ctx.globalCompositeOperation = 'screen';
 
     const corona = ctx.createRadialGradient(cx, cy, coreR * 0.15, cx, cy, coronaR * pulse);
-    corona.addColorStop(0.00, 'rgba(255,218,166,0.88)');
-    corona.addColorStop(0.24, 'rgba(227,138,74,0.52)');
-    corona.addColorStop(0.52, 'rgba(198,90,46,0.24)');
-    corona.addColorStop(0.82, 'rgba(138,47,31,0.10)');
+    corona.addColorStop(0.00, 'rgba(255,200,100,0.88)');
+    corona.addColorStop(0.24, 'rgba(255,178,76,0.52)');
+    corona.addColorStop(0.52, 'rgba(220,120,40,0.24)');
+    corona.addColorStop(0.82, 'rgba(140,50,15,0.10)');
     corona.addColorStop(1.00, 'rgba(0,0,0,0)');
     ctx.fillStyle = corona;
     ctx.beginPath();
@@ -464,10 +464,10 @@ export class DistantSuns {
     ctx.fill();
 
     const core = ctx.createRadialGradient(cx - coreR * 0.22, cy - coreR * 0.18, 0, cx, cy, coreR);
-    core.addColorStop(0.00, 'rgba(255,236,190,0.98)');
-    core.addColorStop(0.30, 'rgba(227,138,74,0.92)');
-    core.addColorStop(0.68, 'rgba(198,90,46,0.72)');
-    core.addColorStop(1.00, 'rgba(138,47,31,0.18)');
+    core.addColorStop(0.00, 'rgba(255,220,140,0.98)');
+    core.addColorStop(0.30, 'rgba(255,178,76,0.92)');
+    core.addColorStop(0.68, 'rgba(220,120,40,0.72)');
+    core.addColorStop(1.00, 'rgba(140,50,15,0.18)');
     ctx.fillStyle = core;
     ctx.beginPath();
     ctx.arc(cx, cy, coreR * pulse, 0, Math.PI * 2);
@@ -524,16 +524,16 @@ export class DistantSuns {
       const makeGrad = (alpha: number): CanvasGradient => {
         const g = ctx.createLinearGradient(cx, cy, tipX, tipY);
         if (level === 0) {
-          g.addColorStop(0.00, `rgba(255,215,95,${(alpha).toFixed(3)})`);
-          g.addColorStop(0.18, `rgba(255,168,60,${(alpha * 0.72).toFixed(3)})`);
-          g.addColorStop(0.50, `rgba(240,108,32,${(alpha * 0.30).toFixed(3)})`);
-          g.addColorStop(0.80, `rgba(200,70,18,${(alpha * 0.08).toFixed(3)})`);
+          g.addColorStop(0.00, `rgba(255,200,100,${(alpha).toFixed(3)})`);
+          g.addColorStop(0.18, `rgba(255,178,76,${(alpha * 0.72).toFixed(3)})`);
+          g.addColorStop(0.50, `rgba(220,120,40,${(alpha * 0.30).toFixed(3)})`);
+          g.addColorStop(0.80, `rgba(180,80,25,${(alpha * 0.08).toFixed(3)})`);
         } else {
           const boost = level >= 9 ? 1.82 : level >= 8 ? 1.68 : level >= 7 ? 1.56 : level >= 6 ? 1.42 : level >= 5 ? 1.34 : level >= 3 ? 1.26 : level === 2 ? 1.16 : 1;
-          g.addColorStop(0.00, `rgba(227,138,74,${Math.min(1, alpha * boost).toFixed(3)})`);
-          g.addColorStop(0.18, `rgba(198,90,46,${Math.min(1, alpha * 0.80 * boost).toFixed(3)})`);
-          g.addColorStop(0.50, `rgba(163,71,40,${Math.min(1, alpha * 0.42 * boost).toFixed(3)})`);
-          g.addColorStop(0.82, `rgba(107,58,34,${Math.min(1, alpha * 0.14 * boost).toFixed(3)})`);
+          g.addColorStop(0.00, `rgba(255,200,100,${Math.min(1, alpha * boost).toFixed(3)})`);
+          g.addColorStop(0.18, `rgba(255,178,76,${Math.min(1, alpha * 0.80 * boost).toFixed(3)})`);
+          g.addColorStop(0.50, `rgba(220,120,40,${Math.min(1, alpha * 0.42 * boost).toFixed(3)})`);
+          g.addColorStop(0.82, `rgba(140,50,15,${Math.min(1, alpha * 0.14 * boost).toFixed(3)})`);
         }
         g.addColorStop(1.00, 'rgba(0,0,0,0)');
         return g;
@@ -623,9 +623,9 @@ export class DistantSuns {
 
     // Trail glow layers: [width multiplier, alpha multiplier, colour].
     const glow = level === 0
-      ? (front ? '255,245,176' : '255,178,68')
-      : (front ? '227,138,74' : '198,90,46');
-    const coreCol = front ? '255,239,205' : '255,214,158';
+      ? (front ? '255,200,100' : '255,178,76')
+      : (front ? '255,178,76' : '220,120,40');
+    const coreCol = front ? '255,220,140' : '255,200,100';
     const layers: Array<[number, number, string]> = [
       [3.6, 0.16, glow],
       [1.7, 0.40, glow],
@@ -760,7 +760,7 @@ export class DistantSuns {
       }
 
       // Four-point cross (diffraction spike feel).
-      ctx.strokeStyle = level === 0 ? `rgba(255,242,155,${alpha.toFixed(3)})` : `rgba(227,138,74,${Math.min(1, alpha).toFixed(3)})`;
+      ctx.strokeStyle = level === 0 ? `rgba(255,200,100,${alpha.toFixed(3)})` : `rgba(255,178,76,${Math.min(1, alpha).toFixed(3)})`;
       ctx.lineWidth   = 0.7;
       ctx.beginPath();
       ctx.moveTo(gx, gy - r * 3.8);
@@ -770,7 +770,7 @@ export class DistantSuns {
       ctx.stroke();
 
       // Bright center dot.
-      ctx.fillStyle = level === 0 ? `rgba(255,255,215,${(alpha * 0.68).toFixed(3)})` : `rgba(255,218,166,${Math.min(1, alpha * (level === 1 ? 0.76 : 0.9)).toFixed(3)})`;
+      ctx.fillStyle = level === 0 ? `rgba(255,220,140,${(alpha * 0.68).toFixed(3)})` : `rgba(255,200,100,${Math.min(1, alpha * (level === 1 ? 0.76 : 0.9)).toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(gx, gy, Math.max(0.4, r * 0.52), 0, Math.PI * 2);
       ctx.fill();

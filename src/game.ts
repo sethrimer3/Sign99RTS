@@ -175,6 +175,11 @@ export class Game {
   private legacyGraphics: boolean = false;
   private visualPreset: VisualQualityPreset = VISUAL_QUALITY_PRESETS[DEFAULT_VISUAL_QUALITY];
   private gameZoom: number = 1.0;
+  /**
+   * Mousewheel zoom multiplier applied on top of `gameZoom` (the zoom scale the
+   * player picks in graphical settings).  1.0 = 100% (the setting), 2.0 = 200%.
+   */
+  private zoomFactor: number = 1.0;
   private uiZoom: number = 1.0;
   private overlayCache: OverlayCache = createOverlayCache();
   /** Counts down after the player takes damage; drives the red-edge damage flash. */
@@ -615,6 +620,19 @@ export class Game {
       const menuResult = this.actionMenu.update(this.state, this.camera);
       this.handleActionResult(menuResult);
     }
+
+    // Mousewheel zoom — only when no in-game menu is consuming the wheel.
+    // Scrolls between 100% (the graphical-settings zoom) and 200%.
+    if (
+      Input.wheelDelta !== 0 &&
+      !commandMode &&
+      !this.actionMenu.open &&
+      !this.actionMenu.placementMode
+    ) {
+      const step = Input.wheelDelta < 0 ? 0.1 : -0.1;
+      this.zoomFactor = Math.max(1.0, Math.min(2.0, this.zoomFactor + step));
+    }
+    this.camera.zoom = this.gameZoom * this.zoomFactor;
 
     // Update aim point from current mouse position so the ship's mouse-aim
     // logic in handleInput sees a fresh target this tick.
