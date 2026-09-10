@@ -18,6 +18,7 @@
  */
 
 import type { VisualQuality } from './visualquality.js';
+import { renderWarmGlow } from './warmGlow.js';
 
 /** Warm bloom around the node frame is only worth it on these tiers. */
 let glowEnabled = true;
@@ -232,17 +233,13 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
   ctx.restore();
 
   // 4) soft warm shader-style bloom around the node frame (High / Ultra only).
+  //    Shared renderer — same glow reused by laser beams etc. (see warmGlow.ts).
   if (glow && glowEnabled) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = intensity * 0.9;
-    ctx.strokeStyle = 'rgba(255, 168, 74, 0.85)';
-    ctx.lineWidth = Math.max(1.5, n * 0.14);
-    ctx.shadowColor = 'rgba(255, 140, 48, 0.9)';
-    ctx.shadowBlur = Math.max(4, n * 0.9);
-    ctx.stroke(path);
-    ctx.shadowBlur = Math.max(2, n * 0.4);
-    ctx.stroke(path);
-    ctx.restore();
+    renderWarmGlow(ctx, path, {
+      intensity,
+      lineWidth: n * 0.14,
+      blur: n * 0.9,
+      innerBlur: n * 0.4,
+    });
   }
 }

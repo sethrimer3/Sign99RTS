@@ -11,6 +11,7 @@ import type { SpaceFluid } from './spacefluid.js';
 import { damageLaserLine } from './combatUtils.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
+import { renderWarmGlowLine } from './warmGlow.js';
 
 const BULLET_TRAIL_LIFETIME = 0.12;
 const BULLET_TRAIL_MIN_DISTANCE = 2;
@@ -952,6 +953,17 @@ export class Laser extends ProjectileBase {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
+
+    // Warm shader-style bloom along the beam (High / Ultra, non-legacy only) —
+    // the same glow used by building corner nodes, via the shared renderer.
+    if (!isLegacyGraphics()) {
+      renderWarmGlowLine(ctx, from.x, from.y, to.x, to.y, {
+        intensity: fade,
+        lineWidth: 2.2 * camera.zoom,
+        blur: 9 * camera.zoom,
+      });
+    }
+
     ctx.strokeStyle = this.team === Team.Player
       ? colorToCSS(Colors.friendlyfire, 0.16 * fade)
       : colorToCSS(Colors.enemyfire, 0.16 * fade);

@@ -52,6 +52,7 @@ import { loadCinematicLevel, saveCinematicLevel, setCinematicLevel, type Cinemat
 import { loadLegacyGraphics, saveLegacyGraphics, setLegacyGraphics } from './graphicsmode.js';
 import { setProjectileTrailLayers } from './projectileTrail.js';
 import { setBuildingCoreEffectTier } from './buildingCoreEffect.js';
+import { setWarmGlowTier } from './warmGlow.js';
 import {
   drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, drawBaseLockwardEffect, type ShipCommandGroup, type WaypointMarker,
 } from './gameRender.js';
@@ -359,6 +360,7 @@ export class Game {
     this.starfield.setShootingStarsEnabled(this.visualPreset.shootingStarsEnabled);
     setProjectileTrailLayers(quality === 'ultraHigh' ? 4 : quality === 'high' ? 3 : quality === 'medium' ? 2 : 1);
     setBuildingCoreEffectTier(quality);
+    setWarmGlowTier(quality);
     this.mainMenu.visualQuality = quality;
     saveVisualQuality(quality);
   }
