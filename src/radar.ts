@@ -655,6 +655,7 @@ export function drawRadarOverlay(
     for (const group of drawOrder) {
       const marker = waypointMarkers.get(group);
       if (!marker) continue;
+      if (marker.kind === 'follow') continue; // transient burst on the player ship
       const dx = (marker.pos.x - playerPos.x) * scale;
       const dy = (marker.pos.y - playerPos.y) * scale;
       if (dx * dx + dy * dy > radarRadius * radarRadius) continue;

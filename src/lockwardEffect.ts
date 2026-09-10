@@ -36,6 +36,15 @@ export interface LockwardStyle {
   centerOpacityBias?: number;
   /** Canvas composite op for the wards. Default 'lighter' (additive glow). */
   composite?: GlobalCompositeOperation;
+  /**
+   * When present, the wards disperse: once the effect's `age` (seconds) passes
+   * `delaySec` (default 0.5), every ward tooth accelerates radially outward from
+   * the centre and fades out. Both the outward acceleration and the fade
+   * duration are hashed per tooth, so the pieces separate and vanish at
+   * different rates from one another. Callers drop the effect once it has fully
+   * faded (roughly `delaySec + 1.6s`).
+   */
+  disperse?: { age: number; delaySec?: number };
 }
 
 /** Cheap deterministic hash → [0, 1). */
@@ -65,6 +74,9 @@ export function renderLockward(
   const centerBias = Math.max(0, Math.min(1, style.centerOpacityBias ?? 0));
   const innerHole = outer * 0.14;
   const col = style.color;
+
+  const disperseDelay = style.disperse ? style.disperse.delaySec ?? 0.5 : 0;
+  const disperseElapsed = style.disperse ? style.disperse.age - disperseDelay : -1;
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -97,10 +109,22 @@ export function renderLockward(
       if (sa < 0.24) continue; // missing ward tooth → gap
       const sb = hash(seed * 6.3 + r * 3.7 + s * 11.9);
 
+      // Dispersal: after the delay each tooth drifts outward under its own
+      // hashed acceleration and fades over its own hashed lifetime.
+      let pushPx = 0;
+      let disperseFade = 1;
+      if (disperseElapsed > 0) {
+        const accel = outer * (1.1 + sb * 3.2); // px/s^2, scaled to ward size
+        const life = 0.65 + sa * 0.95;          // seconds to fully fade
+        pushPx = 0.5 * accel * disperseElapsed * disperseElapsed;
+        disperseFade = 1 - disperseElapsed / life;
+        if (disperseFade <= 0) continue;
+      }
+
       // Independent blink for this tooth.
       const blink = 0.55 + 0.45 * Math.sin(timeSec * (0.6 + sb * 2.4) + sa * 12.0);
       const shade = 0.45 + sb * 0.55;                       // brightness of tooth
-      const alpha = (0.10 + sa * 0.30) * blink * opacity * radialMul; // translucency
+      const alpha = (0.10 + sa * 0.30) * blink * opacity * radialMul * disperseFade; // translucency
       if (alpha <= 0.012) continue;
 
       const step = (Math.PI * 2) / segs;
@@ -109,8 +133,8 @@ export function renderLockward(
       const a1 = a0 + step - gap;
 
       // Radial jitter so overlapping teeth don't align into clean rings.
-      const ji = bandInner * (0.98 + sa * 0.06);
-      const jo = bandOuter * (0.97 + sb * 0.10);
+      const ji = bandInner * (0.98 + sa * 0.06) + pushPx;
+      const jo = bandOuter * (0.97 + sb * 0.10) + pushPx;
 
       ctx.fillStyle = colorToCSS(
         { r: col.r, g: col.g, b: col.b, intensity: col.intensity * shade },

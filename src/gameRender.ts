@@ -15,7 +15,10 @@ import { footprintForBuilding } from './buildingfootprint.js';
 import { GRID_CELL_SIZE } from './grid.js';
 
 export type ShipCommandGroup = ShipGroup | 'all';
-export type WaypointMarker = { pos: Vec2; issuedAt: number; kind?: 'group' | 'move' };
+export type WaypointMarker = { pos: Vec2; issuedAt: number; kind?: 'group' | 'move' | 'follow' | 'protect' };
+
+/** Seconds after which a "follow player" lockward burst has fully dispersed. */
+export const FOLLOW_MARKER_MAX_AGE = 2.2;
 
 const GROUP_COLORS: Record<ShipGroup, Color> = {
   [ShipGroup.Red]: Colors.redgroup,
@@ -33,6 +36,29 @@ export function drawWaypointMarkers(
   for (const group of drawOrder) {
     const marker = waypointMarkers.get(group);
     if (!marker) continue;
+
+    // "Follow player" — a one-shot lockward burst centred on the player ship
+    // that tracks it, then disperses. Pruned once fully faded.
+    if (marker.kind === 'follow') {
+      const age = state.gameTime - marker.issuedAt;
+      if (age >= FOLLOW_MARKER_MAX_AGE || !state.player?.alive) {
+        waypointMarkers.delete(group);
+        continue;
+      }
+      const followColor = group === 'all' ? Colors.alert2 : GROUP_COLORS[group as ShipGroup];
+      const center = camera.worldToScreen(state.player.position);
+      const followSeed = (group === 'all' ? 97 : (group as number) + 1) * 53 + 11;
+      if (isLegacyGraphics()) continue;
+      renderLockward(ctx, center.x, center.y, state.gameTime, followSeed, {
+        color: followColor,
+        radiusPx: Math.max(24, 34 * camera.zoom),
+        opacity: 0.95,
+        rings: 5,
+        disperse: { age, delaySec: 0.5 },
+      });
+      continue;
+    }
+
     const screen = camera.worldToScreen(marker.pos);
     const moveCommand = marker.kind === 'move';
     const color = moveCommand ? Colors.radar_friendly_status : group === 'all' ? Colors.alert2 : GROUP_COLORS[group];

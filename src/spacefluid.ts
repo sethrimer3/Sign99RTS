@@ -663,6 +663,7 @@ export function createSpaceFluid(): SpaceFluid {
         p.smoothedSpeed = 0.0;
         p.maxAlphaScale = 0.7 + Math.random() * 0.3;
         p.flowAngleOffset = (Math.random() * 2 - 1) * PARTICLE_FLOW_VARIATION_RAD;
+        p.mobility        = _randMobility();
         _occupancy[cellIdx]++;
         // Preserve colour so the palette does not abruptly reset.
         continue;

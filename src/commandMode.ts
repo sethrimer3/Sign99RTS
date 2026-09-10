@@ -158,9 +158,10 @@ export function issueShipOrder(
       ctx.hud.showMessage(`${label}: Dock`, Colors.general_building, 2);
       break;
     case 'protect': {
-      clearWaypointMarker(ctx.waypointMarkers, group);
       const cp = ctx.state.getPlayerCommandPost();
       const protectPos = cp?.position ?? ctx.state.player.position;
+      // Waypoint marker sits on — and persists at — the command centre.
+      recordWaypointMarker(ctx, group, protectPos, 'protect');
       for (const f of fighters) {
         f.order = 'protect';
         f.targetPos = protectPos.clone();
@@ -171,7 +172,9 @@ export function issueShipOrder(
       break;
     }
     case 'follow': {
-      clearWaypointMarker(ctx.waypointMarkers, group);
+      // Lockward burst that appears over the player ship and follows it; the
+      // renderer disperses and prunes it after ~0.5s.
+      recordWaypointMarker(ctx, group, ctx.state.player.position, 'follow');
       for (const f of fighters) {
         f.order = 'follow';
         f.targetPos = ctx.state.player.position.clone();
@@ -372,14 +375,19 @@ function groupLabel(group: ShipCommandGroup): string {
   return group === 'all' ? 'ALL' : `Group ${group + 1}`;
 }
 
-function recordWaypointMarker(ctx: CommandModeCtx, group: ShipCommandGroup, pos: Vec2): void {
+function recordWaypointMarker(
+  ctx: CommandModeCtx,
+  group: ShipCommandGroup,
+  pos: Vec2,
+  kind: 'group' | 'follow' | 'protect' = 'group',
+): void {
   if (group === 'all') {
     ctx.waypointMarkers.clear();
-    ctx.waypointMarkers.set('all', { pos: pos.clone(), issuedAt: ctx.state.gameTime, kind: 'group' });
+    ctx.waypointMarkers.set('all', { pos: pos.clone(), issuedAt: ctx.state.gameTime, kind });
     return;
   }
   ctx.waypointMarkers.delete('all');
-  ctx.waypointMarkers.set(group, { pos: pos.clone(), issuedAt: ctx.state.gameTime, kind: 'group' });
+  ctx.waypointMarkers.set(group, { pos: pos.clone(), issuedAt: ctx.state.gameTime, kind });
 }
 
 function clearWaypointMarker(
