@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign99RTS — Ship Lab</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #05070a; color: #cfe0ee; font: 12px monospace; }
+    body { display: flex; overflow: hidden; }
+    #canvasWrap { flex: 1; position: relative; }
+    canvas { display: block; width: 100%; height: 100%; background: #05070a; }
+    #panel { width: 340px; overflow-y: auto; padding: 10px; background: #0b0f14; border-left: 1px solid #223; }
+    h2 { font-size: 13px; margin: 10px 0 4px; color: #8fd; }
+    h2:first-child { margin-top: 0; }
+    .row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    .row label { flex: 0 0 128px; font-size: 10.5px; color: #9ab; }
+    .row input[type=range] { flex: 1; }
+    .row .val { flex: 0 0 46px; text-align: right; font-size: 10.5px; color: #dfe; }
+    button { background: #16202a; color: #cfe0ee; border: 1px solid #33475a; padding: 4px 8px; margin: 2px 2px 2px 0; cursor: pointer; font: 11px monospace; }
+    button:hover { background: #223140; }
+    input[type=text], textarea { background: #0e1520; color: #cfe0ee; border: 1px solid #33475a; font: 11px monospace; padding: 3px; width: 100%; }
+    textarea { height: 90px; resize: vertical; }
+    .btnrow { display: flex; flex-wrap: wrap; }
+    .toggle { display: flex; align-items: center; gap: 4px; font-size: 10.5px; }
+    #presetList div { padding: 3px 4px; cursor: pointer; border-bottom: 1px solid #1b2530; }
+    #presetList div:hover { background: #182230; }
+  </style>
+</head>
+<body>
+  <div id="canvasWrap"><canvas id="ship-lab-canvas"></canvas></div>
+  <div id="panel"></div>
+  <script type="module" src="/src/dev/shipLab.ts"></script>
+</body>
+</html>
