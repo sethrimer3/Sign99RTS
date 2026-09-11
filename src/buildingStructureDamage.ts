@@ -194,6 +194,7 @@ export class BuildingStructureDamage {
 
   public ensure(body: BuildingStructureBody): BSPGeometry {
     if (this.geo && this.geo.footprintCells === body.footprintCells) return this.geo;
+      if (this.geo && this.geo.footprintCells !== body.footprintCells) this.appliedSeed = undefined;
     const seed = this.appliedSeed ?? (this.seedFallback ^ (body.footprintCells * 1234567));
     this.geo = generateBSPGeometry(body.footprintCells, seed);
     
@@ -458,7 +459,7 @@ export class BuildingStructureDamage {
     return {
       removed: [...this.removedIndices],
       coreIntegrityFrac: [...this.coreIntegrity],
-      seed: this.appliedSeed ?? (this.seedFallback ^ (this.geo?.footprintCells ?? 0 * 1234567)),
+      seed: this.appliedSeed ?? (this.seedFallback ^ ((this.geo?.footprintCells ?? 0) * 1234567)),
     };
   }
 
