@@ -5,8 +5,9 @@ pushd "%~dp0"
 
 set "PACKAGE_RUNNER="
 set "PACKAGE_MODE=npm"
-where npm >nul 2>nul
-if not errorlevel 1 set "PACKAGE_RUNNER=npm"
+for /f "delims=" %%N in ('where npm 2^>nul') do (
+  if not defined PACKAGE_RUNNER set "PACKAGE_RUNNER=%%N"
+)
 
 if not defined PACKAGE_RUNNER (
   set "BUNDLED_NODE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin"
