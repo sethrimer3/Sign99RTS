@@ -570,7 +570,7 @@ export class PracticeMode {
       if (angle !== null) b.turretAngle = angle;
       if (b.type === EntityType.RegenTurret) {
         b.consumeShot();
-        target.takeDamage(-10, b);
+        target.repair(10);
         state.particles.emitHealing(target.position);
         const beamTarget = target.position;
         b.showBeam(beamTarget);

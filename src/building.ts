@@ -57,6 +57,7 @@ export abstract class BuildingBase extends Entity {
   constructor(type: EntityType, team: Team, position: Vec2, health: number, radius: number = ENTITY_RADIUS.building) {
     super(type, team, position, health, radius);
     this.velocity.set(0, 0);
+    this.buildingDamage = new BuildingStructureDamage(this.id);
   }
   update(dt: number): void {
     if (!this.alive) return;
@@ -74,6 +75,28 @@ export abstract class BuildingBase extends Entity {
     }
     if (this.deleting) this.deletionProgress = Math.min(1, this.deletionProgress + dt / this.deletionDurationSeconds);
   }
+
+  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+    const screen = camera.worldToScreen(this.position);
+    ctx.save();
+    if (this.buildingDamage) {
+      const path = this.buildingDamage.renderMesh(this as any);
+      if (path) {
+        ctx.translate(screen.x, screen.y);
+        ctx.scale(camera.zoom, camera.zoom);
+        ctx.clip(path);
+        ctx.scale(1 / camera.zoom, 1 / camera.zoom);
+        ctx.translate(-screen.x, -screen.y);
+      }
+    }
+    this.drawStructure(ctx, camera);
+    ctx.restore();
+    this.drawOverlays(ctx, camera, screen);
+  }
+
+  protected abstract drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void;
+
+  protected drawOverlays(ctx: CanvasRenderingContext2D, camera: Camera, screen: Vec2): void {}
   startDeleting(): void { if (!this.deleting) { this.deleting = true; this.deletionProgress = 0; } }
 
   protected getBaseVisual(camera: Camera): BaseVisual {
@@ -551,7 +574,7 @@ export class CommandPost extends BuildingBase {
     super(EntityType.CommandPost, team, position, HP_VALUES.commandPost, ENTITY_RADIUS.commandpost);
     this.powered = true;
   }
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     const screen = camera.worldToScreen(this.position);
     const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.general_building), camera);
     if (v.simple) return;
@@ -580,7 +603,7 @@ export class PowerGenerator extends BuildingBase {
     this.powered = true;
   }
   update(dt: number): void { super.update(dt); this.pulsePhase += dt * 3; }
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     const screen = camera.worldToScreen(this.position);
     const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.powergenerator_detail), camera);
     if (v.simple) return;
@@ -659,7 +682,7 @@ export class ShieldGenerator extends BuildingBase {
     this.shield = Math.min(this.maxShield, this.shield + 5 * dt);
   }
 
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     const screen = camera.worldToScreen(this.position);
     const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.radar_friendly_status), camera);
     const ratio = this.shield / this.maxShield;
@@ -683,8 +706,12 @@ export class ShieldGenerator extends BuildingBase {
 export class Shipyard extends BuildingBase { shipCapacity=5; activeShips=0; buildTimer=0; buildInterval=5; assignedGroup: ShipGroup=ShipGroup.Red; holdDocked=false; dockedShips=0; fightersReleased=false; launchFlashTimer=0;
 constructor(type:EntityType.FighterYard|EntityType.BomberYard|EntityType.SwarmYard,position:Vec2,team:Team){super(type, team, position, type===EntityType.FighterYard ? HP_VALUES.fighterYard : type===EntityType.SwarmYard ? HP_VALUES.swarmYard : HP_VALUES.bomberYard);this.powered=false;if(type===EntityType.SwarmYard){this.shipCapacity=20;this.buildInterval=0.65;}} update(dt:number):void{super.update(dt);if(this.buildProgress>=1&&this.powered&&this.activeShips<this.shipCapacity)this.buildTimer-=dt;if(this.launchFlashTimer>0)this.launchFlashTimer=Math.max(0,this.launchFlashTimer-dt);} shouldSpawnShip():boolean{if(!this.alive||!this.powered||this.buildProgress<1)return false;if(this.buildTimer<=0&&this.activeShips<this.shipCapacity){this.buildTimer=this.buildInterval;this.launchFlashTimer=0.55;return true;}return false;} bayPosition():Vec2{return this.position.add(new Vec2(0, GRID_CELL_SIZE*1.15));} draw(ctx:CanvasRenderingContext2D,camera:Camera):void{ const screen=camera.worldToScreen(this.position); const isF=this.type===EntityType.FighterYard; const isSwarm=this.type===EntityType.SwarmYard; const detail=isF?Colors.fighteryard_detail:isSwarm?Colors.particles_switch:Colors.bomberyard_detail; if(this.synonymousVisualKind==='shipyard'){this.drawSynonymousShipyard(ctx,camera,screen);return;} const v=this.drawBuildingBase(ctx,screen,colorToCSS(detail),camera); const bayW=v.side*0.55,bayH=v.side*0.18; ctx.fillStyle=colorToCSS(Colors.enemy_background,0.8); ctx.fillRect(screen.x-bayW*0.5,screen.y+v.side*0.2,bayW,bayH); for(let i=0;i<Math.min(this.dockedShips,this.shipCapacity);i++){const col=i%5,row=Math.floor(i/5);const sx=screen.x-v.side*0.32+col*v.side*0.16;const sy=screen.y-v.side*0.23+row*v.side*0.115; ctx.strokeStyle=colorToCSS(detail, this.powered?0.9:0.45); ctx.beginPath(); if(isSwarm){ctx.arc(sx,sy,Math.max(1.2,v.side*0.025),0,Math.PI*2);} else if(isF){ctx.moveTo(sx+4,sy);ctx.lineTo(sx-3,sy-2);ctx.lineTo(sx-3,sy+2);} else {ctx.moveTo(sx+4,sy);ctx.lineTo(sx,sy-3);ctx.lineTo(sx-4,sy);ctx.lineTo(sx,sy+3);} ctx.closePath();ctx.stroke(); }
 if(this.launchFlashTimer>0){const f=this.launchFlashTimer/0.55;ctx.save();ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(detail,f*0.80);ctx.lineWidth=Math.max(1,v.side*0.042);ctx.strokeRect(screen.x-bayW*0.5-1,screen.y+v.side*0.19,bayW+2,bayH+2);ctx.fillStyle=colorToCSS(detail,f*0.22);ctx.fillRect(screen.x-bayW*0.5-1,screen.y+v.side*0.19,bayW+2,bayH+2);ctx.restore();}
-this.drawAssignedGroupLabel(ctx, screen, v); }
-private drawSynonymousShipyard(ctx:CanvasRenderingContext2D,camera:Camera,screen:Vec2):void{const v=this.getBaseVisual(camera);const color=teamColor(this.team);const nodeR=Math.max(2,v.side*0.055);const r=v.side*0.44;ctx.save();ctx.globalAlpha=Math.max(0.18,this.buildProgress);ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(color,this.powered?0.42:0.18);ctx.lineWidth=Math.max(1,v.side*0.016);ctx.beginPath();const nodes:Array<{x:number;y:number}>=[];for(let i=0;i<11;i++){const a=-Math.PI*0.92+i*(Math.PI*1.84/10);const x=screen.x+Math.cos(a)*r;const y=screen.y+Math.sin(a)*r;nodes.push({x,y});if(i>0){ctx.moveTo(nodes[i-1].x,nodes[i-1].y);ctx.lineTo(x,y);}if(i%2===0){ctx.moveTo(screen.x,screen.y-v.side*0.05);ctx.lineTo(x,y);}}ctx.stroke();ctx.strokeStyle=colorToCSS(Colors.particles_switch,this.powered?0.22:0.10);ctx.beginPath();ctx.arc(screen.x,screen.y-v.side*0.02,r*0.62,Math.PI*1.08,Math.PI*1.92);ctx.stroke();ctx.fillStyle='rgba(4,8,10,0.88)';ctx.beginPath();ctx.ellipse(screen.x,screen.y+r*0.72,v.side*0.24,v.side*0.10,0,0,Math.PI*2);ctx.fill();for(const n of nodes){ctx.fillStyle=colorToCSS(color,this.powered?0.82:0.38);ctx.beginPath();ctx.arc(n.x,n.y,nodeR,0,Math.PI*2);ctx.fill();}const shown=Math.min(this.dockedShips,this.shipCapacity);for(let i=0;i<shown;i++){const x=screen.x-v.side*0.23+(i%5)*v.side*0.115;const y=screen.y+v.side*0.24+Math.floor(i/5)*v.side*0.10;ctx.strokeStyle=colorToCSS(color,0.72);ctx.beginPath();ctx.moveTo(x,y-v.side*0.028);ctx.lineTo(x-v.side*0.032,y+v.side*0.028);ctx.lineTo(x+v.side*0.032,y+v.side*0.028);ctx.closePath();ctx.stroke();}this.drawAssignedGroupLabel(ctx, screen, v);ctx.restore();}
+ }
+private drawSynonymousShipyard(ctx:CanvasRenderingContext2D,camera:Camera,screen:Vec2):void{const v=this.getBaseVisual(camera);const color=teamColor(this.team);const nodeR=Math.max(2,v.side*0.055);const r=v.side*0.44;ctx.save();ctx.globalAlpha=Math.max(0.18,this.buildProgress);ctx.globalCompositeOperation='lighter';ctx.strokeStyle=colorToCSS(color,this.powered?0.42:0.18);ctx.lineWidth=Math.max(1,v.side*0.016);ctx.beginPath();const nodes:Array<{x:number;y:number}>=[];for(let i=0;i<11;i++){const a=-Math.PI*0.92+i*(Math.PI*1.84/10);const x=screen.x+Math.cos(a)*r;const y=screen.y+Math.sin(a)*r;nodes.push({x,y});if(i>0){ctx.moveTo(nodes[i-1].x,nodes[i-1].y);ctx.lineTo(x,y);}if(i%2===0){ctx.moveTo(screen.x,screen.y-v.side*0.05);ctx.lineTo(x,y);}}ctx.stroke();ctx.strokeStyle=colorToCSS(Colors.particles_switch,this.powered?0.22:0.10);ctx.beginPath();ctx.arc(screen.x,screen.y-v.side*0.02,r*0.62,Math.PI*1.08,Math.PI*1.92);ctx.stroke();ctx.fillStyle='rgba(4,8,10,0.88)';ctx.beginPath();ctx.ellipse(screen.x,screen.y+r*0.72,v.side*0.24,v.side*0.10,0,0,Math.PI*2);ctx.fill();for(const n of nodes){ctx.fillStyle=colorToCSS(color,this.powered?0.82:0.38);ctx.beginPath();ctx.arc(n.x,n.y,nodeR,0,Math.PI*2);ctx.fill();}const shown=Math.min(this.dockedShips,this.shipCapacity);for(let i=0;i<shown;i++){const x=screen.x-v.side*0.23+(i%5)*v.side*0.115;const y=screen.y+v.side*0.24+Math.floor(i/5)*v.side*0.10;ctx.strokeStyle=colorToCSS(color,0.72);ctx.beginPath();ctx.moveTo(x,y-v.side*0.028);ctx.lineTo(x-v.side*0.032,y+v.side*0.028);ctx.lineTo(x+v.side*0.032,y+v.side*0.028);ctx.closePath();ctx.stroke();}ctx.restore();}
+protected override drawOverlays(ctx: CanvasRenderingContext2D, camera: Camera, screen: Vec2): void {
+  const v = this.getBaseVisual(camera);
+  this.drawAssignedGroupLabel(ctx, screen, v);
+}
 private drawAssignedGroupLabel(ctx:CanvasRenderingContext2D,screen:Vec2,v:BaseVisual):void{if(this.team!==Team.Player)return;const label=`${this.assignedGroup+1}`;const labelColor=SHIP_GROUP_LABEL_COLORS[this.assignedGroup];const showLarge=Input.isDown('c')||Input.isDown('1')||Input.isDown('2')||Input.isDown('3')||Input.isDown('4');ctx.save();ctx.textAlign='center';ctx.textBaseline='middle';if(showLarge){ctx.font=`bold ${Math.max(24,v.side*0.72)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;ctx.lineWidth=Math.max(3,v.side*0.075);ctx.strokeStyle='rgba(2,4,6,0.88)';ctx.strokeText(label,screen.x,screen.y);ctx.fillStyle=colorToCSS(labelColor,0.92);ctx.fillText(label,screen.x,screen.y);}else{ctx.fillStyle=colorToCSS(labelColor,0.9);ctx.font=`bold ${Math.max(10,v.side*0.15)}px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif`;ctx.fillText(label,screen.x+v.side*0.3,screen.y-v.side*0.32);}ctx.restore();}}
 
 interface LabDotConfig {
@@ -853,47 +880,28 @@ export class ResearchLab extends BuildingBase {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     const screen = camera.worldToScreen(this.position);
     const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.researchlab_detail), camera);
     if (v.simple) return;
     const glowColor = Colors.building_glow_research;
     const ringA = this.powered ? 0.85 : 0.45;
 
-    // Draw tech labels and atomic spinning rings (translated to building center)
+    // Draw atomic spinning rings
     ctx.save();
     ctx.translate(screen.x, screen.y);
-    if (this.researchItem) {
-      const category = researchCategory(this.researchItem);
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.font = `bold ${Math.max(13, v.side * 0.25)}px "Segoe UI", sans-serif`;
-      ctx.lineWidth = Math.max(2, v.side * 0.035);
-      ctx.strokeStyle = 'rgba(0,0,0,0.92)';
-      ctx.strokeText(category, 0, 0);
-      ctx.fillStyle = colorToCSS(Colors.researchlab_detail, 1);
-      ctx.fillText(category, 0, 0);
-      // Exact technology is friendly-only; opponents see the category letter alone.
-      if (this.showExactUpgrade) {
-        const icon = researchIcon(this.researchItem);
-        ctx.font = `bold ${Math.max(8, v.side * 0.115)}px "Segoe UI", sans-serif`;
-        ctx.strokeText(icon, 0, v.side * 0.27);
-        ctx.fillStyle = colorToCSS(Colors.building_glow_research, 0.95);
-        ctx.fillText(icon, 0, v.side * 0.27);
-      }
-    }
-    // Three spinning elliptical rings (atomic symbol)
+    ctx.rotate(this.spinPhase);
     ctx.strokeStyle = colorToCSS(Colors.researchlab_detail, ringA);
-    ctx.lineWidth = Math.max(0.8, v.side * 0.018);
-    for (let i = 0; i < 3; i++) {
-      ctx.save();
-      ctx.rotate(this.spinPhase + i * 2.094);
-      ctx.scale(1, 0.45);
-      ctx.beginPath();
-      ctx.arc(0, 0, v.side * 0.22, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
+    ctx.lineWidth = Math.max(1, v.side * 0.02);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, v.side * 0.35, v.side * 0.12, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, v.side * 0.35, v.side * 0.12, Math.PI / 3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, v.side * 0.35, v.side * 0.12, (Math.PI * 2) / 3, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
 
     // Orbiting node dots and luminous trails (drawn in world-to-screen untranslated coordinates)
@@ -972,7 +980,7 @@ export class Factory extends BuildingBase {
     super(EntityType.Factory, team, position, HP_VALUES.factory);
   }
   update(dt: number): void { super.update(dt); this.gearPhase += this.powered ? dt * 1.5 : dt * 0.2; }
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     const screen = camera.worldToScreen(this.position);
     const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.factory_detail), camera);
     if (v.simple) return;
