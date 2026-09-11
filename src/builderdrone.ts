@@ -184,10 +184,7 @@ export class BuilderDrone extends FighterShip {
     // Heal in place
     this.velocity = this.velocity.scale(0.85);
     if (target.health < target.maxHealth) {
-      target.health = Math.min(
-        target.maxHealth,
-        target.health + REPAIR_RATE_HP_PER_S * this.buildSpeedMul * dt,
-      );
+      target.repair(REPAIR_RATE_HP_PER_S * this.buildSpeedMul * dt);
     } else {
       // Target fully healed — release.
       this.repairTarget = null;
