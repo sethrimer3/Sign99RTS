@@ -947,7 +947,7 @@ export class SynonymousMineLayer extends BuildingBase {
     this.mineTimer = 2.7;
   }
 
-  override protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected override drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const screen = camera.worldToScreen(this.position);
     const side = this.radius * 2.6 * camera.zoom;

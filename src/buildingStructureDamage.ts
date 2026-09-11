@@ -2,7 +2,7 @@ import { Vec2 } from './math.js';
 import type { HullImpact } from './shipHullDamage.js';
 import type { ShipDebrisSystem } from './shipDebris.js';
 import type { Color } from './colors.js';
-import { GRID_CELL_SIZE } from './constants.js';
+import { GRID_CELL_SIZE } from './grid.js';
 
 export interface BuildingStructureBody {
   id: number;
@@ -188,15 +188,15 @@ export class BuildingStructureDamage {
   
   private dirtyRender: boolean = true;
   private cachedPath: Path2D | null = null;
-  private footprintSeed: number = 0;
+  private appliedSeed?: number;
 
   constructor(private seedFallback: number) {}
 
   public ensure(body: BuildingStructureBody): BSPGeometry {
     if (this.geo && this.geo.footprintCells === body.footprintCells) return this.geo;
-    const seed = this.footprintSeed || (this.seedFallback ^ (body.footprintCells * 1234567));
+    const seed = this.appliedSeed ?? (this.seedFallback ^ (body.footprintCells * 1234567));
     this.geo = generateBSPGeometry(body.footprintCells, seed);
-    this.footprintSeed = seed;
+    
     
     this.removedIndices = [];
     this.coreIntegrity = [1, 1, 1, 1];
@@ -431,7 +431,7 @@ export class BuildingStructureDamage {
     const geo = this.ensure(body);
     for (const event of this.pendingDetached) {
       const source = event.hit && event.hit.kind === 'explosion' ? new Vec2(event.hit.x, event.hit.y) : null;
-      debris.emitBuildingDebris(geo, event.indices, body.position, color, source, seededRandom(geo.seed ^ (event.indices[0] + 1) * 2654435761));
+      debris.emitBuildingDebris(geo, event.indices, body.position, color, source, (() => { let s = geo.seed ^ (event.indices[0] + 1) * 2654435761; return () => seededRandom(s++); })());
     }
     this.pendingDetached = [];
   }
@@ -458,7 +458,7 @@ export class BuildingStructureDamage {
     return {
       removed: [...this.removedIndices],
       coreIntegrityFrac: [...this.coreIntegrity],
-      seed: this.footprintSeed,
+      seed: this.appliedSeed ?? (this.seedFallback ^ (this.geo?.footprintCells ?? 0 * 1234567)),
     };
   }
 
@@ -471,7 +471,7 @@ export class BuildingStructureDamage {
       this.connectedMass = geo.totalMass;
       return;
     }
-    this.footprintSeed = snap.seed;
+    this.appliedSeed = snap.seed;
     this.removedIndices = [...snap.removed];
     this.coreIntegrity = [...snap.coreIntegrityFrac];
     this.dirtyRender = true;
