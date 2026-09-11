@@ -552,7 +552,18 @@ export class FighterShip extends Entity {
       amount -= blocked;
       this.shieldRegenDelay = SHIELD_REGEN_DELAY;
     }
-    if (amount > 0) super.takeDamage(amount, source, impact);
+    if (amount > 0) {
+      if (this.hullDamage) {
+        if (source) this.lastDamageSource = source;
+        this.hullDamage.hit(this, amount, impact);
+        if (this.health <= 0 || this.hullDamage.coreIntegrity <= 0) {
+          this.health = 0;
+          this.destroy();
+        }
+      } else {
+        super.takeDamage(amount, source, impact);
+      }
+    }
   }
 
   protected markTookDamage(): void {
@@ -574,7 +585,12 @@ export class FighterShip extends Entity {
       return;
     }
     if (this.health > 0 && this.health < this.maxHealth) {
-      this.health = Math.min(this.maxHealth, this.health + PASSIVE_HEALTH_REGEN_RATE * dt);
+      const amount = PASSIVE_HEALTH_REGEN_RATE * dt;
+      if (this.hullDamage) {
+        this.hullDamage.repair(this, amount);
+      } else {
+        this.health = Math.min(this.maxHealth, this.health + amount);
+      }
     }
   }
 

@@ -14,11 +14,10 @@ export interface HullBody {
   position: Vec2; angle: number; radius: number;
   health: number; maxHealth: number; alive: boolean;
 }
-export interface HullSnapshot { removed: number[]; }
+export interface HullSnapshot { removed: number[]; coreIntegrityFrac?: number; }
 type Mesh = { buckets: ShipBucket[]; silhouette: Path2D | null };
 
-/** Shared geometry, tiny per-unit removal record. No per-component HP or physics bodies.
- * Selection runs only on damage; a damaged mesh is baked once after changes, never every frame. */
+/** Structural damage model. HP is derived from connected hull mass. Core hits kill the ship. */
 export class ShipHullDamage {
   private geometry: ShipGeometry | null = null;
   private definition: ProceduralShipDefinition | null = null;
@@ -27,8 +26,16 @@ export class ShipHullDamage {
   private pending: Array<{ indices: number[]; hit: HullImpact }> = [];
   private mesh: Mesh | null = null;
   private dirty = false;
-  private observedHealth = 1;
+  
+  coreIntegrity: number = -1;
+  maxCoreIntegrity: number = 0;
+  connectedMass: number = 0;
+
   constructor(private design: () => ProceduralShipDefinition | null, readonly visualScale = 1.4) {}
+
+  get coreIntegrityFrac(): number {
+    return this.maxCoreIntegrity > 0 ? this.coreIntegrity / this.maxCoreIntegrity : 1;
+  }
 
   private ensure(): ShipGeometry | null {
     const def = this.design();
@@ -39,27 +46,41 @@ export class ShipHullDamage {
     }
     return this.geometry;
   }
+
   reset(): void {
     this.gone.clear(); this.order.length = 0; this.pending.length = 0;
-    this.mesh = null; this.dirty = false; this.observedHealth = 1;
+    this.mesh = null; this.dirty = false;
     this.definition = null; this.geometry = null;
+    this.coreIntegrity = -1; this.maxCoreIntegrity = 0; this.connectedMass = 0;
   }
-  get removedIndices(): readonly number[] { return this.order; }
-  snapshot(): HullSnapshot | undefined { return this.order.length ? { removed: [...this.order] } : undefined; }
 
-  private count(geo: ShipGeometry, health: number): number {
-    // Preserve the core while alive. More HP means less structural loss per point of damage.
-    return Math.floor((1 - Math.max(0, Math.min(1, health))) * geo.polyCount * 0.82);
+  get removedIndices(): readonly number[] { return this.order; }
+  
+  snapshot(): HullSnapshot | undefined {
+    if (this.order.length || (this.maxCoreIntegrity > 0 && this.coreIntegrity < this.maxCoreIntegrity)) {
+      return { removed: [...this.order], coreIntegrityFrac: this.coreIntegrityFrac };
+    }
+    return undefined;
+  }
+
+  private initCore(body: HullBody) {
+    if (this.coreIntegrity === -1) {
+      this.maxCoreIntegrity = body.maxHealth * 0.25;
+      this.coreIntegrity = this.maxCoreIntegrity;
+      if (this.geometry) {
+        this.connectedMass = this.geometry.totalMass;
+      }
+    }
   }
 
   hit(body: HullBody, damage: number, impact?: HullImpact): void {
     if (!(damage > 0)) return;
     const geo = this.ensure();
     if (!geo || !this.definition) return;
-    const hp = body.maxHealth > 0 ? body.health / body.maxHealth : 0;
-    const needed = Math.max(0, this.count(geo, hp) - this.gone.size);
-    this.observedHealth = hp;
-    if (!needed) return;
+    this.initCore(body);
+
+    let massBudget = (damage / body.maxHealth) * geo.totalMass;
+    
     const hit = impact ?? { kind: 'bullet', x: body.position.x - Math.cos(body.angle) * body.radius * 2,
       y: body.position.y - Math.sin(body.angle) * body.radius * 2, dx: Math.cos(body.angle), dy: Math.sin(body.angle) };
     const scale = body.radius * this.visualScale / shipDesignRadius(this.definition);
@@ -73,61 +94,187 @@ export class ShipHullDamage {
     const radius = shipDesignRadius(this.definition);
     const lane = Math.max(1, (hit.radius ?? 0) / scale, radius * (hit.kind === 'explosion' ? 0.45 : 0.07));
     const { front, back } = rankedComponents(geo, dx, dy, sx, sy, lane, radius);
+    
     let fi = 0, bi = 0;
     const detached: number[] = [];
-    for (let i = 0; i < needed && this.gone.size < geo.polyCount; i++) {
-      const exit = hit.kind === 'laser' && i % 2 === 1;
-      const list = exit ? back : front;
-      let at = exit ? bi : fi;
+    let coreHit = false;
+
+    while (massBudget > 0 && this.gone.size < geo.polyCount) {
+      let i = detached.length;
+      const exitTarget = hit.kind === 'laser' && i % 2 === 1;
+      const list = exitTarget ? back : front;
+      let at = exitTarget ? bi : fi;
+      
       while (at < list.length && this.gone.has(list[at])) at++;
-      if (at >= list.length) break;
+      
+      if (at >= list.length) {
+         if (hit.kind === 'laser') {
+            if (exitTarget) { bi = list.length; } else { fi = list.length; }
+            if (fi >= front.length && bi >= back.length) break;
+            detached.push(-1); // dummy to flip the `i % 2` parity
+            continue;
+         } else {
+            break;
+         }
+      }
+      
       const index = list[at];
-      if (exit) bi = at + 1; else fi = at + 1;
-      this.gone.add(index); this.order.push(index); detached.push(index);
+      if (exitTarget) bi = at + 1; else fi = at + 1;
+      
+      const poly = geo.polygons[index];
+      if (poly.isCore) {
+         this.coreIntegrity -= (massBudget / geo.totalMass) * body.maxHealth;
+         coreHit = true;
+         break; // Damage corridor hit the core, stop excavating
+      } else {
+         this.gone.add(index);
+         this.order.push(index);
+         detached.push(index);
+         massBudget -= poly.area;
+      }
     }
-    if (detached.length) {
-      this.pending.push({ indices: detached, hit });
+
+    const actualDetached = detached.filter(idx => idx >= 0);
+    if (actualDetached.length > 0 || coreHit) {
+      if (actualDetached.length > 0) {
+        this.pending.push({ indices: actualDetached, hit });
+      }
+      this.recalculateConnectivity(geo, hit);
       this.dirty = true;
+      body.health = body.maxHealth * (this.connectedMass / geo.totalMass);
     }
   }
 
-  /** Restore the most recently lost material as HP regenerates; never spawn repair debris. */
-  syncHealth(body: HullBody): void {
-    const hp = body.maxHealth > 0 ? body.health / body.maxHealth : 0;
-    if (hp === this.observedHealth) return;
-    if (hp < this.observedHealth) {
-      this.hit(body, (this.observedHealth - hp) * body.maxHealth);
+  private recalculateConnectivity(geo: ShipGeometry, hit: HullImpact): void {
+    if (this.coreIntegrity <= 0) {
+      const detached: number[] = [];
+      for (const poly of geo.polygons) {
+        if (!this.gone.has(poly.index)) {
+          this.gone.add(poly.index);
+          detached.push(poly.index);
+        }
+      }
+      this.connectedMass = 0;
+      if (detached.length > 0) {
+        this.pending.push({ indices: detached, hit });
+      }
       return;
     }
-    this.observedHealth = hp;
-    if (!this.geometry) return;
-    const target = this.count(this.geometry, hp);
-    while (this.order.length > target) {
-      this.gone.delete(this.order.pop()!); this.dirty = true;
+
+    const queue = [...geo.coreIndices];
+    const reachable = new Set(geo.coreIndices);
+    let connectedMass = 0;
+    
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      connectedMass += geo.polygons[curr].area;
+      for (const neighbor of geo.polygons[curr].neighbors) {
+        if (!this.gone.has(neighbor) && !reachable.has(neighbor)) {
+          reachable.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+    
+    const disconnected: number[] = [];
+    for (const poly of geo.polygons) {
+      if (!this.gone.has(poly.index) && !reachable.has(poly.index) && !poly.isCore) {
+        this.gone.add(poly.index);
+        disconnected.push(poly.index);
+      }
+    }
+    
+    if (disconnected.length > 0) {
+      this.pending.push({ indices: disconnected, hit });
+    }
+    this.connectedMass = connectedMass;
+
+    // Structural collapse rule
+    if (this.connectedMass < geo.totalMass * 0.1 && this.coreIntegrity > 0) {
+      this.coreIntegrity = 0;
+      this.recalculateConnectivity(geo, hit);
+    }
+  }
+
+  repair(body: HullBody, amount: number): void {
+    if (amount <= 0 || this.coreIntegrity <= 0) return;
+    const geo = this.ensure();
+    if (!geo) return;
+    this.initCore(body);
+
+    let massToRestore = (amount / body.maxHealth) * geo.totalMass;
+    let restoredMass = 0;
+
+    while (massToRestore > 0 && this.gone.size > 0) {
+      let bestCandidate = -1;
+      let bestDist = Infinity;
+      for (const idx of this.gone) {
+        const poly = geo.polygons[idx];
+        let adjacent = false;
+        for (const n of poly.neighbors) {
+          if (!this.gone.has(n)) { adjacent = true; break; }
+        }
+        if (adjacent && poly.coreDistance < bestDist) {
+          bestDist = poly.coreDistance;
+          bestCandidate = idx;
+        }
+      }
+      if (bestCandidate === -1) break;
+      
+      this.gone.delete(bestCandidate);
+      const orderIdx = this.order.indexOf(bestCandidate);
+      if (orderIdx >= 0) this.order.splice(orderIdx, 1);
+
+      const restoredArea = geo.polygons[bestCandidate].area;
+      massToRestore -= restoredArea;
+      restoredMass += restoredArea;
+      this.dirty = true;
+    }
+
+    if (restoredMass > 0) {
+      this.recalculateConnectivity(geo, { kind: 'bullet', x: body.position.x, y: body.position.y, dx: 0, dy: 0 });
+      body.health = body.maxHealth * (this.connectedMass / geo.totalMass);
+    }
+    
+    if (massToRestore > 0 && this.coreIntegrity < this.maxCoreIntegrity) {
+      this.coreIntegrity = Math.min(this.maxCoreIntegrity, this.coreIntegrity + (massToRestore / geo.totalMass) * body.maxHealth);
     }
   }
 
   applySnapshot(snapshot: HullSnapshot | undefined, body: HullBody, emit = true): void {
     const geo = this.ensure();
     if (!geo) return;
+    this.initCore(body);
     const seen = new Set<number>();
     const next = (snapshot?.removed ?? []).slice(0, geo.polyCount).filter(i => {
       if (!Number.isInteger(i) || i < 0 || i >= geo.polyCount || seen.has(i)) return false;
       seen.add(i); return true;
     });
-    this.observedHealth = body.maxHealth > 0 ? body.health / body.maxHealth : 0;
-    if (next.length === this.order.length && next.every((v, i) => v === this.order[i])) return;
+    if (next.length === this.order.length && next.every((v, i) => v === this.order[i]) && snapshot?.coreIntegrityFrac === this.coreIntegrityFrac) return;
+    
     const added = next.filter(i => !this.gone.has(i));
-    this.order = next; this.gone = new Set(next); this.dirty = true;
-    this.observedHealth = body.maxHealth > 0 ? body.health / body.maxHealth : 0;
-    if (emit && added.length) this.pending.push({ indices: added, hit: { kind: 'bullet', x: body.position.x, y: body.position.y, dx: 0, dy: 0 } });
+    this.order = next; 
+    this.gone = new Set(next); 
+    this.dirty = true;
+    
+    if (snapshot?.coreIntegrityFrac !== undefined) {
+      this.coreIntegrity = this.maxCoreIntegrity * snapshot.coreIntegrityFrac;
+    } else {
+      this.coreIntegrity = this.maxCoreIntegrity;
+    }
+
+    this.recalculateConnectivity(geo, { kind: 'bullet', x: body.position.x, y: body.position.y, dx: 0, dy: 0 });
+    body.health = body.maxHealth * (this.connectedMass / geo.totalMass);
+    
+    if (emit && added.length) {
+      this.pending.push({ indices: added, hit: { kind: 'bullet', x: body.position.x, y: body.position.y, dx: 0, dy: 0 } });
+    }
   }
 
   flush(body: HullBody, debris: ShipDebrisSystem | null, color: Color): void {
     if (debris && this.definition) {
       const scale = body.radius * this.visualScale / shipDesignRadius(this.definition);
       for (const event of this.pending) {
-        // Radial ejection keeps both laser entry and exit fragments flying outward.
         const source = event.hit.kind === 'explosion' ? new Vec2(event.hit.x, event.hit.y) : null;
         debris.emitShedComponents(this.definition, event.indices, body.position, body.angle, scale, color, source,
           seededRandom(this.definition.seed ^ (event.indices[0] + 1) * 2654435761));

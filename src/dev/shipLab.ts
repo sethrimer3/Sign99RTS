@@ -248,9 +248,15 @@ function buildPanel(): void {
   dmgVal.textContent = `${Math.round(previewHealth * 100)}%`;
   dmgSlider.addEventListener('input', () => {
     const next = Number(dmgSlider.value);
-    if (next < previewHealth) applyPreviewHit(-1, 0, (previewHealth - next) * 100);
-    else { previewHealth = next; previewHull.syncHealth(previewBody()); }
-    dmgVal.textContent = `${Math.round(next * 100)}%`;
+    const b = previewBody();
+    if (next < previewHealth) {
+      previewHull.hit(b, (previewHealth - next) * 100);
+    } else {
+      previewHull.repair(b, (next - previewHealth) * 100);
+    }
+    previewHealth = b.health / 100;
+    dmgSlider.value = previewHealth.toString();
+    dmgVal.textContent = `${Math.round(previewHealth * 100)}%`;
   });
   dmgRow.appendChild(dmgLabel); dmgRow.appendChild(dmgSlider); dmgRow.appendChild(dmgVal);
   panel.appendChild(dmgRow);
@@ -571,7 +577,14 @@ function savePreset(name: string): void {
   setParams(ov: Partial<ProceduralShipParams>) { current.params = { ...current.params, ...ov }; invalidate(); buildPanel(); },
   setTeam(i: number) { teamIndex = i; customColor = null; },
   setRts(v: boolean) { showRtsScale = v; },
-  setHealth(h: number) { previewHealth = Math.max(0, Math.min(1, h)); previewHull.syncHealth(previewBody()); buildPanel(); },
+  setHealth(h: number) { 
+    const b = previewBody();
+    const next = Math.max(0, Math.min(1, h));
+    if (next < previewHealth) previewHull.hit(b, (previewHealth - next) * 100);
+    else previewHull.repair(b, (next - previewHealth) * 100);
+    previewHealth = b.health / 100;
+    buildPanel(); 
+  },
   burst() { applyPreviewHit(-1, 0, 30); },
   clearDebris() { debris.clear(); },
   debrisCount() { return debris.activeCount; },

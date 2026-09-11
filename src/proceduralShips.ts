@@ -6,6 +6,7 @@ import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
 import type { Color } from './colors.js';
 import { renderFieryCore } from './buildingCoreEffect.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 
 // ---------------------------------------------------------------------------
 // Seeded deterministic PRNG (mulberry32). Math.random() is only ever used to
@@ -988,6 +989,8 @@ export interface ShipTransform {
   /** Quantised damage stage; 0 (default) is the undamaged, untouched cache path. */
   damageStage?: number;
   damageMesh?: { buckets: ShipBucket[]; silhouette: Path2D | null } | null;
+  /** 0..1 fraction of core health. Determines fiery core intensity. */
+  coreIntegrityFrac?: number;
 }
 
 export interface ShipDebugOverlay {
@@ -1023,6 +1026,24 @@ export function drawProceduralShip(
   ctx.translate(screen.x, screen.y);
   ctx.rotate(transform.rotation);
   ctx.scale(scale, scale);
+
+  if (geo.corePath) {
+    const intensity = transform.coreIntegrityFrac ?? 1;
+    if (intensity > 0) {
+      const side = Math.max(geo.boundingBox.maxX - geo.boundingBox.minX, geo.boundingBox.maxY - geo.boundingBox.minY);
+      renderFieryCore(ctx, {
+        path: geo.corePath,
+        x: geo.boundingBox.minX,
+        y: geo.boundingBox.minY,
+        side,
+        nodeSize: side * 0.15,
+        intensity,
+        timeSec: performance.now() * 0.001,
+        seed: def.seed,
+        glow: !isLegacyGraphics(),
+      });
+    }
+  }
 
   let fills = 0;
   const buckets = transform.damageMesh?.buckets ?? getStageBuckets(geo, transform.damageStage ?? 0);

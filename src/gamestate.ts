@@ -651,7 +651,6 @@ export class GameState {
     this.shipDebris.update(dt);
     for (const ship of this.playerShips.values()) ship.updateDamageVisuals(this.shipDebris);
     for (const fighter of this.fighters) {
-      fighter.hullDamage?.syncHealth(fighter);
       fighter.hullDamage?.flush(fighter, this.shipDebris, teamColor(fighter.team));
     }
     this.updateExplosionGlows(dt);

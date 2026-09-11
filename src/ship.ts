@@ -623,7 +623,6 @@ export class PlayerShip extends Entity {
   /** Repair / fallback HP reconciliation and pooled debris emission, once per tick. */
   updateDamageVisuals(debris: ShipDebrisSystem | null, hit: Vec2 | null = null): void {
     if (!this.design) return;
-    this.hullDamage?.syncHealth(this);
     this.hullDamage?.flush(this, debris, teamColor(this.team));
     this.damageStage = damageStageForHealth(this.healthFraction);
   }
@@ -663,7 +662,18 @@ export class PlayerShip extends Entity {
       }
     }
     this.healthRegenDelay = PASSIVE_HEALTH_REGEN_DELAY;
-    if (amount > 0) super.takeDamage(amount, source, impact);
+    if (amount > 0) {
+      if (this.hullDamage) {
+        if (source) this.lastDamageSource = source;
+        this.hullDamage.hit(this, amount, impact);
+        if (this.health <= 0 || this.hullDamage.coreIntegrity <= 0) {
+          this.health = 0;
+          this.destroy();
+        }
+      } else {
+        super.takeDamage(amount, source, impact);
+      }
+    }
   }
 
   private updateShield(dt: number): void {
@@ -684,7 +694,12 @@ export class PlayerShip extends Entity {
     if (this.health > 0 && this.health < this.maxHealth) {
       const fullEnergy = this.battery >= this.maxBattery;
       const regenMult = fullEnergy ? FULL_ENERGY_HEALTH_REGEN_MULT : 1;
-      this.health = Math.min(this.maxHealth, this.health + PASSIVE_HEALTH_REGEN_RATE * regenMult * dt);
+      const amount = PASSIVE_HEALTH_REGEN_RATE * regenMult * dt;
+      if (this.hullDamage) {
+        this.hullDamage.repair(this, amount);
+      } else {
+        this.health = Math.min(this.maxHealth, this.health + amount);
+      }
     }
   }
 
