@@ -1173,7 +1173,7 @@ export class MainMenu {
     const contentBottom = this.settingsTab === 'controls'
       ? 190 + (KEYBIND_DEFINITIONS.length + 1) * rowH + 90
       : this.settingsTab === 'gameplay' ? (this.languageDropdownOpen ? 620 : 390)
-      : this.settingsTab === 'graphics' ? (652 + (this.spaceColorDropdownOpen ? SPACE_COLOR_OPTIONS.length * 30 : 0) + (this.fontDropdownOpen ? GAME_FONT_OPTIONS.length * 30 : 0))
+      : this.settingsTab === 'graphics' ? (652 + rowH + (this.spaceColorDropdownOpen ? SPACE_COLOR_OPTIONS.length * 30 : 0) + (this.fontDropdownOpen ? GAME_FONT_OPTIONS.length * 30 : 0))
       : 520;
     const maxScroll = Math.max(0, contentBottom - viewportBottom);
     if (maxScroll > 0 && this.wheelDeltaLatched !== 0) {
@@ -1205,6 +1205,10 @@ export class MainMenu {
       y = this.drawThemeColorRow(ctx, x, y, rowH, tr('settings.enemyColor'), themeSettings.enemyColor, themeSettings.playerColor, true, (v) => {
         themeSettings.enemyColor = v; applyThemeColors(); saveThemeSettings();
       });
+      this.drawButtonRow(ctx, [
+        { label: 'Ship Lab', action: () => { window.open('shiplab.html', '_blank', 'noopener,noreferrer'); } },
+      ], cx, y + 18);
+      y += rowH;
       y = this.drawSpaceColorDropdown(ctx, x, y, rowH);
       y = this.drawFontDropdown(ctx, x, y, rowH);
       y = this.drawZoomSliderRow(ctx, x, y, rowH, tr('settings.gameZoom'), this.gameZoom, (v) => { this.gameZoom = v; });
