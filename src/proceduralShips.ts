@@ -149,7 +149,7 @@ export interface ShipBucket {
   depth: number;
   shadeIndex: number;
   accent: boolean;
-  path: Path2D;
+  path: Path2D | null;
   /** Smallest feature in this bucket; the bucket is skipped when it is sub-pixel. */
   minFeature: number;
   polyCount: number;
@@ -158,7 +158,7 @@ export interface ShipBucket {
 export interface ShipGeometry {
   polygons: ShipPolygon[];
   buckets: ShipBucket[];
-  silhouette: Path2D;
+  silhouette: Path2D | null;
   outline: Vec2[];
   shadeBands: number;
   hueSpread: number;
@@ -173,7 +173,7 @@ export interface ShipGeometry {
   shedOrder: number[];
   /** Lazily baked bucket sets per damage stage; slot 0 is always `buckets`. */
   stageBuckets: (ShipBucket[] | undefined)[];
-  stageSilhouettes: (Path2D | undefined)[];
+  stageSilhouettes: (Path2D | null | undefined)[];
   /** Lazily baked one-Path2D-per-component, shared by every debris instance. */
   componentPaths: Path2D[] | null;
 }
@@ -579,13 +579,13 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
 
   // The strokable/fallback silhouette is the base planform, not the convex hull: the hull
   // encloses too much empty space between wings to read as an outline.
-  const silhouette = new Path2D();
+  const silhouette = typeof Path2D === 'undefined' ? null : new Path2D();
   const ml = 1 - Math.min(0.4, p.asymmetry);
-  silhouette.moveTo(N.x, N.y);
-  silhouette.lineTo(W.x, W.y);
-  silhouette.lineTo(T.x, T.y);
-  silhouette.lineTo(W.x, -W.y * ml);
-  silhouette.closePath();
+  silhouette?.moveTo(N.x, N.y);
+  silhouette?.lineTo(W.x, W.y);
+  silhouette?.lineTo(T.x, T.y);
+  silhouette?.lineTo(W.x, -W.y * ml);
+  silhouette?.closePath();
 
   const bands = Math.round(Math.max(2, Math.min(12, p.shadeBands)));
   const buckets = bakeBuckets(em.polys, bands);
@@ -651,19 +651,19 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
 
 /** Bake polygons into one Path2D per (depth, shadeIndex, accent) so drawing a ship is a
  *  handful of ctx.fill() calls with zero per-frame path construction. */
-function bakeBuckets(polys: ShipPolygon[], bands: number): ShipBucket[] {
+export function bakeBuckets(polys: ShipPolygon[], bands: number): ShipBucket[] {
   const map = new Map<number, ShipBucket>();
   for (const poly of polys) {
     const si = Math.max(0, Math.min(bands - 1, Math.round(poly.shade * (bands - 1))));
     const key = poly.depth * 64 + si * 2 + (poly.accent ? 1 : 0);
     let b = map.get(key);
     if (!b) {
-      b = { depth: poly.depth, shadeIndex: si, accent: poly.accent, path: new Path2D(), minFeature: Infinity, polyCount: 0 };
+      b = { depth: poly.depth, shadeIndex: si, accent: poly.accent, path: typeof Path2D === 'undefined' ? null : new Path2D(), minFeature: Infinity, polyCount: 0 };
       map.set(key, b);
     }
-    b.path.moveTo(poly.pts[0], poly.pts[1]);
-    for (let i = 2; i < poly.pts.length; i += 2) b.path.lineTo(poly.pts[i], poly.pts[i + 1]);
-    b.path.closePath();
+    b.path?.moveTo(poly.pts[0], poly.pts[1]);
+    for (let i = 2; i < poly.pts.length; i += 2) b.path?.lineTo(poly.pts[i], poly.pts[i + 1]);
+    b.path?.closePath();
     if (poly.feature < b.minFeature) b.minFeature = poly.feature;
     b.polyCount++;
   }
@@ -808,8 +808,8 @@ export function getStageBuckets(geo: ShipGeometry, stage: number): ShipBucket[] 
   const gone = new Set(geo.shedOrder.slice(0, shedCountForStage(geo, s)));
   const kept = geo.polygons.filter((poly) => !gone.has(poly.index));
   const built = bakeBuckets(kept, geo.shadeBands);
-  const silhouette = new Path2D();
-  for (const bucket of built) silhouette.addPath(bucket.path);
+  const silhouette = typeof Path2D === 'undefined' ? null : new Path2D();
+  for (const bucket of built) bucket.path && silhouette?.addPath(bucket.path);
   geo.stageSilhouettes[s] = silhouette;
   geo.stageBuckets[s] = built;
   return built;
@@ -890,6 +890,7 @@ export interface ShipTransform {
   color?: Color;
   /** Quantised damage stage; 0 (default) is the undamaged, untouched cache path. */
   damageStage?: number;
+  damageMesh?: { buckets: ShipBucket[]; silhouette: Path2D | null } | null;
 }
 
 export interface ShipDebugOverlay {
@@ -927,14 +928,14 @@ export function drawProceduralShip(
   ctx.scale(scale, scale);
 
   let fills = 0;
-  const buckets = getStageBuckets(geo, transform.damageStage ?? 0);
+  const buckets = transform.damageMesh?.buckets ?? getStageBuckets(geo, transform.damageStage ?? 0);
   const stage = Math.min(DAMAGE_STAGES - 1, Math.max(0, Math.round(transform.damageStage ?? 0)));
-  const silhouette = geo.stageSilhouettes[stage]!;
+  const silhouette = transform.damageMesh?.silhouette ?? geo.stageSilhouettes[stage]!;
   for (let i = 0; i < buckets.length; i++) {
     const b = buckets[i];
     if (b.minFeature * scale < MIN_FEATURE_PX) continue;
     ctx.fillStyle = b.accent ? ramp.accents[b.shadeIndex] : ramp.fills[b.shadeIndex];
-    ctx.fill(b.path);
+    if (b.path) ctx.fill(b.path);
     fills++;
   }
   if (fills === 0) {
@@ -1008,7 +1009,7 @@ export function drawProceduralShip(
     if (debug.showBucketBands) {
       ctx.strokeStyle = 'rgba(255,255,255,0.35)';
       ctx.lineWidth = 0.5 / scale;
-      for (const b of geo.buckets) ctx.stroke(b.path);
+      for (const b of geo.buckets) if (b.path) ctx.stroke(b.path);
     }
   }
 

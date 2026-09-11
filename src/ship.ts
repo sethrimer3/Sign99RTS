@@ -19,6 +19,8 @@ import {
   damageStageForHealth, componentsShedBetween, seededRandom,
   type ProceduralShipDefinition,
 } from './proceduralShips.js';
+import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
+import { fleetDesign } from './shipFamilies.js';
 import type { ShipDebrisSystem } from './shipDebris.js';
 
 const BATTERY_MAX = 100;
@@ -240,7 +242,8 @@ export class PlayerShip extends Entity {
     this.friction = 1.0;
     this.aimWorld = new Vec2(position.x + 100, position.y);
     // Dev override from the Ship Lab, if one has been set. No-op when the key is absent.
-    this.design = loadDevShipDesign();
+    this.design = loadDevShipDesign() ?? fleetDesign(team, 'hero');
+    this.hullDamage = new ShipHullDamage(() => this.design);
   }
 
   update(dt: number): void {
@@ -305,6 +308,7 @@ export class PlayerShip extends Entity {
     this.health = this.maxHealth;
     this.alive = true;
     this.damageStage = 0;
+    this.hullDamage?.reset();
     this.battery = this.maxBattery;
     this.energyRegenDelay = 0;
     this.energyDrainMark = this.maxBattery;
@@ -615,6 +619,7 @@ export class PlayerShip extends Entity {
   setDesign(design: ProceduralShipDefinition | null): void {
     this.design = design;
     this.damageStage = 0;
+    this.hullDamage?.reset();
     this.debrisRng = null;
   }
 
@@ -625,20 +630,9 @@ export class PlayerShip extends Entity {
    */
   updateDamageVisuals(debris: ShipDebrisSystem | null, hit: Vec2 | null = null): void {
     if (!this.design) return;
-    // A lethal hit still crosses the remaining stages before dead-entity cleanup.
-    const frac = !this.alive ? 0 : this.maxHealth > 0 ? this.health / this.maxHealth : 1;
-    const stage = damageStageForHealth(frac);
-    if (stage === this.damageStage) return;
-    const prev = this.damageStage;
-    this.damageStage = stage;
-    if (!debris || stage <= prev) return;
-    const geo = getShipGeometry(this.design);
-    const shed = componentsShedBetween(geo, prev, stage);
-    if (shed.length === 0) return;
-    if (!this.debrisRng) this.debrisRng = seededRandom((this.design.seed ^ 0x9e3779b9) >>> 0);
-    const scale = (this.radius * 1.4) / shipDesignRadius(this.design);
-    debris.emitShedComponents(this.design, shed, this.position, this.angle, scale,
-      teamColor(this.team), hit, this.debrisRng);
+    this.hullDamage?.syncHealth(this);
+    this.hullDamage?.flush(this, debris, teamColor(this.team));
+    this.damageStage = damageStageForHealth(this.healthFraction);
   }
 
   /** Current visual damage stage (diagnostics / dev preview). */
@@ -659,9 +653,9 @@ export class PlayerShip extends Entity {
     return baseCooldown / fireRateMultiplier;
   }
 
-  override takeDamage(amount: number, source?: Entity): void {
+  override takeDamage(amount: number, source?: Entity, impact?: HullImpact): void {
     if (!this.alive || amount <= 0) {
-      super.takeDamage(amount, source);
+      super.takeDamage(amount, source, impact);
       return;
     }
     // Spawn invincibility blocks all incoming damage during the grace period
@@ -676,7 +670,7 @@ export class PlayerShip extends Entity {
       }
     }
     this.healthRegenDelay = PASSIVE_HEALTH_REGEN_DELAY;
-    if (amount > 0) super.takeDamage(amount, source);
+    if (amount > 0) super.takeDamage(amount, source, impact);
   }
 
   private updateShield(dt: number): void {
@@ -910,7 +904,7 @@ export class PlayerShip extends Entity {
       const scale = (this.radius * 1.4) / shipDesignRadius(this.design);
       drawProceduralShip(ctx, camera, this.design, {
         position: this.position, rotation: this.angle, scale, color: coreColor,
-        damageStage: this.damageStage,
+        damageMesh: this.hullDamage?.renderMesh(),
       });
       return;
     }

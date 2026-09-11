@@ -1,3 +1,5 @@
+import type { HullSnapshot } from '../shipHullDamage.js';
+import type { ProceduralShipDefinition } from '../proceduralShips.js';
 /**
  * LAN multiplayer protocol message types for Sign99RTS.
  *
@@ -130,6 +132,8 @@ export interface MsgGameSnapshot {
 }
 
 export interface SerializedShip {
+  hull?: HullSnapshot;
+  design?: ProceduralShipDefinition | null;
   slotIndex: number;
   team: number;
   x: number; y: number;
@@ -153,6 +157,9 @@ export interface SerializedProjectile {
 }
 
 export interface SerializedFighter {
+  hull?: HullSnapshot;
+  health?: number;
+  maxHealth?: number;
   id: number;
   /** EntityType enum value (Fighter or Bomber) */
   entityType: number;

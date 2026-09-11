@@ -650,6 +650,10 @@ export class GameState {
     this.particles.update(dt);
     this.shipDebris.update(dt);
     for (const ship of this.playerShips.values()) ship.updateDamageVisuals(this.shipDebris);
+    for (const fighter of this.fighters) {
+      fighter.hullDamage?.syncHealth(fighter);
+      fighter.hullDamage?.flush(fighter, this.shipDebris, teamColor(fighter.team));
+    }
     this.updateExplosionGlows(dt);
     this.ringEffects.update(dt);
     this.ringEffects.prune();
@@ -835,7 +839,7 @@ export class GameState {
     velY: number,
     source: Entity | null,
   ): void {
-    target.takeDamage(damage, source ?? undefined);
+    target.takeDamage(damage, source ?? undefined, { kind: 'bullet', x: hitX, y: hitY, dx: velX, dy: velY });
     this.recentlyDamaged.add(target.id);
     if (!target.alive) {
       this.particles.emitExplosion(target.position, target.radius);
@@ -1310,7 +1314,7 @@ export class GameState {
       return;
     }
 
-    target.takeDamage(proj.damage, proj);
+    target.takeDamage(proj.damage, proj, { kind: 'bullet', x: proj.position.x, y: proj.position.y, dx: proj.velocity.x, dy: proj.velocity.y });
     this.recentlyDamaged.add(target.id);
     if (!target.alive) {
       this.particles.emitExplosion(target.position, target.radius);
@@ -1340,7 +1344,7 @@ export class GameState {
       // blast uses the shared 4-step ring falloff.
       const dmg = e === directTarget ? proj.damage : ringSplashDamage(proj.damage, d, blastRadius);
       if (dmg <= 0) continue;
-      e.takeDamage(dmg, proj);
+      e.takeDamage(dmg, proj, { kind: 'explosion', x: proj.position.x, y: proj.position.y, dx: e.position.x - proj.position.x, dy: e.position.y - proj.position.y });
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else {
@@ -1465,7 +1469,7 @@ export class GameState {
       if (d > proj.aoeRadius + e.radius) continue;
       const dmg = ringSplashDamage(proj.pulseDamage, d, proj.aoeRadius);
       if (dmg <= 0) continue;
-      e.takeDamage(dmg, proj);
+      e.takeDamage(dmg, proj, { kind: 'explosion', x: proj.position.x, y: proj.position.y, dx: e.position.x - proj.position.x, dy: e.position.y - proj.position.y });
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else {
@@ -1508,7 +1512,7 @@ export class GameState {
       if (d > radius + e.radius) continue;
       const dmg = ringSplashDamage(proj.damage, d, radius);
       if (dmg <= 0) continue;
-      e.takeDamage(dmg, proj);
+      e.takeDamage(dmg, proj, { kind: 'explosion', x: proj.position.x, y: proj.position.y, dx: e.position.x - proj.position.x, dy: e.position.y - proj.position.y });
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else {
