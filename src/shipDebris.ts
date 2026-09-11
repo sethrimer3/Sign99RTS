@@ -7,7 +7,7 @@ import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
 import type { Color } from './colors.js';
 import { getShadeRamp, getComponentPath, getShipGeometry } from './proceduralShips.js';
-import type { ProceduralShipDefinition } from './proceduralShips.js';
+import type { ProceduralShipDefinition, ShipGeometry } from './proceduralShips.js';
 
 /** Hard global cap; oldest is evicted first so a large battle cannot explode. */
 const POOL_SIZE = 320;
@@ -34,7 +34,7 @@ export type DebrisFluidSink = (x: number, y: number, vx: number, vy: number, col
 
 interface DebrisPiece {
   active: boolean;
-  def: ProceduralShipDefinition | null;
+  geometry: ShipGeometry | null;
   index: number;
   x: number; y: number;
   vx: number; vy: number;
@@ -54,7 +54,7 @@ interface DebrisPiece {
 
 function createPiece(): DebrisPiece {
   return {
-    active: false, def: null, index: 0, x: 0, y: 0, vx: 0, vy: 0,
+    active: false, geometry: null, index: 0, x: 0, y: 0, vx: 0, vy: 0,
     angle: 0, spin: 0, scale: 1, life: 0, maxLife: 1, radius: 1, phase: 0, shade: 0.5,
     accent: false, color: null, stamp: 0,
   };
@@ -141,7 +141,7 @@ export class ShipDebrisSystem {
       const fill = this.activeIndices.length / POOL_SIZE;
       const lifeScale = 1 - 0.72 * fill * fill;
       const piece = this.acquire();
-      piece.def = def;
+      piece.geometry = geo;
       piece.index = poly.index;
       piece.x = wx; piece.y = wy;
       piece.vx = (ox * 0.75 + hx * 0.55) * speed;
@@ -157,6 +157,7 @@ export class ShipDebrisSystem {
       piece.accent = poly.accent;
       piece.color = color;
     }
+    this.activeCount = this.activeIndices.length;
   }
 
   /** Impart impulse to wreckage near a weapon impact. Called from the existing hit path. */
@@ -186,7 +187,7 @@ export class ShipDebrisSystem {
       piece.life -= dt;
       if (piece.life <= 0) {
         piece.active = false;
-        piece.def = null;
+        piece.geometry = null;
         this.activeIndices.splice(i, 1);
         this.freeStack.push(poolIndex);
         continue;
@@ -243,8 +244,8 @@ export class ShipDebrisSystem {
     if (this.activeIndices.length === 0) return;
     for (let i = 0; i < this.activeIndices.length; i++) {
       const piece = this.pool[this.activeIndices[i]];
-      if (!piece.def || !piece.color) continue;
-      const geo = getShipGeometry(piece.def);
+      if (!piece.geometry || !piece.color) continue;
+      const geo = piece.geometry;
       const screen = camera.worldToScreen(new Vec2(piece.x, piece.y));
       if (screen.x < -60 || screen.y < -60 || screen.x > camera.screenW + 60 || screen.y > camera.screenH + 60) continue;
       const ramp = getShadeRamp(piece.color, geo.shadeBands, geo.hueSpread, geo.accentHueShift);
@@ -264,9 +265,15 @@ export class ShipDebrisSystem {
   }
 
   clear(): void {
-    for (let i = 0; i < this.activeIndices.length; i++) this.pool[this.activeIndices[i]].active = false;
+    for (const index of this.activeIndices) {
+      this.pool[index].active = false;
+      this.pool[index].geometry = null;
+      this.pool[index].color = null;
+    }
     this.activeIndices.length = 0;
     this.freeStack = Array.from({ length: POOL_SIZE }, (_, i) => POOL_SIZE - 1 - i);
     this.activeCount = 0;
+    this.drawnCount = 0;
+    this.collisionChecks = 0;
   }
 }

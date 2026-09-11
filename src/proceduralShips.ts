@@ -173,6 +173,7 @@ export interface ShipGeometry {
   shedOrder: number[];
   /** Lazily baked bucket sets per damage stage; slot 0 is always `buckets`. */
   stageBuckets: (ShipBucket[] | undefined)[];
+  stageSilhouettes: (Path2D | undefined)[];
   /** Lazily baked one-Path2D-per-component, shared by every debris instance. */
   componentPaths: Path2D[] | null;
 }
@@ -643,6 +644,7 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     bucketCount: buckets.length,
     shedOrder,
     stageBuckets: [buckets],
+    stageSilhouettes: [silhouette],
     componentPaths: null,
   };
 }
@@ -786,7 +788,15 @@ export function damageStageForHealth(healthFraction: number): number {
 function shedCountForStage(geo: ShipGeometry, stage: number): number {
   if (stage <= 0) return 0;
   const t = Math.min(1, stage / (DAMAGE_STAGES - 1));
-  return Math.floor(Math.pow(t, 1.15) * MAX_SHED_FRACTION * geo.shedOrder.length);
+  let count = Math.floor(Math.pow(t, 1.15) * MAX_SHED_FRACTION * geo.shedOrder.length);
+  // Round down to a complete group, preserving both atomic detachment and the core budget.
+  if (count > 0 && count < geo.shedOrder.length) {
+    const group = geo.polygons[geo.shedOrder[count]].group;
+    if (group > 0) {
+      while (count > 0 && geo.polygons[geo.shedOrder[count - 1]].group === group) count--;
+    }
+  }
+  return count;
 }
 
 /** Bucket set for a damage stage. Stage 0 returns the untouched baked buckets. */
@@ -798,6 +808,9 @@ export function getStageBuckets(geo: ShipGeometry, stage: number): ShipBucket[] 
   const gone = new Set(geo.shedOrder.slice(0, shedCountForStage(geo, s)));
   const kept = geo.polygons.filter((poly) => !gone.has(poly.index));
   const built = bakeBuckets(kept, geo.shadeBands);
+  const silhouette = new Path2D();
+  for (const bucket of built) silhouette.addPath(bucket.path);
+  geo.stageSilhouettes[s] = silhouette;
   geo.stageBuckets[s] = built;
   return built;
 }
@@ -915,6 +928,8 @@ export function drawProceduralShip(
 
   let fills = 0;
   const buckets = getStageBuckets(geo, transform.damageStage ?? 0);
+  const stage = Math.min(DAMAGE_STAGES - 1, Math.max(0, Math.round(transform.damageStage ?? 0)));
+  const silhouette = geo.stageSilhouettes[stage]!;
   for (let i = 0; i < buckets.length; i++) {
     const b = buckets[i];
     if (b.minFeature * scale < MIN_FEATURE_PX) continue;
@@ -924,7 +939,7 @@ export function drawProceduralShip(
   }
   if (fills === 0) {
     ctx.fillStyle = ramp.fills[Math.min(ramp.fills.length - 1, 2)];
-    ctx.fill(geo.silhouette);
+    ctx.fill(silhouette);
     fills = 1;
   }
   lastFillCalls = fills;
@@ -934,7 +949,7 @@ export function drawProceduralShip(
     ctx.lineWidth = Math.max(0.6, p.lineThickness) / scale;
     ctx.strokeStyle = ramp.rim;
     ctx.globalAlpha = 0.55;
-    ctx.stroke(geo.silhouette);
+    ctx.stroke(silhouette);
     ctx.globalAlpha = 1;
   }
   if (p.glowAmount > 0) {
@@ -942,7 +957,7 @@ export function drawProceduralShip(
     ctx.globalAlpha = Math.min(0.6, p.glowAmount * 0.6);
     ctx.lineWidth = (1.4 + p.glowAmount) / scale;
     ctx.strokeStyle = ramp.rim;
-    ctx.stroke(geo.silhouette);
+    ctx.stroke(silhouette);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
