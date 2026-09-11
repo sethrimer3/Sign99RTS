@@ -167,8 +167,20 @@ function maskPath(x: number, y: number, side: number, node: number): Path2D {
   return p;
 }
 
-export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: CoreEffectOpts): void {
-  const { x, y, side, nodeSize, timeSec, seed, glow } = opts;
+export interface FieryCoreOpts {
+  path: Path2D;
+  x: number;
+  y: number;
+  side: number;
+  nodeSize: number; // used for scaling the noise
+  intensity: number;
+  timeSec: number;
+  seed: number;
+  glow: boolean;
+}
+
+export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOpts): void {
+  const { path, x, y, side, nodeSize, timeSec, seed, glow } = opts;
   const intensity = Math.max(0, Math.min(1, opts.intensity));
   if (intensity <= 0.001 || side < 6) return;
 
@@ -176,9 +188,7 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
   if (!noiseTile) noiseTile = buildNoiseTile();
   const tile = noiseTile;
 
-  const path = maskPath(x, y, side, nodeSize);
   const n = Math.min(nodeSize, side * 0.5);
-
   const layers = LAYERS.slice(0, layerCount);
   const tileRun = (drawn: number, ox: number, oy: number) => {
     for (let ty = -1; ty <= Math.ceil(side / drawn) + 1; ty++) {
@@ -213,8 +223,7 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
   ctx.fillStyle = grad;
   ctx.fillRect(x, y, side, side);
 
-  // 2) carve the flame shapes out of the bed — dark noise gaps darken it, so
-  //    the sharp ridged pattern reads as licking fire tongues.
+  // 2) carve the flame shapes out of the bed
   ctx.globalCompositeOperation = 'multiply';
   for (let li = 0; li < layers.length; li++) {
     const s = scroll(li);
@@ -222,7 +231,7 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
     tileRun(s.drawn, s.ox, s.oy);
   }
 
-  // 3) additive hot cores — the brightest noise crests glow white-yellow.
+  // 3) additive hot cores
   ctx.globalCompositeOperation = 'lighter';
   for (let li = 0; li < layers.length; li++) {
     const s = scroll(li);
@@ -232,9 +241,12 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
 
   ctx.restore();
 
-  // 4) soft warm shader-style bloom around the node frame (High / Ultra only).
-  //    Shared renderer — same glow reused by laser beams etc. (see warmGlow.ts).
   if (glow && glowEnabled) {
     renderWarmGlow(ctx, path, { intensity, ...warmGlowFrameStyle(n) });
   }
+}
+
+export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: CoreEffectOpts): void {
+  const path = maskPath(opts.x, opts.y, opts.side, opts.nodeSize);
+  renderFieryCore(ctx, { ...opts, path });
 }

@@ -5,6 +5,7 @@
 import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
 import type { Color } from './colors.js';
+import { renderFieryCore } from './buildingCoreEffect.js';
 
 // ---------------------------------------------------------------------------
 // Seeded deterministic PRNG (mulberry32). Math.random() is only ever used to
@@ -182,6 +183,7 @@ export interface ShipGeometry {
   componentPaths: Path2D[] | null;
   totalMass: number;
   coreIndices: number[];
+  corePath: Path2D | null;
 }
 
 type P = { x: number; y: number };
@@ -264,6 +266,35 @@ class Emitter {
     if (this.polys.length + 1 > this.limit) return;
     this.polys.push({ pts, depth, shade: this.shadeFor(pts, target), accent, feature: polyFeature(pts), index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(pts), cy: centroidY(pts), area: polyArea(pts), isCore, neighbors: [], coreDistance: 0 });
   }
+}
+
+function pointToSegmentDistSq(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const l2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
+  if (l2 === 0) return (px - ax) * (px - ax) + (py - ay) * (py - ay);
+  let t = ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  const projx = ax + t * (bx - ax);
+  const projy = ay + t * (by - ay);
+  return (px - projx) * (px - projx) + (py - projy) * (py - projy);
+}
+
+function polygonsAdjacent(pts1: number[], pts2: number[], threshold: number): boolean {
+  const t2 = threshold * threshold;
+  for (let i = 0; i < pts1.length; i += 2) {
+    const px = pts1[i], py = pts1[i+1];
+    for (let j = 0; j < pts2.length; j += 2) {
+      const jNext = (j + 2) % pts2.length;
+      if (pointToSegmentDistSq(px, py, pts2[j], pts2[j+1], pts2[jNext], pts2[jNext+1]) <= t2) return true;
+    }
+  }
+  for (let i = 0; i < pts2.length; i += 2) {
+    const px = pts2[i], py = pts2[i+1];
+    for (let j = 0; j < pts1.length; j += 2) {
+      const jNext = (j + 2) % pts1.length;
+      if (pointToSegmentDistSq(px, py, pts1[j], pts1[j+1], pts1[jNext], pts1[jNext+1]) <= t2) return true;
+    }
+  }
+  return false;
 }
 
 function convexHull(pts: number[][]): number[][] {
@@ -641,6 +672,57 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   const shedOrder: number[] = [];
   for (const entry of entries) for (const idx of entry.members) shedOrder.push(idx);
 
+  const totalMass = em.polys.reduce((sum, p) => sum + p.area, 0);
+  const coreIndices = em.polys.filter(p => p.isCore).map(p => p.index);
+  const corePath = typeof Path2D === 'undefined' ? null : new Path2D();
+  if (corePath) {
+    for (const idx of coreIndices) {
+      const poly = em.polys[idx];
+      corePath.moveTo(poly.pts[0], poly.pts[1]);
+      for (let i = 2; i < poly.pts.length; i += 2) {
+        corePath.lineTo(poly.pts[i], poly.pts[i+1]);
+      }
+      corePath.closePath();
+    }
+  }
+
+  for (let i = 0; i < em.polys.length; i++) {
+    const p1 = em.polys[i];
+    for (let j = i + 1; j < em.polys.length; j++) {
+      const p2 = em.polys[j];
+      const dx = p1.cx - p2.cx;
+      const dy = p1.cy - p2.cy;
+      const maxDist = (p1.feature + p2.feature) * 1.5;
+      if (dx * dx + dy * dy > maxDist * maxDist) continue;
+      if (polygonsAdjacent(p1.pts, p2.pts, maxDist * 0.15)) {
+        p1.neighbors.push(p2.index);
+        p2.neighbors.push(p1.index);
+      }
+    }
+  }
+
+  const queue = [...coreIndices];
+  const visited = new Set(coreIndices);
+  for (const idx of coreIndices) {
+    em.polys[idx].coreDistance = 0;
+  }
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    const currDist = em.polys[curr].coreDistance;
+    for (const neighbor of em.polys[curr].neighbors) {
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);
+        em.polys[neighbor].coreDistance = currDist + 1;
+        queue.push(neighbor);
+      }
+    }
+  }
+  for (const poly of em.polys) {
+    if (!visited.has(poly.index)) {
+      poly.coreDistance = Infinity; // disconnected from core even initially (rare)
+    }
+  }
+
   return {
     polygons: em.polys,
     buckets,
@@ -658,6 +740,9 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     stageBuckets: [buckets],
     stageSilhouettes: [silhouette],
     componentPaths: null,
+    totalMass,
+    coreIndices,
+    corePath,
   };
 }
 
