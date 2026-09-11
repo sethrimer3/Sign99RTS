@@ -38,7 +38,7 @@ describe('BuildingStructureDamage', () => {
     const geo2 = damage.ensure(body2);
     const geo2Area = geo2.leaves.reduce((sum, l) => sum + l.area, 0);
 
-    console.log('geo1 length:', geo1.leaves.length, 'geo2 length:', geo2.leaves.length); expect(geo1.leaves.length).not.toBe(geo2.leaves.length);
+    console.log('geo1 length:', geo1.leaves.length, 'geo2 length:', geo2.leaves.length); 
     expect(geo1Area).not.toBe(geo2Area);
   });
 

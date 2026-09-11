@@ -465,19 +465,22 @@ export class BuildingStructureDamage {
 
   public applySnapshot(snap: BuildingStructureSnapshot | undefined, body: BuildingStructureBody) {
     if (!snap) {
+      this.appliedSeed = undefined;
+      const geo = this.ensure(body);
       this.removedIndices = [];
       this.coreIntegrity = [1, 1, 1, 1];
       this.dirtyRender = true;
-      const geo = this.ensure(body);
       this.connectedMass = geo.totalMass;
       return;
     }
+    
     this.appliedSeed = snap.seed;
+    const geo = this.ensure(body);
+
     this.removedIndices = [...snap.removed];
     this.coreIntegrity = [...snap.coreIntegrityFrac];
     this.dirtyRender = true;
     
-    const geo = this.ensure(body);
     const gone = new Set(this.removedIndices);
     let mass = 0;
     for (let i = 0; i < geo.leaves.length; i++) {
