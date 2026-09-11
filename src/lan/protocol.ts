@@ -157,6 +157,7 @@ export interface SerializedProjectile {
 }
 
 export interface SerializedFighter {
+  design?: ProceduralShipDefinition;
   hull?: HullSnapshot;
   health?: number;
   maxHealth?: number;

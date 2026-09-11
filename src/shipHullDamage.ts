@@ -72,26 +72,16 @@ export class ShipHullDamage {
     if (len < 1e-6) { dx = 1; dy = 0; } else { dx /= len; dy /= len; }
     const radius = shipDesignRadius(this.definition);
     const lane = Math.max(1, (hit.radius ?? 0) / scale, radius * (hit.kind === 'explosion' ? 0.45 : 0.07));
-    // One projection per polygon. Rank the front surface within a narrow shot corridor;
-    // blasts widen that corridor. No ray/triangle intersection tree or per-frame searches.
-    const candidates = geo.polygons.filter(p => !this.gone.has(p.index)).map(p => {
-      const along = p.cx * dx + p.cy * dy;
-      const across = Math.abs((p.cx - sx) * -dy + (p.cy - sy) * dx);
-      const off = Math.max(0, across - p.feature * 0.5 - lane);
-      const core = (1 - p.peripheral) * radius * 0.12;
-      return { index: p.index, front: along + off * 8 + core, back: -along + off * 8 + core };
-    });
-    const front = [...candidates].sort((a, b) => a.front - b.front || a.index - b.index);
-    const back = hit.kind === 'laser' ? [...candidates].sort((a, b) => a.back - b.back || a.index - b.index) : front;
+    const { front, back } = rankedComponents(geo, dx, dy, sx, sy, lane, radius);
     let fi = 0, bi = 0;
     const detached: number[] = [];
     for (let i = 0; i < needed && this.gone.size < geo.polyCount; i++) {
       const exit = hit.kind === 'laser' && i % 2 === 1;
       const list = exit ? back : front;
       let at = exit ? bi : fi;
-      while (at < list.length && this.gone.has(list[at].index)) at++;
+      while (at < list.length && this.gone.has(list[at])) at++;
       if (at >= list.length) break;
-      const index = list[at].index;
+      const index = list[at];
       if (exit) bi = at + 1; else fi = at + 1;
       this.gone.add(index); this.order.push(index); detached.push(index);
     }
@@ -154,4 +144,35 @@ export class ShipHullDamage {
     }
     return this.mesh;
   }
+}
+
+// Rankings are shared by the entire fleet, with bounded direction/offset bins. Repeated
+// fire along the same corridor only walks these indices; it does not sort 480 triangles.
+const rankingCache = new WeakMap<ShipGeometry, Map<string, { front: Uint16Array; back: Uint16Array }>>();
+function rankedComponents(geo: ShipGeometry, dx: number, dy: number, sx: number, sy: number, lane: number, radius: number) {
+  const angleBin = Math.round(Math.atan2(dy, dx) * 64 / (Math.PI * 2));
+  const angle = angleBin * Math.PI * 2 / 64;
+  dx = Math.cos(angle); dy = Math.sin(angle);
+  const offsetBin = Math.round((-sx * dy + sy * dx) * 16 / radius);
+  const widthBin = Math.max(1, Math.ceil(lane * 32 / radius));
+  const key = `${angleBin}:${offsetBin}:${widthBin}`;
+  let cache = rankingCache.get(geo);
+  if (!cache) { cache = new Map(); rankingCache.set(geo, cache); }
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const offset = offsetBin * radius / 16;
+  const width = widthBin * radius / 32;
+  const ranked = geo.polygons.map(p => {
+    const along = p.cx * dx + p.cy * dy;
+    const across = Math.abs(-p.cx * dy + p.cy * dx - offset);
+    const off = Math.max(0, across - p.feature * 0.5 - width);
+    const core = (1 - p.peripheral) * radius * 0.12;
+    return { index: p.index, front: along + off * 8 + core, back: -along + off * 8 + core };
+  });
+  const front = Uint16Array.from(ranked.sort((a, b) => a.front - b.front || a.index - b.index).map(p => p.index));
+  const back = Uint16Array.from(ranked.sort((a, b) => a.back - b.back || a.index - b.index).map(p => p.index));
+  const result = { front, back };
+  if (cache.size >= 64) cache.delete(cache.keys().next().value!);
+  cache.set(key, result);
+  return result;
 }

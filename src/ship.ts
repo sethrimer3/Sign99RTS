@@ -15,12 +15,12 @@ import { getCinematicLevel } from './cinematic.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
 import {
-  drawProceduralShip, shipDesignRadius, loadDevShipDesign, getShipGeometry,
-  damageStageForHealth, componentsShedBetween, seededRandom,
+  drawProceduralShip, shipDesignRadius,
+  damageStageForHealth,
   type ProceduralShipDefinition,
 } from './proceduralShips.js';
 import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
-import { fleetDesign } from './shipFamilies.js';
+import { gameplayFleetDesign } from './shipFamilies.js';
 import type { ShipDebrisSystem } from './shipDebris.js';
 
 const BATTERY_MAX = 100;
@@ -142,7 +142,6 @@ export class PlayerShip extends Entity {
   /** Quantised damage stage for the procedural hull. Purely visual: hitbox, HP and all
    *  stats are unaffected by how many components have been shed. */
   private damageStage = 0;
-  private debrisRng: (() => number) | null = null;
   synonymousPierceMultiplier = 1;
   synonymousFireSpeedLevel = 0;
   synonymousVitalityUnlocked = false;
@@ -242,7 +241,7 @@ export class PlayerShip extends Entity {
     this.friction = 1.0;
     this.aimWorld = new Vec2(position.x + 100, position.y);
     // Dev override from the Ship Lab, if one has been set. No-op when the key is absent.
-    this.design = loadDevShipDesign() ?? fleetDesign(team, 'hero');
+    this.design = gameplayFleetDesign(team, 'hero');
     this.hullDamage = new ShipHullDamage(() => this.design);
   }
 
@@ -620,7 +619,6 @@ export class PlayerShip extends Entity {
     this.design = design;
     this.damageStage = 0;
     this.hullDamage?.reset();
-    this.debrisRng = null;
   }
 
   /**

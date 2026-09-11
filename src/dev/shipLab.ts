@@ -1,3 +1,6 @@
+import { ShipHullDamage, type HullImpact } from '../shipHullDamage.js';
+import { fleetDesign, fleetFamilyName, type FleetRole } from '../shipFamilies.js';
+import { shipDesignRadius } from '../proceduralShips.js';
 /** Ship Lab — standalone dev tool for designing procedural ships. Not part of gameplay. */
 
 import { Vec2 } from '../math.js';
@@ -5,7 +8,7 @@ import { Camera } from '../camera.js';
 import {
   DEFAULT_PARAMS, PARAM_RANGES, drawProceduralShip, invalidateShipGeometryCache,
   mutateParams, randomizeParams, hashStringToSeed, getShipGeometry, lastFillCalls, MAX_POLYGONS,
-  DEV_SHIP_DESIGN_KEY, DAMAGE_STAGES, damageStageForHealth, componentsShedBetween,
+  DEV_SHIP_DESIGN_KEY, DAMAGE_STAGES, damageStageForHealth,
 } from '../proceduralShips.js';
 import type { ProceduralShipDefinition, ProceduralShipParams, ShipDebugOverlay } from '../proceduralShips.js';
 import { SHIP_PRESETS } from '../proceduralShipPresets.js';
@@ -24,7 +27,12 @@ const history: ProceduralShipParams[] = [];
 const debug: ShipDebugOverlay = {};
 
 const TEAMS: Team[] = [Team.Player1, Team.Player2, Team.Player3, Team.Player4, Team.Player5, Team.Player6, Team.Player7, Team.Player8, Team.Neutral];
-let teamIndex = 2;
+let teamIndex = 0;
+let fleetRole: FleetRole = 'hero';
+let overview = false;
+let impactKind: HullImpact['kind'] = 'bullet';
+let impactDamage = 8;
+const previewHull = new ShipHullDamage(() => current, 1);
 let customColor: Color | null = null;
 let previewZoom = 2.5;
 let showRtsScale = true;
@@ -102,6 +110,8 @@ function step(key: keyof ProceduralShipParams): number {
 
 function invalidate(): void {
   invalidateShipGeometryCache();
+  previewHull.reset();
+  previewHealth = 1;
 }
 
 function resizeCanvas(): void {
@@ -125,10 +135,11 @@ function render(): void {
   debris.update(dt);
 
   const stage = damageStageForHealth(previewHealth);
+  if (overview) { renderFleetOverview(); requestAnimationFrame(render); return; }
   camera.zoom = previewZoom;
   camera.position = new Vec2(0, 0);
   drawProceduralShip(ctx, camera, current, {
-    position: new Vec2(0, 0), rotation: -Math.PI / 2, color, damageStage: stage,
+    position: new Vec2(0, 0), rotation: -Math.PI / 2, color, damageMesh: previewHull.renderMesh(),
   }, debug);
   const mainFills = lastFillCalls;
   debris.draw(ctx, camera);
@@ -142,7 +153,7 @@ function render(): void {
     const corner = camera.screenToWorld(new Vec2(cw - 150 * devicePixelRatio, chh - 90 * devicePixelRatio));
     for (let i = 0; i < 4; i++) {
       drawProceduralShip(ctx, camera, current, {
-        position: new Vec2(corner.x + i * 44 / rtsZoom, corner.y), rotation: -Math.PI / 2, color,
+        position: new Vec2(corner.x + i * 44 / rtsZoom, corner.y), rotation: -Math.PI / 2, color, damageMesh: previewHull.renderMesh(),
       });
       rtsFills = lastFillCalls;
     }
@@ -169,6 +180,16 @@ function render(): void {
 function buildPanel(): void {
   panel.innerHTML = '';
 
+  addSection('Player fleet');
+  const fleetButtons = document.createElement('div'); fleetButtons.className = 'btnrow';
+  for (const role of ['hero', 'fighter', 'bomber'] as FleetRole[]) {
+    fleetButtons.appendChild(makeButton(role.toUpperCase(), () => { fleetRole = role; loadFleet(); }));
+  }
+  fleetButtons.appendChild(makeButton(overview ? 'SINGLE SHIP' : 'ALL PLAYER FLEETS', () => { overview = !overview; buildPanel(); }));
+  panel.appendChild(fleetButtons);
+  const fleetLabel = document.createElement('p');
+  fleetLabel.textContent = `${teamLabel(TEAMS[teamIndex])} - ${fleetFamilyName(TEAMS[teamIndex])} - ${fleetRole}`;
+  panel.appendChild(fleetLabel);
   addSection('Seed');
   const seedRow = document.createElement('div');
   seedRow.className = 'row';
@@ -227,10 +248,8 @@ function buildPanel(): void {
   dmgVal.textContent = `${Math.round(previewHealth * 100)}%`;
   dmgSlider.addEventListener('input', () => {
     const next = Number(dmgSlider.value);
-    const before = damageStageForHealth(previewHealth);
-    const after = damageStageForHealth(next);
-    if (after > before) burst(before, after);
-    previewHealth = next;
+    if (next < previewHealth) applyPreviewHit(-1, 0, (previewHealth - next) * 100);
+    else { previewHealth = next; previewHull.syncHealth(previewBody()); }
     dmgVal.textContent = `${Math.round(next * 100)}%`;
   });
   dmgRow.appendChild(dmgLabel); dmgRow.appendChild(dmgSlider); dmgRow.appendChild(dmgVal);
@@ -238,22 +257,31 @@ function buildPanel(): void {
 
   const dmgBtns = document.createElement('div');
   dmgBtns.className = 'btnrow';
-  dmgBtns.appendChild(makeButton('DAMAGE STEP', () => {
-    const before = damageStageForHealth(previewHealth);
-    if (before >= DAMAGE_STAGES - 1) return;
-    previewHealth = Math.max(0, 1 - (before + 1) / DAMAGE_STAGES - 0.001);
-    burst(before, damageStageForHealth(previewHealth));
-    dmgSlider.value = String(previewHealth);
-    dmgVal.textContent = `${Math.round(previewHealth * 100)}%`;
-  }));
-  dmgBtns.appendChild(makeButton('DEBRIS BURST', () => burst(0, DAMAGE_STAGES - 1)));
-  dmgBtns.appendChild(makeButton('REPAIR', () => {
-    previewHealth = 1; debris.clear();
-    dmgSlider.value = '1'; dmgVal.textContent = '100%';
-  }));
+  dmgBtns.appendChild(makeButton('DAMAGE STEP', () => { applyPreviewHit(-1, 0); buildPanel(); }));
+  dmgBtns.appendChild(makeButton('DEBRIS BURST', () => { applyPreviewHit(-1, 0, 30); buildPanel(); }));
+  dmgBtns.appendChild(makeButton('REPAIR', () => { previewHealth = 1; previewHull.reset(); debris.clear(); buildPanel(); }));
   panel.appendChild(dmgBtns);
 
-  addSection('Faction Colour');
+  addSection('Impact test');
+  const kinds = document.createElement('div'); kinds.className = 'btnrow';
+  for (const kind of ['bullet', 'laser', 'explosion'] as const) {
+    kinds.appendChild(makeButton(`${impactKind === kind ? '* ' : ''}${kind.toUpperCase()}`, () => { impactKind = kind; buildPanel(); }));
+  }
+  panel.appendChild(kinds);
+  const damageLabel = document.createElement('label'); damageLabel.textContent = 'Damage per hit (%)';
+  const damageInput = document.createElement('input'); damageInput.type = 'number';
+  damageInput.min = '1'; damageInput.max = '100'; damageInput.value = String(impactDamage);
+  damageInput.setAttribute('aria-label', 'Damage per hit (%)');
+  damageInput.addEventListener('change', () => { impactDamage = Math.max(1, Math.min(100, Number(damageInput.value) || 8)); });
+  panel.append(damageLabel, damageInput);
+  const directions = document.createElement('div'); directions.className = 'btnrow';
+  for (const [label, x, y] of [['HIT LEFT', -1, 0], ['HIT RIGHT', 1, 0], ['HIT NOSE', 0, -1], ['HIT TAIL', 0, 1]] as const) {
+    directions.appendChild(makeButton(label, () => { applyPreviewHit(x, y); buildPanel(); }));
+  }
+  panel.appendChild(directions);
+  const hint = document.createElement('p'); hint.textContent = 'Click around the ship to aim a hit from that point. Lasers remove entry and exit pieces.';
+  panel.appendChild(hint);
+  addSection('Player Colour');
   const teamRow = document.createElement('div');
   teamRow.className = 'btnrow';
   for (const t of TEAMS) {
@@ -262,7 +290,7 @@ function buildPanel(): void {
     swatch.textContent = teamLabel(t) === 'Neutral' ? 'N' : teamLabel(t);
     swatch.style.background = `rgb(${Math.min(255, c.r * c.intensity) | 0},${Math.min(255, c.g * c.intensity) | 0},${Math.min(255, c.b * c.intensity) | 0})`;
     swatch.style.color = '#000';
-    swatch.addEventListener('click', () => { teamIndex = TEAMS.indexOf(t); customColor = null; });
+    swatch.addEventListener('click', () => { teamIndex = TEAMS.indexOf(t); customColor = null; loadFleet(); });
     teamRow.appendChild(swatch);
   }
   panel.appendChild(teamRow);
@@ -346,7 +374,7 @@ function buildPanel(): void {
     try { set = !!localStorage.getItem(DEV_SHIP_DESIGN_KEY); } catch { /* unavailable */ }
     gameStatus.textContent = set
       ? 'In-game override ACTIVE — all ships use this design.'
-      : 'No in-game override; ships render stock.';
+      : 'Default player fleets active.';
   };
   gameRow.appendChild(makeButton('USE IN GAME', () => {
     try {
@@ -388,13 +416,48 @@ function buildPanel(): void {
   for (const key of PARAM_ORDER) panel.appendChild(makeSlider(key));
 }
 
-function burst(from: number, to: number): void {
-  const geo = getShipGeometry(current);
-  const shed = componentsShedBetween(geo, from, to);
-  if (shed.length === 0) return;
-  const rng = () => Math.random();
-  debris.emitShedComponents(current, shed, new Vec2(0, 0), -Math.PI / 2, 1, activeColor(), null, rng);
+function previewBody() {
+  return { position: new Vec2(0, 0), angle: -Math.PI / 2, radius: shipDesignRadius(current),
+    health: previewHealth * 100, maxHealth: 100, alive: previewHealth > 0 };
 }
+function applyPreviewHit(x: number, y: number, damage = impactDamage): void {
+  if (previewHealth <= 0) return;
+  overview = false;
+  previewHealth = Math.max(0, previewHealth - damage / 100);
+  const radius = shipDesignRadius(current) * 2;
+  previewHull.hit(previewBody(), damage, { kind: impactKind, x: x * radius, y: y * radius, dx: -x, dy: -y });
+  previewHull.flush(previewBody(), debris, activeColor());
+}
+function loadFleet(): void {
+  const def = fleetDesign(TEAMS[teamIndex], fleetRole);
+  current = { seed: def.seed, params: { ...def.params } };
+  invalidate(); buildPanel();
+}
+function renderFleetOverview(): void {
+  const w = canvas.width / 4, h = canvas.height / 2;
+  camera.zoom = 1; camera.position = new Vec2(0, 0);
+  for (let i = 0; i < 8; i++) {
+    const x = (i % 4 + 0.5) * w, y = (Math.floor(i / 4) + 0.42) * h;
+    const color = teamColor(TEAMS[i]);
+    for (const [role, offset, size] of [['hero', 0, 0.32], ['fighter', -0.23, 0.11], ['bomber', 0.23, 0.15]] as const) {
+      const def = fleetDesign(TEAMS[i], role);
+      drawProceduralShip(ctx, camera, def, { position: camera.screenToWorld(new Vec2(x + w * offset, y + (role === 'hero' ? 0 : h * 0.25))),
+        rotation: -Math.PI / 2, color, scale: Math.min(w, h) * size / shipDesignRadius(def) });
+    }
+    ctx.fillStyle = '#cfe0ee'; ctx.font = `${12 * devicePixelRatio}px monospace`; ctx.textAlign = 'center';
+    ctx.fillText(`P${i + 1} - ${fleetFamilyName(i + 1)}`, x, (Math.floor(i / 4) + 0.91) * h);
+  }
+  ctx.textAlign = 'left';
+  statsEl.textContent = 'Eight fixed player families: hero, fighter (left), bomber (right)';
+}
+canvas.addEventListener('click', event => {
+  if (overview) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (event.clientX - rect.left) * devicePixelRatio - canvas.width / 2;
+  const y = (event.clientY - rect.top) * devicePixelRatio - canvas.height / 2;
+  const d = Math.hypot(x, y) || 1;
+  applyPreviewHit(x / d, y / d); buildPanel();
+});
 
 function refreshSeedField(): void {
   const input = panel.querySelector('input[type=text]') as HTMLInputElement | null;
@@ -508,8 +571,8 @@ function savePreset(name: string): void {
   setParams(ov: Partial<ProceduralShipParams>) { current.params = { ...current.params, ...ov }; invalidate(); buildPanel(); },
   setTeam(i: number) { teamIndex = i; customColor = null; },
   setRts(v: boolean) { showRtsScale = v; },
-  setHealth(h: number) { previewHealth = h; buildPanel(); },
-  burst() { burst(0, DAMAGE_STAGES - 1); },
+  setHealth(h: number) { previewHealth = Math.max(0, Math.min(1, h)); previewHull.syncHealth(previewBody()); buildPanel(); },
+  burst() { applyPreviewHit(-1, 0, 30); },
   clearDebris() { debris.clear(); },
   debrisCount() { return debris.activeCount; },
   setDebug(k: keyof ShipDebugOverlay, v: boolean) { debug[k] = v; },
@@ -517,5 +580,5 @@ function savePreset(name: string): void {
 };
 
 resizeCanvas();
-buildPanel();
+loadFleet();
 render();

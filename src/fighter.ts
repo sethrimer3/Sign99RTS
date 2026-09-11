@@ -8,8 +8,8 @@ import { Shipyard } from './building.js';
 import { Colors, colorToCSS, Color } from './colors.js';
 import { ENTITY_RADIUS, HP_VALUES, PLAYER_SHIP_SCALE, SHIP_STATS, WEAPON_STATS } from './constants.js';
 import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
-import { fleetDesign } from './shipFamilies.js';
-import { drawProceduralShip, shipDesignRadius } from './proceduralShips.js';
+import { gameplayFleetDesign } from './shipFamilies.js';
+import { drawProceduralShip, shipDesignRadius, type ProceduralShipDefinition } from './proceduralShips.js';
 import { teamColor } from './teamutils.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
@@ -125,7 +125,8 @@ export function drawTerranFighterHull(
 // ---------------------------------------------------------------------------
 
 export class FighterShip extends Entity {
-  get design() { return fleetDesign(this.team, this.type === EntityType.Bomber ? 'bomber' : 'fighter'); }
+  fleetDesignOverride: ProceduralShipDefinition | null = null;
+  get design() { return this.fleetDesignOverride ?? gameplayFleetDesign(this.team, this.type === EntityType.Bomber ? 'bomber' : 'fighter'); }
   group: ShipGroup;
   docked: boolean = true;
   order: FighterOrder = 'idle';
@@ -864,6 +865,7 @@ export class SynonymousFighterShip extends FighterShip {
     advanced: boolean = false,
   ) {
     super(position, team, group, homeYard);
+    this.hullDamage = null;
     this.droneCount = advanced ? 6 : 3;
     this.droneHp = Array(this.droneCount).fill(HP_VALUES.synonymousFighterDrone);
     this.maxHealth = this.droneCount * HP_VALUES.synonymousFighterDrone;
@@ -1190,28 +1192,9 @@ export class SwarmShip extends FighterShip {
 
   override draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive || this.docked) return;
-    const screen = camera.worldToScreen(this.position);
-    const r = Math.max(1.6, this.radius * camera.zoom);
-    const color = teamColor(this.team);
-    ctx.save();
-    ctx.translate(screen.x, screen.y);
-    ctx.rotate(this.angle);
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.strokeStyle = colorToCSS(color, 0.74);
-    ctx.lineWidth = Math.max(0.8, camera.zoom);
-    ctx.beginPath();
-    ctx.moveTo(r * 1.25, 0);
-    ctx.lineTo(-r * 0.65, -r * 0.45);
-    ctx.lineTo(-r * 0.35, 0);
-    ctx.lineTo(-r * 0.65, r * 0.45);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = colorToCSS(color, 0.55);
-    ctx.beginPath();
-    ctx.arc(0, 0, r * 0.34, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    this.drawFleetHull(ctx, camera);
   }
+
 }
 
 const NOVA_BOMBER_DRONES = 10;
@@ -1227,6 +1210,7 @@ export class SynonymousNovaBomberShip extends BomberShip {
 
   constructor(position: Vec2, team: Team, group: ShipGroup, homeYard: Shipyard | null = null) {
     super(position, team, group, homeYard);
+    this.hullDamage = null;
     this.weaponRange = 245;
     this.fireRate = 130;
     this.maxHealth = NOVA_BOMBER_DRONES * NOVA_BOMBER_DRONE_HP;

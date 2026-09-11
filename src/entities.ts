@@ -160,8 +160,8 @@ export abstract class Entity {
       const fallback: HullImpact | undefined = _source ? {
         kind: _source.type === EntityType.Laser || _source.type === EntityType.ExciterBeam ? 'laser' : 'bullet',
         x: _source.position.x, y: _source.position.y,
-        dx: _source.velocity.x || this.position.x - _source.position.x,
-        dy: _source.velocity.y || this.position.y - _source.position.y,
+        dx: _source.velocity.length() > 0.001 ? _source.velocity.x : this.position.x - _source.position.x,
+        dy: _source.velocity.length() > 0.001 ? _source.velocity.y : this.position.y - _source.position.y,
       } : undefined;
       this.hullDamage.hit(this, Math.min(previousHealth, amount), impact ?? fallback);
     }

@@ -1,3 +1,4 @@
+import { teamColor } from './teamutils.js';
 import { fleetDesign } from './shipFamilies.js';
 /** Main game coordinator for Sign99 */
 
@@ -2184,6 +2185,7 @@ export class Game {
         f.velocity.x = sf.vx;
         f.velocity.y = sf.vy;
         f.angle = sf.angle;
+        f.fleetDesignOverride = sf.design ?? fleetDesign(sf.team, sf.entityType === EntityType.Bomber ? 'bomber' : 'fighter');
         if (sf.maxHealth !== undefined) f.maxHealth = sf.maxHealth;
         if (sf.health !== undefined) f.health = sf.health;
         f.hullDamage?.applySnapshot(sf.hull, f);
@@ -2210,6 +2212,7 @@ export class Game {
       newFighter.velocity.x = sf.vx;
       newFighter.velocity.y = sf.vy;
       newFighter.angle = sf.angle;
+      newFighter.fleetDesignOverride = sf.design ?? fleetDesign(sf.team, sf.entityType === EntityType.Bomber ? 'bomber' : 'fighter');
       if (sf.maxHealth !== undefined) newFighter.maxHealth = sf.maxHealth;
       if (sf.health !== undefined) newFighter.health = sf.health;
       newFighter.hullDamage?.applySnapshot(sf.hull, newFighter, false);
@@ -2343,6 +2346,7 @@ export class Game {
         advancedTier: f.advancedTier,
         health: f.health, maxHealth: f.maxHealth,
         hull: f.hullDamage?.snapshot(),
+        design: f.design === fleetDesign(f.team, f.type === EntityType.Bomber ? 'bomber' : 'fighter') ? undefined : f.design,
       });
     }
 

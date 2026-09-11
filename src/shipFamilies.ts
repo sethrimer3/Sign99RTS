@@ -1,5 +1,5 @@
 /** Stable player-colour identities. Never seed these from entity IDs, time or faction. */
-import { DEFAULT_PARAMS, type ProceduralShipDefinition, type ProceduralShipParams } from './proceduralShips.js';
+import { loadDevShipDesign, DEFAULT_PARAMS, type ProceduralShipDefinition, type ProceduralShipParams } from './proceduralShips.js';
 
 export type FleetRole = 'hero' | 'fighter' | 'bomber';
 const SHAPES: ReadonlyArray<{ name: string; seed: number; params: Partial<ProceduralShipParams> }> = [
@@ -39,4 +39,19 @@ export function fleetDesign(team: number, role: FleetRole): ProceduralShipDefini
     cache.set(key, def);
   }
   return def;
+}
+
+const customEscorts = new WeakMap<ProceduralShipDefinition, Partial<Record<FleetRole, ProceduralShipDefinition>>>();
+/** The lab override belongs to P1, and its escorts inherit it. Other player colours keep their families. */
+export function gameplayFleetDesign(team: number, role: FleetRole): ProceduralShipDefinition {
+  const custom = team === 1 ? loadDevShipDesign() : null;
+  if (!custom) return fleetDesign(team, role);
+  if (role === 'hero') return custom;
+  let variants = customEscorts.get(custom);
+  if (!variants) { variants = {}; customEscorts.set(custom, variants); }
+  return variants[role] ??= { seed: custom.seed, params: {
+    ...custom.params, structureDepth: 2, wingDetail: 1, budDepth: 0, wingBuds: 0, wingSerration: 0,
+    budCount: Math.min(3, custom.params.budCount),
+    spanToLength: custom.params.spanToLength * (role === 'bomber' ? 1.18 : 1),
+  } };
 }

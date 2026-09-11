@@ -8,14 +8,14 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; background: #05070a; color: #cfe0ee; font: 12px monospace; }
     body { display: flex; overflow: hidden; }
-    #canvasWrap { flex: 1; position: relative; }
+    #canvasWrap { min-width: 0; flex: 1; position: relative; }
     canvas { display: block; width: 100%; height: 100%; background: #05070a; }
-    #panel { width: 340px; overflow-y: auto; padding: 10px; background: #0b0f14; border-left: 1px solid #223; }
+    #panel { flex: 0 0 340px; width: 340px; overflow-y: auto; padding: 10px; background: #0b0f14; border-left: 1px solid #223; }
     h2 { font-size: 13px; margin: 10px 0 4px; color: #8fd; }
     h2:first-child { margin-top: 0; }
     .row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
     .row label { flex: 0 0 128px; font-size: 10.5px; color: #9ab; }
-    .row input[type=range] { flex: 1; }
+    .row input[type=range] { flex: 1; min-width: 0; }
     .row .val { flex: 0 0 46px; text-align: right; font-size: 10.5px; color: #dfe; }
     button { background: #16202a; color: #cfe0ee; border: 1px solid #33475a; padding: 4px 8px; margin: 2px 2px 2px 0; cursor: pointer; font: 11px monospace; }
     button:hover { background: #223140; }
