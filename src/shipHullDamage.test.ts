@@ -90,10 +90,10 @@ describe('impact-directed structural damage', () => {
     const f = fixture(); expect(f.hull.renderMesh()).toBeNull(); f.hit('bullet', 30);
     const mesh = f.hull.renderMesh(); expect(f.hull.renderMesh()).toBe(mesh);
     const count = f.hull.removedIndices.length;
-    f.body.health = 90; f.hull.syncHealth(f.body);
+    f.hull.repair(f.body, 10);
     expect(f.hull.removedIndices.length).toBeLessThan(count);
     expect(f.hull.renderMesh()).not.toBe(mesh);
-    f.body.health = 100; f.hull.syncHealth(f.body);
+    f.hull.repair(f.body, 100);
     expect(f.hull.removedIndices).toEqual([]); expect(f.hull.renderMesh()).toBeNull();
   });
   it('copies exact removal state through JSON snapshots without repeat debris', () => {
@@ -104,7 +104,7 @@ describe('impact-directed structural damage', () => {
     expect(client.hull.removedIndices).toEqual(host.hull.removedIndices);
     const debris = new ShipDebrisSystem();
     client.hull.flush(client.body, debris, Colors.mainguy); const count = debris.activeCount;
-    client.hull.applySnapshot(snapshot, client.body); client.hull.syncHealth(client.body);
+    client.hull.applySnapshot(snapshot, client.body);
     client.hull.flush(client.body, debris, Colors.mainguy);
     expect(debris.activeCount).toBe(count);
     client.body.health = 100; client.hull.applySnapshot(undefined, client.body);
