@@ -653,6 +653,9 @@ export class GameState {
     for (const fighter of this.fighters) {
       fighter.hullDamage?.flush(fighter, this.shipDebris, teamColor(fighter.team));
     }
+    for (const b of this.buildings) {
+      b.buildingDamage?.flush(b as any, this.shipDebris, teamColor(b.team));
+    }
     this.updateExplosionGlows(dt);
     this.ringEffects.update(dt);
     this.ringEffects.prune();

@@ -97,6 +97,13 @@ export abstract class BuildingBase extends Entity {
   protected abstract drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void;
 
   protected drawOverlays(ctx: CanvasRenderingContext2D, camera: Camera, screen: Vec2): void {}
+  override destroy(): void {
+    super.destroy();
+    if (this.buildingDamage) {
+      this.buildingDamage.collapseAll(this as any);
+    }
+  }
+
   startDeleting(): void { if (!this.deleting) { this.deleting = true; this.deletionProgress = 0; } }
 
   protected getBaseVisual(camera: Camera): BaseVisual {
@@ -135,23 +142,35 @@ export abstract class BuildingBase extends Entity {
       // nodes + lines, scaled by HP fraction and gated on power / construction.
       const gap = v.side - 2 * c;
       if (gap > 0) {
-        const bw = Math.max(1, c * 0.4);
-        ctx.fillStyle = colorToCSS(Colors.menu_background_detail, 0.3);
-        ctx.fillRect(x + c, y, gap, bw);
-        ctx.fillRect(x + c, y + v.side - bw, gap, bw);
-        ctx.fillRect(x, y + c, bw, gap);
-        ctx.fillRect(x + v.side - bw, y + c, bw, gap);
+        ctx.strokeStyle = colorToCSS(Colors.menu_background_detail, 0.25);
+        ctx.lineWidth = Math.max(1, c * 0.4);
+        ctx.beginPath();
+        ctx.moveTo(x + c, y + c * 0.2); ctx.lineTo(x + v.side - c, y + c * 0.2);
+        ctx.moveTo(x + c, y + v.side - c * 0.2); ctx.lineTo(x + v.side - c, y + v.side - c * 0.2);
+        ctx.moveTo(x + c * 0.2, y + c); ctx.lineTo(x + c * 0.2, y + v.side - c);
+        ctx.moveTo(x + v.side - c * 0.2, y + c); ctx.lineTo(x + v.side - c * 0.2, y + v.side - c);
+        ctx.stroke();
       }
-      const intensity = this.powered && this.buildProgress >= 1 && !this.deleting
+      
+      let intensity: number | [number, number, number, number] = (this.powered && this.buildProgress >= 1 && !this.deleting)
         ? Math.max(0, Math.min(1, this.healthFraction))
         : 0;
-      if (intensity > 0.001) {
-        renderBuildingCoreEffect(ctx, {
-          x, y, side: v.side, nodeSize: c, intensity,
-          timeSec: this.animationTime, seed: this.id,
-          glow: true,
-        });
+
+      if (this.buildingDamage) {
+         const ci = this.buildingDamage.coreIntegrity;
+         intensity = [
+           intensity * ci[0],
+           intensity * ci[1],
+           intensity * ci[2],
+           intensity * ci[3]
+         ];
       }
+
+      renderBuildingCoreEffect(ctx, {
+        x, y, side: v.side, nodeSize: c, intensity,
+        timeSec: this.animationTime, seed: this.id,
+        glow: true,
+      });
     }
     // Legacy-only: the centre cross/plus that split the building into quadrants.
     if (!v.simple && isLegacyGraphics()) {

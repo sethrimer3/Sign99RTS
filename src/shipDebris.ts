@@ -35,6 +35,9 @@ export type DebrisFluidSink = (x: number, y: number, vx: number, vy: number, col
 interface DebrisPiece {
   active: boolean;
   geometry: ShipGeometry | null;
+  isRect?: boolean;
+  w?: number;
+  h?: number;
   index: number;
   x: number; y: number;
   vx: number; vy: number;
@@ -54,7 +57,7 @@ interface DebrisPiece {
 
 function createPiece(): DebrisPiece {
   return {
-    active: false, geometry: null, index: 0, x: 0, y: 0, vx: 0, vy: 0,
+    active: false, geometry: null, isRect: false, w: 0, h: 0, index: 0, x: 0, y: 0, vx: 0, vy: 0,
     angle: 0, spin: 0, scale: 1, life: 0, maxLife: 1, radius: 1, phase: 0, shade: 0.5,
     accent: false, color: null, stamp: 0,
   };
@@ -178,6 +181,50 @@ export class ShipDebrisSystem {
     }
   }
 
+  emitBuildingDebris(
+    geo: any, indices: number[],
+    center: Vec2, color: Color, hit: Vec2 | null,
+    rng: () => number
+  ): void {
+    const budget = Math.max(1, Math.round(indices.length * this._effectiveScale));
+    if (budget < 1) return;
+    let hx = 0, hy = 0;
+    if (hit) {
+      hx = center.x - hit.x; hy = center.y - hit.y;
+      const hl = Math.hypot(hx, hy) || 1;
+      hx /= hl; hy /= hl;
+    }
+    for (let i = 0; i < budget; i++) {
+      const leaf = geo.leaves[indices[i]];
+      if (!leaf) continue;
+      const wx = center.x + leaf.x;
+      const wy = center.y + leaf.y;
+      let ox = wx - center.x, oy = wy - center.y;
+      const ol = Math.hypot(ox, oy) || 1;
+      ox /= ol; oy /= ol;
+      const speed = 26 + rng() * 52;
+      const fill = this.activeIndices.length / POOL_SIZE;
+      const lifeScale = 1 - 0.72 * fill * fill;
+      const piece = this.acquire();
+      piece.geometry = null;
+      piece.isRect = true;
+      piece.w = leaf.w; piece.h = leaf.h;
+      piece.x = wx; piece.y = wy;
+      piece.vx = (ox * 0.75 + hx * 0.55) * speed;
+      piece.vy = (oy * 0.75 + hy * 0.55) * speed;
+      piece.angle = 0;
+      piece.spin = (rng() - 0.5) * 5.5;
+      piece.scale = 1;
+      piece.maxLife = (LIFE_MIN + rng() * (LIFE_MAX - LIFE_MIN)) * lifeScale;
+      piece.life = piece.maxLife;
+      piece.radius = Math.hypot(leaf.w, leaf.h) * 0.5;
+      piece.phase = rng() * Math.PI * 2;
+      piece.shade = rng();
+      piece.accent = rng() > 0.85;
+      piece.color = color;
+    }
+  }
+
   update(dt: number): void {
     this.frame++;
     this.collisionChecks = 0;
@@ -244,20 +291,34 @@ export class ShipDebrisSystem {
     if (this.activeIndices.length === 0) return;
     for (let i = 0; i < this.activeIndices.length; i++) {
       const piece = this.pool[this.activeIndices[i]];
-      if (!piece.geometry || !piece.color) continue;
-      const geo = piece.geometry;
+      if (!piece.color) continue;
+      if (!piece.geometry && !piece.isRect) continue;
       const screen = camera.worldToScreen(new Vec2(piece.x, piece.y));
       if (screen.x < -60 || screen.y < -60 || screen.x > camera.screenW + 60 || screen.y > camera.screenH + 60) continue;
-      const ramp = getShadeRamp(piece.color, geo.shadeBands, geo.hueSpread, geo.accentHueShift);
-      const band = Math.max(0, Math.min(geo.shadeBands - 1, Math.round(piece.shade * (geo.shadeBands - 1))));
+      
       const drawScale = camera.zoom * piece.scale;
       ctx.save();
       ctx.globalAlpha = Math.min(1, piece.life / Math.min(FADE_TIME, piece.maxLife));
       ctx.translate(screen.x, screen.y);
       ctx.rotate(piece.angle);
       ctx.scale(drawScale, drawScale);
-      ctx.fillStyle = piece.accent ? ramp.accents[band] : ramp.fills[band];
-      ctx.fill(getComponentPath(geo, piece.index));
+      
+      if (piece.isRect) {
+        // Simple shade ramp for rects based on color
+        const baseC = piece.color;
+        const shadeFactor = 0.5 + 0.5 * piece.shade;
+        const fillC = piece.accent ? 
+           `rgb(${Math.min(255, baseC.r * 1.5)}, ${Math.min(255, baseC.g * 1.5)}, ${Math.min(255, baseC.b * 1.5)})` :
+           `rgb(${baseC.r * shadeFactor}, ${baseC.g * shadeFactor}, ${baseC.b * shadeFactor})`;
+        ctx.fillStyle = fillC;
+        ctx.fillRect(-piece.w! / 2, -piece.h! / 2, piece.w!, piece.h!);
+      } else {
+        const geo = piece.geometry!;
+        const ramp = getShadeRamp(piece.color, geo.shadeBands, geo.hueSpread, geo.accentHueShift);
+        const band = Math.max(0, Math.min(geo.shadeBands - 1, Math.round(piece.shade * (geo.shadeBands - 1))));
+        ctx.fillStyle = piece.accent ? ramp.accents[band] : ramp.fills[band];
+        ctx.fill(getComponentPath(geo, piece.index));
+      }
       ctx.restore();
       this.drawnCount++;
     }

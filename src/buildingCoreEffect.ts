@@ -125,14 +125,14 @@ export interface CoreEffectOpts {
   side: number;
   /** Screen-space edge length of one corner node (= 1 conduit cell). */
   nodeSize: number;
-  /** 0..1 — how strongly the effect shows (usually HP fraction; 0 => nothing). */
-  intensity: number;
+  /** 0..1 fraction or an array of 4 fractions for independent cores. */
+  intensity: number | [number, number, number, number];
   /** Seconds, for scrolling the layers. */
   timeSec: number;
-  /** Per-building constant so neighbours don't scroll in lock-step. */
+  /** Ensures different buildings have uncorrelated noise offsets. */
   seed: number;
-  /** Allow the warm frame bloom (caller already checks the graphics tier). */
-  glow: boolean;
+  /** Whether to draw the outer bloom. Can be disabled if masking limits it anyway. */
+  glow?: boolean;
 }
 
 /** Layer scroll directions (unit-ish vectors) and relative speeds / scales. */
@@ -281,6 +281,16 @@ export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOp
 }
 
 export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: CoreEffectOpts): void {
-  const path = maskPath(opts.x, opts.y, opts.side, opts.nodeSize);
-  renderFieryCore(ctx, { ...opts, path });
+  if (Array.isArray(opts.intensity)) {
+    for (let i = 0; i < 4; i++) {
+      const v = opts.intensity[i];
+      if (v > 0.001) {
+        const path = maskPath(opts.x, opts.y, opts.side, opts.nodeSize, i);
+        renderFieryCore(ctx, { ...opts, intensity: v, path, glow: opts.glow ?? true });
+      }
+    }
+  } else {
+    const path = maskPath(opts.x, opts.y, opts.side, opts.nodeSize);
+    renderFieryCore(ctx, { ...opts, intensity: opts.intensity as number, path, glow: opts.glow ?? true });
+  }
 }
