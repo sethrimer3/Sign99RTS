@@ -14,6 +14,10 @@ import { getDistantSunScreenPosition } from './suns.js';
 import { getCinematicLevel } from './cinematic.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
+import {
+  drawProceduralShip, shipDesignRadius, loadDevShipDesign,
+  type ProceduralShipDefinition,
+} from './proceduralShips.js';
 
 const BATTERY_MAX = 100;
 const BATTERY_REGEN_RATE = 16;
@@ -117,6 +121,19 @@ export class PlayerShip extends Entity {
   /** Countdown timer for the brief shield-hit flash ring (set when shield absorbs damage). */
   private shieldHitFlashTimer = 0;
   faction: FactionType = 'terran';
+  /**
+   * Optional procedural hull. Null renders the stock triangle, unchanged.
+   *
+   * This is runtime state pointing at an immutable, shared definition — never copy the
+   * params per ship, or every ship gets its own cached geometry. To give a unit type a
+   * fixed look, declare one module-level definition and assign it:
+   *
+   *   const frigateDesign: ProceduralShipDefinition = { seed: 4404, params: { ...DEFAULT_PARAMS, spanToLength: 0.62 } };
+   *   ship.setDesign(frigateDesign);
+   *
+   * The Ship Lab's USE IN GAME button sets it for every ship via DEV_SHIP_DESIGN_KEY.
+   */
+  design: ProceduralShipDefinition | null = null;
   synonymousPierceMultiplier = 1;
   synonymousFireSpeedLevel = 0;
   synonymousVitalityUnlocked = false;
@@ -215,6 +232,8 @@ export class PlayerShip extends Entity {
     this.baseEnergyRegenRate = this.baseBatteryRegenRate;
     this.friction = 1.0;
     this.aimWorld = new Vec2(position.x + 100, position.y);
+    // Dev override from the Ship Lab, if one has been set. No-op when the key is absent.
+    this.design = loadDevShipDesign();
   }
 
   update(dt: number): void {
@@ -584,6 +603,11 @@ export class PlayerShip extends Entity {
     }
   }
 
+  /** Swap the hull renderer. Pass null to return to the stock triangle. */
+  setDesign(design: ProceduralShipDefinition | null): void {
+    this.design = design;
+  }
+
   setFaction(faction: FactionType): void {
     this.faction = faction;
     if (faction === 'synonymous') {
@@ -844,6 +868,15 @@ export class PlayerShip extends Entity {
     const coreColor = teamColor(this.team);
     this.drawDashTrail(ctx, camera, coreColor);
     this.drawMotionTrail(ctx, camera, coreColor);
+    if (this.design) {
+      // Normalise the design's own world-space length against this unit's radius so the
+      // ship occupies the same footprint as the stock hull whatever the design's scale.
+      const scale = (this.radius * 1.4) / shipDesignRadius(this.design);
+      drawProceduralShip(ctx, camera, this.design, {
+        position: this.position, rotation: this.angle, scale, color: coreColor,
+      });
+      return;
+    }
     if (this.faction === 'synonymous') {
       if (!this.synonymousRenderer) this.synonymousRenderer = new SynonymousShipRenderer();
       this.synonymousRenderer.draw(ctx, camera, this, Input.isDown('q'));

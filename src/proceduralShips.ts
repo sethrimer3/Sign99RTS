@@ -435,22 +435,27 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   em.setQuota(wingAlloc);
   for (let i = 0; i < wingPairs; i++) {
     if (em.full) break;
-    const u0 = Math.min(0.88, p.wingStation + i * (p.wingChord + 0.08));
-    const u1 = Math.min(0.98, u0 + p.wingChord);
+    // Consecutive wings abut along the leading edge rather than leaving a station gap,
+    // which is what bit the black V notches out between them.
+    const u0 = Math.min(0.9, p.wingStation + i * p.wingChord);
+    const u1 = Math.min(0.985, u0 + p.wingChord);
     const r0 = lerpP(N, W, u0);
     const r1 = lerpP(N, W, u1);
     // Outboard is straight +y and sweep is straight aft, so the wing keeps a readable
     // delta planform instead of being dragged along the hull's leading-edge normal.
     // Tip is placed relative to the hull's widest point, not the root, so a wing rooted
     // inboard still clears the hull instead of being buried inside it.
-    const out = wingOut;
+    const out = wingOut * (1 - i * 0.12);
     const sw = p.wingSweep * L + out * 0.4;
     const tipF: P = { x: r0.x - sw, y: span * 0.5 + out };
-    const heel: P = { x: r1.x - sw * 0.3, y: r1.y + out * 0.16 };
-    // The wing carries the same gasket rule as the hull so it reads as part of one
-    // object; it sits just outboard of the leading edge rather than crossing it, which
-    // is what used to leave a flat dark band over the hull.
-    gasket(em, r0, heel, tipF, 0, wingLevels, bias, null, 0.94, wingDepth, 0.52, 0.98);
+    // Both root points are seated a hair inboard of the leading edge so the root chord
+    // seals against the hull instead of leaving a notch of background; the overlap is a
+    // thin sliver, far too small to bring back the flat dark crossing band.
+    const rootA = lerpP(r0, inside, 0.045);
+    const rootB0 = lerpP(r1, inside, 0.045);
+    const rootB: P = { x: rootB0.x - sw * 0.22, y: rootB0.y };
+    // The wing carries the same gasket rule as the hull so it reads as part of one object.
+    gasket(em, rootA, rootB, tipF, 0, wingLevels, bias, null, 0.94, wingDepth, 0.52, 0.98);
   }
 
   // Fins: narrow elongated triangles raked off the trailing edge.
@@ -609,6 +614,9 @@ export function getShadeRamp(color: Color, bands: number, hueSpread: number, acc
 // ---------------------------------------------------------------------------
 
 const geometryCache = new Map<string, ShipGeometry>();
+/** Identity fast path: many units share one immutable definition object, and hashing its
+ *  params every frame per ship would be the dominant cost. Swapped out on invalidation. */
+let geometryByRef = new WeakMap<ProceduralShipDefinition, ShipGeometry>();
 
 export function designCacheKey(def: ProceduralShipDefinition): string {
   return def.seed + '|' + JSON.stringify(def.params);
@@ -616,6 +624,8 @@ export function designCacheKey(def: ProceduralShipDefinition): string {
 
 /** Get (and lazily generate/cache) geometry for a design. */
 export function getShipGeometry(def: ProceduralShipDefinition): ShipGeometry {
+  const hit = geometryByRef.get(def);
+  if (hit) return hit;
   const key = designCacheKey(def);
   let geo = geometryCache.get(key);
   if (!geo) {
@@ -623,13 +633,55 @@ export function getShipGeometry(def: ProceduralShipDefinition): ShipGeometry {
     if (geometryCache.size > 400) geometryCache.clear();
     geometryCache.set(key, geo);
   }
+  geometryByRef.set(def, geo);
   return geo;
 }
 
 /** Drop a cached entry (or the whole cache) — call when Ship Lab params change. */
 export function invalidateShipGeometryCache(def?: ProceduralShipDefinition): void {
+  geometryByRef = new WeakMap();
   if (def) geometryCache.delete(designCacheKey(def));
   else geometryCache.clear();
+}
+
+/** Largest half-extent of a design in ship-local units. Callers normalise against a
+ *  unit's own radius with this so changing the `length` slider never changes how big
+ *  the unit is in the game world. */
+export function shipDesignRadius(def: ProceduralShipDefinition): number {
+  const bb = getShipGeometry(def).boundingBox;
+  return Math.max(Math.abs(bb.minX), Math.abs(bb.maxX), Math.abs(bb.minY), Math.abs(bb.maxY)) || 1;
+}
+
+/** localStorage key the Ship Lab's USE IN GAME button writes to, and that the PlayerShip
+ *  constructor reads so a design can be flown in a real match. Dev-only and reversible:
+ *  removing the key restores the stock ship appearance. */
+export const DEV_SHIP_DESIGN_KEY = 'sign99_shiplab_ingame_design';
+
+let devDesignLoaded = false;
+let devDesign: ProceduralShipDefinition | null = null;
+
+/** Reads the dev override once per session. Returns the SAME object every call so every
+ *  ship shares one cached geometry. Safe where localStorage does not exist (tests, node). */
+export function loadDevShipDesign(): ProceduralShipDefinition | null {
+  if (devDesignLoaded) return devDesign;
+  devDesignLoaded = true;
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(DEV_SHIP_DESIGN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !parsed.params) return null;
+    devDesign = { seed: (parsed.seed ?? 0) >>> 0, params: { ...DEFAULT_PARAMS, ...parsed.params } };
+  } catch {
+    devDesign = null;
+  }
+  return devDesign;
+}
+
+/** Forget the cached dev override so the next read picks up a new one. */
+export function resetDevShipDesign(): void {
+  devDesignLoaded = false;
+  devDesign = null;
 }
 
 // ---------------------------------------------------------------------------

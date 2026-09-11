@@ -5,6 +5,7 @@ import { Camera } from '../camera.js';
 import {
   DEFAULT_PARAMS, PARAM_RANGES, drawProceduralShip, invalidateShipGeometryCache,
   mutateParams, randomizeParams, hashStringToSeed, getShipGeometry, lastFillCalls, MAX_POLYGONS,
+  DEV_SHIP_DESIGN_KEY,
 } from '../proceduralShips.js';
 import type { ProceduralShipDefinition, ProceduralShipParams, ShipDebugOverlay } from '../proceduralShips.js';
 import { SHIP_PRESETS } from '../proceduralShipPresets.js';
@@ -238,6 +239,31 @@ function buildPanel(): void {
   const ioBox = document.createElement('textarea');
   ioBox.placeholder = 'Paste {seed, params} JSON here to load, or COPY DESIGN to fill this in.';
   panel.appendChild(ioBox);
+
+  const gameRow = document.createElement('div');
+  gameRow.className = 'btnrow';
+  const gameStatus = document.createElement('div');
+  gameStatus.style.cssText = 'font-size:10.5px;color:#8fd;margin:2px 0;';
+  const refreshGameStatus = () => {
+    let set = false;
+    try { set = !!localStorage.getItem(DEV_SHIP_DESIGN_KEY); } catch { /* unavailable */ }
+    gameStatus.textContent = set
+      ? 'In-game override ACTIVE — all ships use this design.'
+      : 'No in-game override; ships render stock.';
+  };
+  gameRow.appendChild(makeButton('USE IN GAME', () => {
+    try {
+      localStorage.setItem(DEV_SHIP_DESIGN_KEY, JSON.stringify({ seed: current.seed, params: current.params }));
+    } catch { /* storage unavailable — ignore */ }
+    refreshGameStatus();
+  }));
+  gameRow.appendChild(makeButton('CLEAR', () => {
+    try { localStorage.removeItem(DEV_SHIP_DESIGN_KEY); } catch { /* unavailable */ }
+    refreshGameStatus();
+  }));
+  panel.appendChild(gameRow);
+  refreshGameStatus();
+  panel.appendChild(gameStatus);
 
   const presetIo = document.createElement('div');
   presetIo.className = 'row';
