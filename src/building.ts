@@ -972,6 +972,33 @@ export class ResearchLab extends BuildingBase {
       ctx.restore();
     }
   }
+
+  protected override drawOverlays(ctx: CanvasRenderingContext2D, camera: Camera, screen: Vec2): void {
+    if (this.researchItem) {
+      const v = this.getBaseVisual(camera);
+      if (v.simple) return;
+      const category = researchCategory(this.researchItem);
+      ctx.save();
+      ctx.translate(screen.x, screen.y);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `bold ${Math.max(13, v.side * 0.25)}px "Segoe UI", sans-serif`;
+      ctx.lineWidth = Math.max(2, v.side * 0.035);
+      ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+      ctx.strokeText(category, 0, 0);
+      ctx.fillStyle = colorToCSS(Colors.researchlab_detail, 1);
+      ctx.fillText(category, 0, 0);
+      // Exact technology is friendly-only; opponents see the category letter alone.
+      if (this.showExactUpgrade) {
+        const icon = researchIcon(this.researchItem);
+        ctx.font = `bold ${Math.max(8, v.side * 0.115)}px "Segoe UI", sans-serif`;
+        ctx.strokeText(icon, 0, v.side * 0.27);
+        ctx.fillStyle = colorToCSS(Colors.building_glow_research, 0.95);
+        ctx.fillText(icon, 0, v.side * 0.27);
+      }
+      ctx.restore();
+    }
+  }
 }
 
 export class Factory extends BuildingBase {

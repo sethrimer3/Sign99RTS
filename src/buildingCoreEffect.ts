@@ -147,22 +147,56 @@ const LAYERS = [
  * along each edge that connects them (kept flush to the outer edge so it reads
  * like the original connecting lines in the base art).
  */
-function maskPath(x: number, y: number, side: number, node: number): Path2D {
+function maskPath(x: number, y: number, side: number, node: number, coreIndex?: number): Path2D {
   const p = new Path2D();
   const n = Math.min(node, side * 0.5);
-  // corners
-  p.rect(x, y, n, n);
-  p.rect(x + side - n, y, n, n);
-  p.rect(x, y + side - n, n, n);
-  p.rect(x + side - n, y + side - n, n, n);
-  // connecting bands (flush to each edge, spanning the gap between the squares)
   const bw = Math.max(1, n * 0.4);
   const gap = side - 2 * n;
-  if (gap > 0) {
-    p.rect(x + n, y, gap, bw); // top
-    p.rect(x + n, y + side - bw, gap, bw); // bottom
-    p.rect(x, y + n, bw, gap); // left
-    p.rect(x + side - bw, y + n, bw, gap); // right
+
+  if (coreIndex === undefined) {
+    p.rect(x, y, n, n);
+    p.rect(x + side - n, y, n, n);
+    p.rect(x, y + side - n, n, n);
+    p.rect(x + side - n, y + side - n, n, n);
+    if (gap > 0) {
+      p.rect(x + n, y, gap, bw);
+      p.rect(x + n, y + side - bw, gap, bw);
+      p.rect(x, y + n, bw, gap);
+      p.rect(x + side - bw, y + n, bw, gap);
+    }
+  } else {
+    // Top Left
+    if (coreIndex === 0) {
+      p.rect(x, y, n, n);
+      if (gap > 0) {
+        p.rect(x + n, y, gap / 2, bw);
+        p.rect(x, y + n, bw, gap / 2);
+      }
+    }
+    // Top Right
+    else if (coreIndex === 1) {
+      p.rect(x + side - n, y, n, n);
+      if (gap > 0) {
+        p.rect(x + n + gap / 2, y, gap / 2, bw);
+        p.rect(x + side - bw, y + n, bw, gap / 2);
+      }
+    }
+    // Bottom Left
+    else if (coreIndex === 2) {
+      p.rect(x, y + side - n, n, n);
+      if (gap > 0) {
+        p.rect(x + n, y + side - bw, gap / 2, bw);
+        p.rect(x, y + n + gap / 2, bw, gap / 2);
+      }
+    }
+    // Bottom Right
+    else if (coreIndex === 3) {
+      p.rect(x + side - n, y + side - n, n, n);
+      if (gap > 0) {
+        p.rect(x + n + gap / 2, y + side - bw, gap / 2, bw);
+        p.rect(x + side - bw, y + n + gap / 2, bw, gap / 2);
+      }
+    }
   }
   return p;
 }
@@ -176,7 +210,7 @@ export interface FieryCoreOpts {
   intensity: number;
   timeSec: number;
   seed: number;
-  glow: boolean;
+  glow?: boolean;
 }
 
 export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOpts): void {
