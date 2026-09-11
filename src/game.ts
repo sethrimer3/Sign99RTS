@@ -457,6 +457,7 @@ export class Game {
     renderBudget.update(this.lastFrameMs, this.lastFixedUpdateMs, this.lastRenderMs);
     // Wire adaptive scale into particle system
     this.state.particles.setAdaptiveScale(renderBudget.renderLoadScale);
+    this.state.shipDebris.setAdaptiveScale(renderBudget.renderLoadScale);
 
     requestAnimationFrame((t) => this.loop(t));
   }

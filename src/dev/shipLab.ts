@@ -5,10 +5,11 @@ import { Camera } from '../camera.js';
 import {
   DEFAULT_PARAMS, PARAM_RANGES, drawProceduralShip, invalidateShipGeometryCache,
   mutateParams, randomizeParams, hashStringToSeed, getShipGeometry, lastFillCalls, MAX_POLYGONS,
-  DEV_SHIP_DESIGN_KEY,
+  DEV_SHIP_DESIGN_KEY, DAMAGE_STAGES, damageStageForHealth, componentsShedBetween,
 } from '../proceduralShips.js';
 import type { ProceduralShipDefinition, ProceduralShipParams, ShipDebugOverlay } from '../proceduralShips.js';
 import { SHIP_PRESETS } from '../proceduralShipPresets.js';
+import { ShipDebrisSystem } from '../shipDebris.js';
 import { Team } from '../entities.js';
 import { teamColor, teamLabel } from '../teamutils.js';
 import type { Color } from '../colors.js';
@@ -27,6 +28,10 @@ let teamIndex = 2;
 let customColor: Color | null = null;
 let previewZoom = 2.5;
 let showRtsScale = true;
+/** Dev preview only: scrub the shed sequence without a real match. */
+let previewHealth = 1;
+const debris = new ShipDebrisSystem();
+let lastFrameTime = performance.now();
 
 function activeColor(): Color {
   return customColor ?? teamColor(TEAMS[teamIndex]);
@@ -114,10 +119,19 @@ function render(): void {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const color = activeColor();
 
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
+  lastFrameTime = now;
+  debris.update(dt);
+
+  const stage = damageStageForHealth(previewHealth);
   camera.zoom = previewZoom;
   camera.position = new Vec2(0, 0);
-  drawProceduralShip(ctx, camera, current, { position: new Vec2(0, 0), rotation: -Math.PI / 2, color }, debug);
+  drawProceduralShip(ctx, camera, current, {
+    position: new Vec2(0, 0), rotation: -Math.PI / 2, color, damageStage: stage,
+  }, debug);
   const mainFills = lastFillCalls;
+  debris.draw(ctx, camera);
 
   let rtsFills = 0;
   if (showRtsScale) {
@@ -142,7 +156,8 @@ function render(): void {
   statsEl.textContent =
     `polys ${geo.polyCount}/${MAX_POLYGONS}   buckets ${geo.bucketCount}   fills@preview ${mainFills}` +
     (showRtsScale ? `   fills@RTS ${rtsFills}` : '') +
-    `   zoom ${previewZoom.toFixed(2)}   ${teamLabel(TEAMS[teamIndex])}`;
+    `   zoom ${previewZoom.toFixed(2)}   ${teamLabel(TEAMS[teamIndex])}` +
+    `   hp ${Math.round(previewHealth * 100)}%  stage ${stage}/${DAMAGE_STAGES - 1}  debris ${debris.activeCount}`;
 
   requestAnimationFrame(render);
 }
@@ -198,6 +213,45 @@ function buildPanel(): void {
   viewBtns.appendChild(makeButton('TOGGLE RTS SCALE', () => { showRtsScale = !showRtsScale; }));
   viewBtns.appendChild(makeButton('FIT', () => { previewZoom = 2.5; zoomSlider.value = '2.5'; zoomVal.textContent = '2.50'; }));
   panel.appendChild(viewBtns);
+
+  addSection('Battle Damage (preview)');
+  const dmgRow = document.createElement('div');
+  dmgRow.className = 'row';
+  const dmgLabel = document.createElement('label');
+  dmgLabel.textContent = 'hull integrity';
+  const dmgSlider = document.createElement('input');
+  dmgSlider.type = 'range'; dmgSlider.min = '0'; dmgSlider.max = '1'; dmgSlider.step = '0.01';
+  dmgSlider.value = String(previewHealth);
+  const dmgVal = document.createElement('span');
+  dmgVal.className = 'val';
+  dmgVal.textContent = `${Math.round(previewHealth * 100)}%`;
+  dmgSlider.addEventListener('input', () => {
+    const next = Number(dmgSlider.value);
+    const before = damageStageForHealth(previewHealth);
+    const after = damageStageForHealth(next);
+    if (after > before) burst(before, after);
+    previewHealth = next;
+    dmgVal.textContent = `${Math.round(next * 100)}%`;
+  });
+  dmgRow.appendChild(dmgLabel); dmgRow.appendChild(dmgSlider); dmgRow.appendChild(dmgVal);
+  panel.appendChild(dmgRow);
+
+  const dmgBtns = document.createElement('div');
+  dmgBtns.className = 'btnrow';
+  dmgBtns.appendChild(makeButton('DAMAGE STEP', () => {
+    const before = damageStageForHealth(previewHealth);
+    if (before >= DAMAGE_STAGES - 1) return;
+    previewHealth = Math.max(0, 1 - (before + 1) / DAMAGE_STAGES - 0.001);
+    burst(before, damageStageForHealth(previewHealth));
+    dmgSlider.value = String(previewHealth);
+    dmgVal.textContent = `${Math.round(previewHealth * 100)}%`;
+  }));
+  dmgBtns.appendChild(makeButton('DEBRIS BURST', () => burst(0, DAMAGE_STAGES - 1)));
+  dmgBtns.appendChild(makeButton('REPAIR', () => {
+    previewHealth = 1; debris.clear();
+    dmgSlider.value = '1'; dmgVal.textContent = '100%';
+  }));
+  panel.appendChild(dmgBtns);
 
   addSection('Faction Colour');
   const teamRow = document.createElement('div');
@@ -334,6 +388,14 @@ function buildPanel(): void {
   for (const key of PARAM_ORDER) panel.appendChild(makeSlider(key));
 }
 
+function burst(from: number, to: number): void {
+  const geo = getShipGeometry(current);
+  const shed = componentsShedBetween(geo, from, to);
+  if (shed.length === 0) return;
+  const rng = () => Math.random();
+  debris.emitShedComponents(current, shed, new Vec2(0, 0), -Math.PI / 2, 1, activeColor(), null, rng);
+}
+
 function refreshSeedField(): void {
   const input = panel.querySelector('input[type=text]') as HTMLInputElement | null;
   if (input) input.value = String(current.seed);
@@ -446,6 +508,10 @@ function savePreset(name: string): void {
   setParams(ov: Partial<ProceduralShipParams>) { current.params = { ...current.params, ...ov }; invalidate(); buildPanel(); },
   setTeam(i: number) { teamIndex = i; customColor = null; },
   setRts(v: boolean) { showRtsScale = v; },
+  setHealth(h: number) { previewHealth = h; buildPanel(); },
+  burst() { burst(0, DAMAGE_STAGES - 1); },
+  clearDebris() { debris.clear(); },
+  debrisCount() { return debris.activeCount; },
   setDebug(k: keyof ShipDebugOverlay, v: boolean) { debug[k] = v; },
   stats() { const g = getShipGeometry(current); return { polys: g.polyCount, buckets: g.bucketCount, fills: lastFillCalls }; },
 };

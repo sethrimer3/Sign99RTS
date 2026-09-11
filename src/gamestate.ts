@@ -10,6 +10,7 @@ import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, Synon
 import { isSynonymousDriftMine } from './synonymousMine.js';
 import { FighterShip, SwarmShip, syncFighterResearchUpgrades } from './fighter.js';
 import { ParticleSystem } from './particles.js';
+import { ShipDebrisSystem } from './shipDebris.js';
 import { RingEffectSystem } from './ringeffects.js';
 import { Camera } from './camera.js';
 import { Audio } from './audio.js';
@@ -196,6 +197,8 @@ export class GameState {
   gatlingField: GatlingField = new GatlingField();
   fighters: FighterShip[] = [];
   particles: ParticleSystem;
+  /** Shed procedural-hull components flying away. Visual only. */
+  shipDebris: ShipDebrisSystem;
   explosionGlows: ExplosionGlow[] = [];
   /** Ring/blackout pulse effects (PR9). */
   ringEffects: RingEffectSystem = new RingEffectSystem();
@@ -320,6 +323,7 @@ export class GameState {
   constructor(playerStart: Vec2 = new Vec2(0, 0)) {
     this.playerShips.set(0, new PlayerShip(playerStart, Team.Player));
     this.particles = new ParticleSystem();
+    this.shipDebris = new ShipDebrisSystem();
     this.factionByTeam.set(Team.Player, 'terran');
     this.factionByTeam.set(Team.Enemy, 'terran');
   }
@@ -627,6 +631,8 @@ export class GameState {
 
     // Particles
     this.particles.update(dt);
+    this.shipDebris.update(dt);
+    for (const ship of this.playerShips.values()) ship.updateDamageVisuals(this.shipDebris);
     this.updateExplosionGlows(dt);
     this.ringEffects.update(dt);
     this.ringEffects.prune();
@@ -2006,6 +2012,7 @@ export class GameState {
       if (ship.alive) ship.draw(ctx, camera);
     }
     this.particles.draw(ctx, camera);
+    this.shipDebris.draw(ctx, camera);
     this.ringEffects.draw(ctx, camera);
   }
 

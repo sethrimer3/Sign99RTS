@@ -15,9 +15,11 @@ import { getCinematicLevel } from './cinematic.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
 import {
-  drawProceduralShip, shipDesignRadius, loadDevShipDesign,
+  drawProceduralShip, shipDesignRadius, loadDevShipDesign, getShipGeometry,
+  damageStageForHealth, componentsShedBetween, seededRandom,
   type ProceduralShipDefinition,
 } from './proceduralShips.js';
+import type { ShipDebrisSystem } from './shipDebris.js';
 
 const BATTERY_MAX = 100;
 const BATTERY_REGEN_RATE = 16;
@@ -134,6 +136,11 @@ export class PlayerShip extends Entity {
    * The Ship Lab's USE IN GAME button sets it for every ship via DEV_SHIP_DESIGN_KEY.
    */
   design: ProceduralShipDefinition | null = null;
+
+  /** Quantised damage stage for the procedural hull. Purely visual: hitbox, HP and all
+   *  stats are unaffected by how many components have been shed. */
+  private damageStage = 0;
+  private debrisRng: (() => number) | null = null;
   synonymousPierceMultiplier = 1;
   synonymousFireSpeedLevel = 0;
   synonymousVitalityUnlocked = false;
@@ -606,7 +613,34 @@ export class PlayerShip extends Entity {
   /** Swap the hull renderer. Pass null to return to the stock triangle. */
   setDesign(design: ProceduralShipDefinition | null): void {
     this.design = design;
+    this.damageStage = 0;
+    this.debrisRng = null;
   }
+
+  /**
+   * Re-quantise the visual damage stage and, on a transition, shed the components that
+   * fall away between the old stage and the new one. Only does work when the stage
+   * actually changes — a ship sitting at constant HP costs nothing.
+   */
+  updateDamageVisuals(debris: ShipDebrisSystem | null, hit: Vec2 | null = null): void {
+    if (!this.design || !this.alive) return;
+    const frac = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+    const stage = damageStageForHealth(frac);
+    if (stage === this.damageStage) return;
+    const prev = this.damageStage;
+    this.damageStage = stage;
+    if (!debris || stage <= prev) return;
+    const geo = getShipGeometry(this.design);
+    const shed = componentsShedBetween(geo, prev, stage);
+    if (shed.length === 0) return;
+    if (!this.debrisRng) this.debrisRng = seededRandom((this.design.seed ^ 0x9e3779b9) >>> 0);
+    const scale = (this.radius * 1.4) / shipDesignRadius(this.design);
+    debris.emitShedComponents(this.design, shed, this.position, this.angle, scale,
+      teamColor(this.team), hit, this.debrisRng);
+  }
+
+  /** Current visual damage stage (diagnostics / dev preview). */
+  get visualDamageStage(): number { return this.damageStage; }
 
   setFaction(faction: FactionType): void {
     this.faction = faction;
@@ -874,6 +908,7 @@ export class PlayerShip extends Entity {
       const scale = (this.radius * 1.4) / shipDesignRadius(this.design);
       drawProceduralShip(ctx, camera, this.design, {
         position: this.position, rotation: this.angle, scale, color: coreColor,
+        damageStage: this.damageStage,
       });
       return;
     }

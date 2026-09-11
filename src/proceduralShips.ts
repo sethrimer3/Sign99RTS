@@ -134,6 +134,12 @@ export interface ShipPolygon {
   shade: number;      // 0..1 before quantization
   accent: boolean;
   feature: number;    // characteristic size in ship-local units, for LOD
+  /** Stable component id — index into ShipGeometry.polygons. */
+  index: number;
+  /** 0 = spine/core/nose, 1 = outermost tip. Drives the shed order. */
+  peripheral: number;
+  cx: number;
+  cy: number;
 }
 
 export interface ShipBucket {
@@ -160,6 +166,12 @@ export interface ShipGeometry {
   budAnchors: { x: number; y: number; r: number }[];
   polyCount: number;
   bucketCount: number;
+  /** Component indices in the order they detach: peripheral tips first, core last. */
+  shedOrder: number[];
+  /** Lazily baked bucket sets per damage stage; slot 0 is always `buckets`. */
+  stageBuckets: (ShipBucket[] | undefined)[];
+  /** Lazily baked one-Path2D-per-component, shared by every debris instance. */
+  componentPaths: Path2D[] | null;
 }
 
 type P = { x: number; y: number };
@@ -221,17 +233,17 @@ class Emitter {
     if (this.full) return;
     const shade = this.shadeFor(pts, target);
     const feature = polyFeature(pts);
-    this.polys.push({ pts, depth, shade, accent, feature });
+    this.polys.push({ pts, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, cx: centroidX(pts), cy: centroidY(pts) });
     const m = new Array<number>(pts.length);
     const k = 1 - this.asym;
     for (let i = 0; i < pts.length; i += 2) { m[i] = pts[i]; m[i + 1] = -pts[i + 1] * k; }
-    this.polys.push({ pts: m, depth, shade, accent, feature });
+    this.polys.push({ pts: m, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, cx: centroidX(m), cy: centroidY(m) });
   }
 
   /** Emit a polygon that already straddles the symmetry axis. */
   emitSym(pts: number[], depth: number, target: number, accent = false): void {
     if (this.polys.length + 1 > this.limit) return;
-    this.polys.push({ pts, depth, shade: this.shadeFor(pts, target), accent, feature: polyFeature(pts) });
+    this.polys.push({ pts, depth, shade: this.shadeFor(pts, target), accent, feature: polyFeature(pts), index: this.polys.length, peripheral: 0, cx: centroidX(pts), cy: centroidY(pts) });
   }
 }
 
@@ -562,6 +574,22 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   const bands = Math.round(Math.max(2, Math.min(12, p.shadeBands)));
   const buckets = bakeBuckets(em.polys, bands);
 
+  // Peripherality: far from the spine, deep in the recursion and small = sheds first.
+  // Accents (nose cap, core) are pinned to 0 so the ship keeps a recognisable core.
+  const halfW = Math.max(1, Math.max(Math.abs(minY), Math.abs(maxY)));
+  let maxFeat = 1;
+  for (const poly of em.polys) if (poly.feature > maxFeat) maxFeat = poly.feature;
+  const maxD = Math.max(1, hullDepth + 12);
+  for (const poly of em.polys) {
+    poly.peripheral = poly.accent ? 0 : Math.min(1,
+      0.45 * Math.min(1, Math.abs(poly.cy) / halfW)
+      + 0.35 * Math.min(1, poly.depth / maxD)
+      + 0.20 * (1 - poly.feature / maxFeat));
+  }
+  // Seeded jitter keeps the order deterministic but stops it looking mechanical.
+  const shedOrder = em.polys.map((poly) => poly.index)
+    .sort((a, b) => (em.polys[b].peripheral + (rng() - 0.5) * 0.22) - (em.polys[a].peripheral + (rng() - 0.5) * 0.22));
+
   return {
     polygons: em.polys,
     buckets,
@@ -575,6 +603,9 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     budAnchors: anchors,
     polyCount: em.polys.length,
     bucketCount: buckets.length,
+    shedOrder,
+    stageBuckets: [buckets],
+    componentPaths: null,
   };
 }
 
@@ -698,6 +729,64 @@ export function invalidateShipGeometryCache(def?: ProceduralShipDefinition): voi
   else geometryCache.clear();
 }
 
+/** Number of quantised damage stages. Stage 0 is undamaged and uses the existing
+ *  cache path unchanged, so healthy ships — the common case — cost exactly what they did
+ *  before. Bucket sets are cached per (design, stage) and shared by every ship at that
+ *  stage, so N ships of one design cost at most DAMAGE_STAGES bucket sets, not N. */
+export const DAMAGE_STAGES = 8;
+
+/** Never strip more than this fraction of components, so a wreck is still a ship. */
+const MAX_SHED_FRACTION = 0.62;
+
+/** Quantise a 0..1 health fraction to a stage index. */
+export function damageStageForHealth(healthFraction: number): number {
+  const hurt = 1 - Math.min(1, Math.max(0, healthFraction));
+  return Math.min(DAMAGE_STAGES - 1, Math.floor(hurt * DAMAGE_STAGES));
+}
+
+/** How many components have detached by `stage`. */
+function shedCountForStage(geo: ShipGeometry, stage: number): number {
+  if (stage <= 0) return 0;
+  const t = Math.min(1, stage / (DAMAGE_STAGES - 1));
+  return Math.floor(Math.pow(t, 1.15) * MAX_SHED_FRACTION * geo.shedOrder.length);
+}
+
+/** Bucket set for a damage stage. Stage 0 returns the untouched baked buckets. */
+export function getStageBuckets(geo: ShipGeometry, stage: number): ShipBucket[] {
+  const s = Math.min(DAMAGE_STAGES - 1, Math.max(0, Math.round(stage)));
+  if (s === 0) return geo.buckets;
+  const cached = geo.stageBuckets[s];
+  if (cached) return cached;
+  const gone = new Set(geo.shedOrder.slice(0, shedCountForStage(geo, s)));
+  const kept = geo.polygons.filter((poly) => !gone.has(poly.index));
+  const built = bakeBuckets(kept, geo.shadeBands);
+  geo.stageBuckets[s] = built;
+  return built;
+}
+
+/** Component indices that detach when crossing from `from` to `to` (to > from). */
+export function componentsShedBetween(geo: ShipGeometry, from: number, to: number): number[] {
+  const a = shedCountForStage(geo, Math.max(0, from));
+  const b = shedCountForStage(geo, Math.min(DAMAGE_STAGES - 1, to));
+  return b > a ? geo.shedOrder.slice(a, b) : [];
+}
+
+/** One Path2D per component, built once per design and shared by every debris piece. */
+export function getComponentPath(geo: ShipGeometry, index: number): Path2D {
+  let paths = geo.componentPaths;
+  if (!paths) {
+    paths = geo.polygons.map((poly) => {
+      const path = new Path2D();
+      path.moveTo(poly.pts[0] - poly.cx, poly.pts[1] - poly.cy);
+      for (let i = 2; i < poly.pts.length; i += 2) path.lineTo(poly.pts[i] - poly.cx, poly.pts[i + 1] - poly.cy);
+      path.closePath();
+      return path;
+    });
+    geo.componentPaths = paths;
+  }
+  return paths[index];
+}
+
 /** Largest half-extent of a design in ship-local units. Callers normalise against a
  *  unit's own radius with this so changing the `length` slider never changes how big
  *  the unit is in the game world. */
@@ -748,6 +837,8 @@ export interface ShipTransform {
   scale?: number;
   /** Owning faction colour; defaults to a neutral steel blue. */
   color?: Color;
+  /** Quantised damage stage; 0 (default) is the undamaged, untouched cache path. */
+  damageStage?: number;
 }
 
 export interface ShipDebugOverlay {
@@ -785,7 +876,7 @@ export function drawProceduralShip(
   ctx.scale(scale, scale);
 
   let fills = 0;
-  const buckets = geo.buckets;
+  const buckets = getStageBuckets(geo, transform.damageStage ?? 0);
   for (let i = 0; i < buckets.length; i++) {
     const b = buckets[i];
     if (b.minFeature * scale < MIN_FEATURE_PX) continue;
