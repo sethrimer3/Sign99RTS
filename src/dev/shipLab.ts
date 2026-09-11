@@ -1,13 +1,16 @@
-/** Ship Lab — standalone dev tool for designing procedural ship silhouettes. Not part of gameplay. */
+/** Ship Lab — standalone dev tool for designing procedural ships. Not part of gameplay. */
 
 import { Vec2 } from '../math.js';
 import { Camera } from '../camera.js';
 import {
   DEFAULT_PARAMS, PARAM_RANGES, drawProceduralShip, invalidateShipGeometryCache,
-  mutateParams, randomizeParams, hashStringToSeed,
+  mutateParams, randomizeParams, hashStringToSeed, getShipGeometry, lastFillCalls,
 } from '../proceduralShips.js';
 import type { ProceduralShipDefinition, ProceduralShipParams, ShipDebugOverlay } from '../proceduralShips.js';
 import { SHIP_PRESETS } from '../proceduralShipPresets.js';
+import { Team } from '../entities.js';
+import { teamColor, teamLabel } from '../teamutils.js';
+import type { Color } from '../colors.js';
 
 const canvas = document.getElementById('ship-lab-canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -15,18 +18,35 @@ const panel = document.getElementById('panel')!;
 const camera = new Camera();
 
 let current: ProceduralShipDefinition = { seed: SHIP_PRESETS[0].def.seed, params: { ...SHIP_PRESETS[0].def.params } };
-let history: ProceduralShipParams[] = [];
+const history: ProceduralShipParams[] = [];
 const debug: ShipDebugOverlay = {};
 
+const TEAMS: Team[] = [Team.Player1, Team.Player2, Team.Player3, Team.Player4, Team.Player5, Team.Player6, Team.Player7, Team.Player8, Team.Neutral];
+let teamIndex = 2;
+let customColor: Color | null = null;
+let previewZoom = 2.5;
+let showRtsScale = true;
+
+function activeColor(): Color {
+  return customColor ?? teamColor(TEAMS[teamIndex]);
+}
+
 const PARAM_ORDER: (keyof ProceduralShipParams)[] = [
-  'length', 'maxWidth', 'noseSharpness', 'tailWidth', 'widestPoint', 'edgeCurve',
-  'edgeWaveAmplitude', 'edgeWaveFrequency', 'edgeWavePhase',
-  'ribCount', 'ribCurvature', 'ribInset', 'spineThickness',
-  'corePosition', 'coreSize', 'innerStructureDensity', 'asymmetry',
-  'lineThickness', 'glowAmount', 'hullFillOpacity', 'interiorLineOpacity',
+  'length', 'spanToLength', 'tipSweep', 'tailNotch',
+  'structureDepth', 'gasketBias',
+  'budCount', 'budScale', 'budFalloff', 'budTwist', 'budDepth', 'budEmbed',
+  'wingPairs', 'wingStation', 'wingSweep', 'wingChord', 'wingSpan',
+  'finCount', 'finLength', 'finSpread',
+  'shadeBands', 'shadeDepthMix', 'hueSpread', 'accentHueShift', 'accentAmount', 'coreSize',
+  'asymmetry', 'lineThickness', 'glowAmount',
 ];
 
+const INTEGER_KEYS = new Set<keyof ProceduralShipParams>([
+  'structureDepth', 'budCount', 'budDepth', 'wingPairs', 'finCount', 'shadeBands',
+]);
+
 function step(key: keyof ProceduralShipParams): number {
+  if (INTEGER_KEYS.has(key)) return 1;
   const [lo, hi] = PARAM_RANGES[key];
   return (hi - lo) / 400;
 }
@@ -37,17 +57,49 @@ function invalidate(): void {
 
 function resizeCanvas(): void {
   const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * devicePixelRatio;
-  canvas.height = rect.height * devicePixelRatio;
+  canvas.width = Math.max(1, Math.round(rect.width * devicePixelRatio));
+  canvas.height = Math.max(1, Math.round(rect.height * devicePixelRatio));
   camera.setScreenSize(canvas.width, canvas.height);
 }
 window.addEventListener('resize', resizeCanvas);
 
+const statsEl = document.getElementById('stats')!;
+
 function render(): void {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  camera.zoom = 2.5;
-  drawProceduralShip(ctx, camera, current, { position: new Vec2(0, 0), rotation: -Math.PI / 2 }, debug);
+  const color = activeColor();
+
+  camera.zoom = previewZoom;
+  camera.position = new Vec2(0, 0);
+  drawProceduralShip(ctx, camera, current, { position: new Vec2(0, 0), rotation: -Math.PI / 2, color }, debug);
+  const mainFills = lastFillCalls;
+
+  let rtsFills = 0;
+  if (showRtsScale) {
+    // Typical gameplay footprint: a ~120-unit ship drawn ~26 px across.
+    const rtsZoom = 26 / Math.max(1, current.params.length);
+    camera.zoom = rtsZoom;
+    const cw = canvas.width, chh = canvas.height;
+    const corner = camera.screenToWorld(new Vec2(cw - 150 * devicePixelRatio, chh - 90 * devicePixelRatio));
+    for (let i = 0; i < 4; i++) {
+      drawProceduralShip(ctx, camera, current, {
+        position: new Vec2(corner.x + i * 44 / rtsZoom, corner.y), rotation: -Math.PI / 2, color,
+      });
+      rtsFills = lastFillCalls;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#5c7182';
+    ctx.font = `${11 * devicePixelRatio}px monospace`;
+    ctx.fillText('RTS scale', cw - 150 * devicePixelRatio, chh - 110 * devicePixelRatio);
+  }
+
+  const geo = getShipGeometry(current);
+  statsEl.textContent =
+    `polys ${geo.polyCount}/260   buckets ${geo.bucketCount}   fills@preview ${mainFills}` +
+    (showRtsScale ? `   fills@RTS ${rtsFills}` : '') +
+    `   zoom ${previewZoom.toFixed(2)}   ${teamLabel(TEAMS[teamIndex])}`;
+
   requestAnimationFrame(render);
 }
 
@@ -80,6 +132,56 @@ function buildPanel(): void {
   seedBtns.appendChild(makeButton('RANDOM SEED', () => { current.seed = Math.floor(Math.random() * 0xffffffff) >>> 0; invalidate(); refreshSeedField(); }));
   panel.appendChild(seedBtns);
 
+  addSection('View');
+  const zoomRow = document.createElement('div');
+  zoomRow.className = 'row';
+  const zoomLabel = document.createElement('label');
+  zoomLabel.textContent = 'preview zoom';
+  const zoomSlider = document.createElement('input');
+  zoomSlider.type = 'range'; zoomSlider.min = '0.08'; zoomSlider.max = '14'; zoomSlider.step = '0.01';
+  zoomSlider.value = String(previewZoom);
+  const zoomVal = document.createElement('span');
+  zoomVal.className = 'val'; zoomVal.textContent = previewZoom.toFixed(2);
+  zoomSlider.addEventListener('input', () => {
+    previewZoom = Number(zoomSlider.value);
+    zoomVal.textContent = previewZoom.toFixed(2);
+  });
+  zoomRow.appendChild(zoomLabel); zoomRow.appendChild(zoomSlider); zoomRow.appendChild(zoomVal);
+  panel.appendChild(zoomRow);
+
+  const viewBtns = document.createElement('div');
+  viewBtns.className = 'btnrow';
+  viewBtns.appendChild(makeButton('TOGGLE RTS SCALE', () => { showRtsScale = !showRtsScale; }));
+  viewBtns.appendChild(makeButton('FIT', () => { previewZoom = 2.5; zoomSlider.value = '2.5'; zoomVal.textContent = '2.50'; }));
+  panel.appendChild(viewBtns);
+
+  addSection('Faction Colour');
+  const teamRow = document.createElement('div');
+  teamRow.className = 'btnrow';
+  for (const t of TEAMS) {
+    const swatch = document.createElement('button');
+    const c = teamColor(t);
+    swatch.textContent = teamLabel(t) === 'Neutral' ? 'N' : teamLabel(t);
+    swatch.style.background = `rgb(${Math.min(255, c.r * c.intensity) | 0},${Math.min(255, c.g * c.intensity) | 0},${Math.min(255, c.b * c.intensity) | 0})`;
+    swatch.style.color = '#000';
+    swatch.addEventListener('click', () => { teamIndex = TEAMS.indexOf(t); customColor = null; });
+    teamRow.appendChild(swatch);
+  }
+  panel.appendChild(teamRow);
+  const pickRow = document.createElement('div');
+  pickRow.className = 'row';
+  const picker = document.createElement('input');
+  picker.type = 'color';
+  picker.value = '#3fa9ff';
+  picker.addEventListener('input', () => {
+    const v = picker.value;
+    customColor = { r: parseInt(v.slice(1, 3), 16), g: parseInt(v.slice(3, 5), 16), b: parseInt(v.slice(5, 7), 16), intensity: 1 };
+  });
+  const pickLabel = document.createElement('label');
+  pickLabel.textContent = 'custom colour';
+  pickRow.appendChild(pickLabel); pickRow.appendChild(picker);
+  panel.appendChild(pickRow);
+
   addSection('Actions');
   const actionBtns = document.createElement('div');
   actionBtns.className = 'btnrow';
@@ -107,8 +209,7 @@ function buildPanel(): void {
   const mutBtnRow = document.createElement('div');
   mutBtnRow.appendChild(makeButton('MUTATE', () => {
     pushHistory();
-    const strength = Number(mutSlider.value);
-    current.params = mutateParams(current.params, strength, Math.floor(Math.random() * 0xffffffff));
+    current.params = mutateParams(current.params, Number(mutSlider.value), Math.floor(Math.random() * 0xffffffff));
     invalidate();
     buildPanel();
   }));
@@ -149,25 +250,19 @@ function buildPanel(): void {
   addSection('Presets');
   const presetList = document.createElement('div');
   presetList.id = 'presetList';
-  for (const preset of SHIP_PRESETS) {
-    presetList.appendChild(makePresetRow(preset.name, preset.def));
-  }
-  for (const saved of loadSavedPresets()) {
-    presetList.appendChild(makePresetRow('★ ' + saved.name, saved.def));
-  }
+  for (const preset of SHIP_PRESETS) presetList.appendChild(makePresetRow(preset.name, preset.def));
+  for (const saved of loadSavedPresets()) presetList.appendChild(makePresetRow('★ ' + saved.name, saved.def));
   panel.appendChild(presetList);
 
   addSection('Debug Overlays');
-  panel.appendChild(makeToggle('Show hull samples', 'showHullSamples'));
-  panel.appendChild(makeToggle('Show center spine', 'showSpine'));
-  panel.appendChild(makeToggle('Show control points', 'showControlPoints'));
-  panel.appendChild(makeToggle('Show bounding box', 'showBoundingBox'));
-  panel.appendChild(makeToggle('Show symmetry axis', 'showSymmetryAxis'));
+  panel.appendChild(makeToggle('Gasket wireframe', 'showGasketWireframe'));
+  panel.appendChild(makeToggle('Bud anchors', 'showBudAnchors'));
+  panel.appendChild(makeToggle('Bucket outlines', 'showBucketBands'));
+  panel.appendChild(makeToggle('Bounding box', 'showBoundingBox'));
+  panel.appendChild(makeToggle('Symmetry axis', 'showSymmetryAxis'));
 
   addSection('Params');
-  for (const key of PARAM_ORDER) {
-    panel.appendChild(makeSlider(key));
-  }
+  for (const key of PARAM_ORDER) panel.appendChild(makeSlider(key));
 }
 
 function refreshSeedField(): void {
@@ -221,10 +316,11 @@ function makeSlider(key: keyof ProceduralShipParams): HTMLElement {
   input.value = String(current.params[key]);
   const val = document.createElement('span');
   val.className = 'val';
-  val.textContent = current.params[key].toFixed(3);
+  const fmt = (n: number) => (INTEGER_KEYS.has(key) ? String(Math.round(n)) : n.toFixed(3));
+  val.textContent = fmt(current.params[key]);
   input.addEventListener('input', () => {
     current.params = { ...current.params, [key]: Number(input.value) };
-    val.textContent = Number(input.value).toFixed(3);
+    val.textContent = fmt(Number(input.value));
     invalidate();
   });
   row.appendChild(label);
@@ -268,6 +364,20 @@ function savePreset(name: string): void {
   } catch { /* storage unavailable — ignore */ }
   buildPanel();
 }
+
+// Test hooks for headless screenshot automation.
+(window as unknown as Record<string, unknown>).shipLab = {
+  load(def: ProceduralShipDefinition) { current = { seed: def.seed, params: { ...def.params } }; invalidate(); buildPanel(); },
+  loadPreset(name: string) {
+    const preset = SHIP_PRESETS.find((s) => s.name === name);
+    if (preset) { current = { seed: preset.def.seed, params: { ...preset.def.params } }; invalidate(); buildPanel(); }
+  },
+  setZoom(z: number) { previewZoom = z; },
+  setTeam(i: number) { teamIndex = i; customColor = null; },
+  setRts(v: boolean) { showRtsScale = v; },
+  setDebug(k: keyof ShipDebugOverlay, v: boolean) { debug[k] = v; },
+  stats() { const g = getShipGeometry(current); return { polys: g.polyCount, buckets: g.bucketCount, fills: lastFillCalls }; },
+};
 
 resizeCanvas();
 buildPanel();

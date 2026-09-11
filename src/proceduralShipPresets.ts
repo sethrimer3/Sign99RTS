@@ -9,63 +9,86 @@ function p(overrides: Partial<ProceduralShipParams>): ProceduralShipParams {
 
 export const SHIP_PRESETS: { name: string; def: ProceduralShipDefinition }[] = [
   {
-    name: 'Needle',
+    name: 'Manta',
     def: {
-      seed: 1001,
+      seed: 1101,
       params: p({
-        length: 220, maxWidth: 18, noseSharpness: 4.5, tailWidth: 0.15, widestPoint: 0.7,
-        edgeCurve: 1.4, ribCount: 2, ribCurvature: 0.15, ribInset: 0.2, spineThickness: 0.6,
-        corePosition: 0.6, coreSize: 3, innerStructureDensity: 3, lineThickness: 1, glowAmount: 0.6,
-        hullFillOpacity: 0.08, interiorLineOpacity: 0.35,
+        length: 120, spanToLength: 1.9, tipSweep: 0.26, tailNotch: 0.22,
+        structureDepth: 3, gasketBias: 0.52,
+        budCount: 2, budScale: 0.13, budFalloff: 2.2, budTwist: 0.18, budDepth: 0, budEmbed: 0.5,
+        wingPairs: 1, wingStation: 0.42, wingSweep: 0.12, wingChord: 0.3, wingSpan: 0.12,
+        finCount: 2, finLength: 0.2, finSpread: 0.14,
+        shadeDepthMix: 0.6, hueSpread: 38, accentAmount: 0.65, coreSize: 0.06,
       }),
     },
   },
   {
-    name: 'Spear',
+    name: 'Seahorse',
     def: {
-      seed: 2002,
+      seed: 2202,
       params: p({
-        length: 160, maxWidth: 46, noseSharpness: 3.2, tailWidth: 0.2, widestPoint: 0.55,
-        edgeCurve: 1.0, ribCount: 5, ribCurvature: 0.4, ribInset: 0.12, spineThickness: 1.2,
-        corePosition: 0.5, coreSize: 7, innerStructureDensity: 8, lineThickness: 1.5, glowAmount: 0.4,
-        hullFillOpacity: 0.14, interiorLineOpacity: 0.5,
+        length: 130, spanToLength: 1.3, tipSweep: 0.34, tailNotch: 0.16,
+        structureDepth: 2, gasketBias: 0.42,
+        budCount: 5, budScale: 0.13, budFalloff: 2.1, budTwist: 0.62, budDepth: 2, budEmbed: 0.5,
+        wingPairs: 0, wingStation: 0.4, wingSweep: 0.16, wingChord: 0.25, wingSpan: 0.14,
+        finCount: 1, finLength: 0.22, finSpread: 0.4,
+        shadeDepthMix: 0.72, hueSpread: 48, accentAmount: 0.9, coreSize: 0.05,
+      }),
+    },
+  },
+  {
+    name: 'Gasket',
+    def: {
+      seed: 3303,
+      params: p({
+        length: 120, spanToLength: 1.55, tipSweep: 0.2, tailNotch: 0.1,
+        structureDepth: 4, gasketBias: 0.5,
+        budCount: 1, budScale: 0.1, budFalloff: 2.4, budTwist: 0, budDepth: 0, budEmbed: 0.45,
+        wingPairs: 0, wingStation: 0.4, wingSweep: 0.14, wingChord: 0.24, wingSpan: 0.12,
+        finCount: 0, finLength: 0.2, finSpread: 0.12,
+        shadeBands: 8, shadeDepthMix: 0.82, hueSpread: 30, accentAmount: 0.5, coreSize: 0.045,
+      }),
+    },
+  },
+  {
+    name: 'Dart',
+    def: {
+      seed: 4404,
+      params: p({
+        length: 170, spanToLength: 0.62, tipSweep: 0.2, tailNotch: 0.1,
+        structureDepth: 3, gasketBias: 0.6,
+        budCount: 3, budScale: 0.14, budFalloff: 2.3, budTwist: 0.22, budDepth: 1, budEmbed: 0.5,
+        wingPairs: 1, wingStation: 0.55, wingSweep: 0.2, wingChord: 0.22, wingSpan: 0.3,
+        finCount: 1, finLength: 0.18, finSpread: 0.08,
+        shadeDepthMix: 0.58, hueSpread: 26, accentAmount: 0.8, coreSize: 0.05,
       }),
     },
   },
   {
     name: 'Cathedral',
     def: {
-      seed: 3003,
+      seed: 5505,
       params: p({
-        length: 190, maxWidth: 70, noseSharpness: 1.6, tailWidth: 0.45, widestPoint: 0.4,
-        edgeCurve: 0.7, edgeWaveAmplitude: 0.06, edgeWaveFrequency: 4, ribCount: 8, ribCurvature: 0.6,
-        ribInset: 0.08, spineThickness: 1.5, corePosition: 0.45, coreSize: 12, innerStructureDensity: 16,
-        lineThickness: 1.6, glowAmount: 0.5, hullFillOpacity: 0.18, interiorLineOpacity: 0.65,
+        length: 135, spanToLength: 1.6, tipSweep: 0.36, tailNotch: 0.26,
+        structureDepth: 3, gasketBias: 0.44,
+        budCount: 3, budScale: 0.15, budFalloff: 2.0, budTwist: 0.35, budDepth: 1, budEmbed: 0.55,
+        wingPairs: 2, wingStation: 0.3, wingSweep: 0.14, wingChord: 0.26, wingSpan: 0.1,
+        finCount: 3, finLength: 0.2, finSpread: 0.3,
+        shadeBands: 8, shadeDepthMix: 0.55, hueSpread: 44, accentAmount: 1, coreSize: 0.095,
       }),
     },
   },
   {
-    name: 'Manta',
+    name: 'Spearhead',
     def: {
-      seed: 4004,
+      seed: 6606,
       params: p({
-        length: 130, maxWidth: 110, noseSharpness: 1.1, tailWidth: 0.6, widestPoint: 0.3,
-        edgeCurve: 0.6, edgeWaveAmplitude: 0.03, edgeWaveFrequency: 2, ribCount: 6, ribCurvature: -0.5,
-        ribInset: 0.1, spineThickness: 1, corePosition: 0.35, coreSize: 9, innerStructureDensity: 10,
-        lineThickness: 1.3, glowAmount: 0.45, hullFillOpacity: 0.2, interiorLineOpacity: 0.55,
-      }),
-    },
-  },
-  {
-    name: 'Fractal',
-    def: {
-      seed: 5005,
-      params: p({
-        length: 150, maxWidth: 55, noseSharpness: 2.6, tailWidth: 0.3, widestPoint: 0.6,
-        edgeCurve: 1.1, edgeWaveAmplitude: 0.12, edgeWaveFrequency: 7, edgeWavePhase: 0.8,
-        ribCount: 10, ribCurvature: 0.25, ribInset: 0.05, spineThickness: 1, corePosition: 0.55,
-        coreSize: 6, innerStructureDensity: 22, asymmetry: 0.04, lineThickness: 1.1, glowAmount: 0.55,
-        hullFillOpacity: 0.1, interiorLineOpacity: 0.7,
+        length: 200, spanToLength: 0.45, tipSweep: 0.14, tailNotch: 0.06,
+        structureDepth: 4, gasketBias: 0.66,
+        budCount: 4, budScale: 0.11, budFalloff: 2.6, budTwist: -0.3, budDepth: 1, budEmbed: 0.45,
+        wingPairs: 1, wingStation: 0.62, wingSweep: 0.1, wingChord: 0.18, wingSpan: 0.45,
+        finCount: 2, finLength: 0.16, finSpread: 0.12,
+        shadeDepthMix: 0.7, hueSpread: 32, accentAmount: 0.75, coreSize: 0.04,
       }),
     },
   },

@@ -25,10 +25,12 @@
     .toggle { display: flex; align-items: center; gap: 4px; font-size: 10.5px; }
     #presetList div { padding: 3px 4px; cursor: pointer; border-bottom: 1px solid #1b2530; }
     #presetList div:hover { background: #182230; }
+    #stats { position: absolute; left: 10px; top: 8px; font-size: 11px; color: #6f8ba3; pointer-events: none; }
+    input[type=color] { background: #0e1520; border: 1px solid #33475a; width: 100%; height: 22px; padding: 1px; }
   </style>
 </head>
 <body>
-  <div id="canvasWrap"><canvas id="ship-lab-canvas"></canvas></div>
+  <div id="canvasWrap"><canvas id="ship-lab-canvas"></canvas><div id="stats"></div></div>
   <div id="panel"></div>
   <script type="module" src="/src/dev/shipLab.ts"></script>
 </body>
