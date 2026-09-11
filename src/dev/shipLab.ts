@@ -4,7 +4,7 @@ import { Vec2 } from '../math.js';
 import { Camera } from '../camera.js';
 import {
   DEFAULT_PARAMS, PARAM_RANGES, drawProceduralShip, invalidateShipGeometryCache,
-  mutateParams, randomizeParams, hashStringToSeed, getShipGeometry, lastFillCalls,
+  mutateParams, randomizeParams, hashStringToSeed, getShipGeometry, lastFillCalls, MAX_POLYGONS,
 } from '../proceduralShips.js';
 import type { ProceduralShipDefinition, ProceduralShipParams, ShipDebugOverlay } from '../proceduralShips.js';
 import { SHIP_PRESETS } from '../proceduralShipPresets.js';
@@ -35,14 +35,14 @@ const PARAM_ORDER: (keyof ProceduralShipParams)[] = [
   'length', 'spanToLength', 'tipSweep', 'tailNotch',
   'structureDepth', 'gasketBias',
   'budCount', 'budScale', 'budFalloff', 'budTwist', 'budDepth', 'budEmbed',
-  'wingPairs', 'wingStation', 'wingSweep', 'wingChord', 'wingSpan',
+  'wingPairs', 'wingStation', 'wingSweep', 'wingChord', 'wingSpan', 'wingDetail',
   'finCount', 'finLength', 'finSpread',
   'shadeBands', 'shadeDepthMix', 'hueSpread', 'accentHueShift', 'accentAmount', 'coreSize',
   'asymmetry', 'lineThickness', 'glowAmount',
 ];
 
 const INTEGER_KEYS = new Set<keyof ProceduralShipParams>([
-  'structureDepth', 'budCount', 'budDepth', 'wingPairs', 'finCount', 'shadeBands',
+  'structureDepth', 'budCount', 'budDepth', 'wingPairs', 'wingDetail', 'finCount', 'shadeBands',
 ]);
 
 function step(key: keyof ProceduralShipParams): number {
@@ -96,7 +96,7 @@ function render(): void {
 
   const geo = getShipGeometry(current);
   statsEl.textContent =
-    `polys ${geo.polyCount}/260   buckets ${geo.bucketCount}   fills@preview ${mainFills}` +
+    `polys ${geo.polyCount}/${MAX_POLYGONS}   buckets ${geo.bucketCount}   fills@preview ${mainFills}` +
     (showRtsScale ? `   fills@RTS ${rtsFills}` : '') +
     `   zoom ${previewZoom.toFixed(2)}   ${teamLabel(TEAMS[teamIndex])}`;
 

@@ -55,6 +55,7 @@ export interface ProceduralShipParams {
   wingSweep: number;       // sweep-back of the wing tip, fraction of length
   wingChord: number;       // root chord, fraction of the leading edge
   wingSpan: number;        // wing extension beyond the hull, fraction of span
+  wingDetail: number;      // gasket recursion depth applied to each wing
   finCount: number;
   finLength: number;       // fraction of length
   finSpread: number;       // lateral spread of the fin fan, fraction of span
@@ -89,6 +90,7 @@ export const DEFAULT_PARAMS: ProceduralShipParams = {
   wingSweep: 0.16,
   wingChord: 0.26,
   wingSpan: 0.18,
+  wingDetail: 3,
   finCount: 2,
   finLength: 0.2,
   finSpread: 0.3,
@@ -114,7 +116,7 @@ export interface ProceduralShipDefinition {
 // ---------------------------------------------------------------------------
 
 /** Hard cap on emitted polygons so no slider combination produces a pathological ship. */
-export const MAX_POLYGONS = 260;
+export const MAX_POLYGONS = 400;
 
 export interface ShipPolygon {
   pts: number[];      // flat [x0,y0,x1,y1,...] in ship-local units
@@ -182,21 +184,25 @@ class Emitter {
   polys: ShipPolygon[] = [];
   constructor(
     private noseX: number,
-    private span: number,
+    private halfSpan: number,
     private L: number,
     private depthMix: number,
     private asym: number,
   ) {}
 
-  get full(): boolean { return this.polys.length + 2 > MAX_POLYGONS; }
+  /** Per-feature quota so the cap is shared out rather than won first-come-first-served. */
+  private limit = MAX_POLYGONS;
+  setQuota(n: number): void { this.limit = Math.min(MAX_POLYGONS, this.polys.length + Math.max(0, n)); }
+  get count(): number { return this.polys.length; }
+  get full(): boolean { return this.polys.length + 2 > this.limit; }
 
   /** Shade is primarily a smooth spatial field — bright along the spine and toward the
    *  nose, darkening aft and outboard — so quantizing it yields bands that flow across
    *  the whole form. Recursion depth only perturbs it (shadeDepthMix). */
   shadeFor(pts: number[], target: number): number {
     const aft = Math.min(1, Math.max(0, (this.noseX - centroidX(pts)) / (this.L * 1.02)));
-    const out = Math.min(1, Math.abs(centroidY(pts)) / (this.span * 0.5 + 1e-6));
-    const spatial = 1 - (0.52 * Math.pow(aft, 0.85) + 0.48 * Math.pow(out, 1.15));
+    const out = Math.min(1, Math.abs(centroidY(pts)) / (this.halfSpan + 1e-6));
+    const spatial = 1 - (0.54 * Math.pow(aft, 0.85) + 0.4 * Math.pow(out, 1.1));
     return Math.min(1, Math.max(0, this.depthMix * target + (1 - this.depthMix) * spatial));
   }
 
@@ -214,7 +220,7 @@ class Emitter {
 
   /** Emit a polygon that already straddles the symmetry axis. */
   emitSym(pts: number[], depth: number, target: number, accent = false): void {
-    if (this.polys.length + 1 > MAX_POLYGONS) return;
+    if (this.polys.length + 1 > this.limit) return;
     this.polys.push({ pts, depth, shade: this.shadeFor(pts, target), accent, feature: polyFeature(pts) });
   }
 }
@@ -340,6 +346,19 @@ function budChain(
   }
 }
 
+/** Polygons a full mirrored gasket recursion to `depth` emits: 2 * (3^(d+1)-1)/2. */
+function gasketCost(depth: number): number {
+  return Math.pow(3, depth + 1) - 1;
+}
+
+/** Deepest recursion that fits in `budget`, so a starved feature loses subdivision
+ *  levels instead of vanishing entirely. */
+function affordableDepth(want: number, budget: number): number {
+  let d = Math.max(0, Math.round(want));
+  while (d > 0 && gasketCost(d) > budget) d--;
+  return d;
+}
+
 /** Build full geometry for a design. Pure function of (seed, params) — cache the result. */
 export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometry {
   const p = def.params;
@@ -357,18 +376,46 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   const W: P = { x: -L * 0.5 + (p.tipSweep + jTip) * L, y: span * 0.5 };
   const T: P = { x: -L * 0.5 + (p.tailNotch + jNotch) * L, y: 0 };
 
-  const em = new Emitter(N.x, span, L, p.shadeDepthMix, Math.min(0.4, p.asymmetry));
+  const wingOut = Math.round(p.wingPairs) > 0 ? p.wingSpan * span * 0.6 : 0;
+  const em = new Emitter(N.x, span * 0.5 + wingOut, L, p.shadeDepthMix, Math.min(0.4, p.asymmetry));
   const edges: number[][] = [];
   const anchors: { x: number; y: number; r: number }[] = [];
 
   const bias = Math.min(0.92, Math.max(0.08, p.gasketBias + jBias));
-  gasket(em, N, W, T, 0, maxDepth, bias, edges, 0.955);
 
-  const wingDepth = maxDepth + 1;
+  // Share the polygon cap out in proportion to what each feature asks for, then let a
+  // feature spend its allocation on as many subdivision levels as it can afford. Leftover
+  // from a feature that rounded down cascades to the next.
+  const wingPairs = Math.round(Math.max(0, Math.min(3, p.wingPairs)));
+  const wantWingDetail = Math.round(Math.max(0, Math.min(3, p.wingDetail)));
+  const finCount = Math.round(Math.max(0, Math.min(4, p.finCount)));
+  const budCount = Math.round(Math.max(0, p.budCount));
+  const budLevels = Math.round(Math.max(0, p.budDepth));
+
+  const ACCENT_RESERVE = 8;
+  const finCost = finCount * 2;
+  const pool = Math.max(24, MAX_POLYGONS - ACCENT_RESERVE - finCost);
+  const hullReq = gasketCost(maxDepth);
+  const wingReq = wingPairs * gasketCost(wantWingDetail);
+  const budReq = 2 * budCount * (10 + budLevels * 8);
+  const totalReq = hullReq + wingReq + budReq;
+  const k = totalReq > pool ? pool / totalReq : 1;
+
+  const hullDepth = affordableDepth(maxDepth, hullReq * k);
+  const spare = Math.max(0, Math.floor(hullReq * k) - gasketCost(hullDepth));
+  const wingAlloc = Math.floor(wingReq * k) + Math.floor(spare * 0.6);
+  const perWing = wingPairs > 0 ? Math.floor(wingAlloc / wingPairs) : 0;
+  const wingLevels = affordableDepth(wantWingDetail, perWing);
+
+  em.setQuota(gasketCost(hullDepth));
+  gasket(em, N, W, T, 0, hullDepth, bias, edges, 0.955);
+
+  const wingDepth = hullDepth + 1;
   const budDepthBase = wingDepth + 3;
 
   // Accents: a nose cap that is a scaled copy of the hull nose, and a core lozenge.
-  // Emitted before the bulb chains so the polygon cap can never starve them.
+  // Emitted before the bulb chains against their own reserve so nothing can starve them.
+  em.setQuota(ACCENT_RESERVE);
   if (p.accentAmount > 0) {
     const nt = 0.035 + 0.03 * p.accentAmount;
     const na = lerpP(N, W, nt);
@@ -385,7 +432,7 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
 
   // Wings: a separate swept planform reaching well beyond the hull edge, so the
   // silhouette reads as a winged craft. Painted under the bulb chains.
-  const wingPairs = Math.round(Math.max(0, Math.min(3, p.wingPairs)));
+  em.setQuota(wingAlloc);
   for (let i = 0; i < wingPairs; i++) {
     if (em.full) break;
     const u0 = Math.min(0.88, p.wingStation + i * (p.wingChord + 0.08));
@@ -396,16 +443,18 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     // delta planform instead of being dragged along the hull's leading-edge normal.
     // Tip is placed relative to the hull's widest point, not the root, so a wing rooted
     // inboard still clears the hull instead of being buried inside it.
-    const out = p.wingSpan * span * 0.6;
+    const out = wingOut;
     const sw = p.wingSweep * L + out * 0.4;
     const tipF: P = { x: r0.x - sw, y: span * 0.5 + out };
     const heel: P = { x: r1.x - sw * 0.3, y: r1.y + out * 0.16 };
-    em.emit(triPts(r0, heel, tipF), wingDepth, 0.2);
-    gasket(em, r0, heel, tipF, 0, 1, bias, null, 0.93, wingDepth + 1, 0.4, 0.84);
+    // The wing carries the same gasket rule as the hull so it reads as part of one
+    // object; it sits just outboard of the leading edge rather than crossing it, which
+    // is what used to leave a flat dark band over the hull.
+    gasket(em, r0, heel, tipF, 0, wingLevels, bias, null, 0.94, wingDepth, 0.52, 0.98);
   }
 
   // Fins: narrow elongated triangles raked off the trailing edge.
-  const finCount = Math.round(Math.max(0, Math.min(4, p.finCount)));
+  em.setQuota(finCost);
   for (let i = 0; i < finCount; i++) {
     if (em.full) break;
     const f = finCount === 1 ? 0.4 : 0.1 + (i / (finCount - 1)) * 0.66;
@@ -421,8 +470,9 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
 
   // Both chains start at the wingtip, so the largest bulbs sit at the shoulder and
   // taper forward and aft — the cardioid-neck reading.
-  budChain(em, W, N, inside, Math.round(p.budCount), p.budScale, budDepthBase, bias, p, anchors);
-  budChain(em, W, T, inside, Math.round(p.budCount), p.budScale * 0.85, budDepthBase, bias, p, anchors);
+  em.setQuota(MAX_POLYGONS - em.count);
+  budChain(em, W, N, inside, budCount, p.budScale, budDepthBase, bias, p, anchors);
+  budChain(em, W, T, inside, budCount, p.budScale * 0.85, budDepthBase, bias, p, anchors);
 
   // Silhouette = convex hull of everything emitted, so the rim traces wings and buds too.
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -737,6 +787,7 @@ const PARAM_RANGES: Record<keyof ProceduralShipParams, [number, number]> = {
   wingSweep: [-0.1, 0.45],
   wingChord: [0.05, 0.5],
   wingSpan: [0, 0.5],
+  wingDetail: [0, 3],
   finCount: [0, 4],
   finLength: [0.05, 0.45],
   finSpread: [0, 0.5],
@@ -788,6 +839,7 @@ export function randomizeParams(randomSeed: number): ProceduralShipParams {
   out.budDepth = Math.floor(rng() * 2.4);
   pick('budEmbed', 0.3, 0.85);
   out.wingPairs = Math.floor(rng() * 3.2);
+  out.wingDetail = 1 + Math.floor(rng() * 3);
   pick('wingStation', 0.15, 0.6);
   pick('wingSweep', 0, 0.35);
   pick('wingChord', 0.12, 0.4);
