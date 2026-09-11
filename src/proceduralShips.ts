@@ -143,6 +143,10 @@ export interface ShipPolygon {
   group: number;
   cx: number;
   cy: number;
+  area: number;
+  isCore: boolean;
+  neighbors: number[];
+  coreDistance: number;
 }
 
 export interface ShipBucket {
@@ -176,6 +180,8 @@ export interface ShipGeometry {
   stageSilhouettes: (Path2D | null | undefined)[];
   /** Lazily baked one-Path2D-per-component, shared by every debris instance. */
   componentPaths: Path2D[] | null;
+  totalMass: number;
+  coreIndices: number[];
 }
 
 type P = { x: number; y: number };
@@ -184,13 +190,17 @@ function lerpP(a: P, b: P, t: number): P {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
 }
 
-function polyFeature(pts: number[]): number {
+function polyArea(pts: number[]): number {
   let area = 0;
   for (let i = 0; i < pts.length; i += 2) {
     const j = (i + 2) % pts.length;
     area += pts[i] * pts[j + 1] - pts[j] * pts[i + 1];
   }
-  return Math.sqrt(Math.abs(area) * 0.5) || 0.0001;
+  return Math.abs(area) * 0.5;
+}
+
+function polyFeature(pts: number[]): number {
+  return Math.sqrt(polyArea(pts)) || 0.0001;
 }
 
 function centroidX(pts: number[]): number {
@@ -236,21 +246,23 @@ class Emitter {
   }
 
   /** Emit a right-half polygon and its mirror. */
-  emit(pts: number[], depth: number, target: number, accent = false): void {
+  emit(pts: number[], depth: number, target: number, accent = false, isCore = false): void {
     if (this.full) return;
     const shade = this.shadeFor(pts, target);
     const feature = polyFeature(pts);
-    this.polys.push({ pts, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(pts), cy: centroidY(pts) });
+    const area = polyArea(pts);
+    this.polys.push({ pts, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(pts), cy: centroidY(pts), area, isCore, neighbors: [], coreDistance: 0 });
     const m = new Array<number>(pts.length);
     const k = 1 - this.asym;
     for (let i = 0; i < pts.length; i += 2) { m[i] = pts[i]; m[i + 1] = -pts[i + 1] * k; }
-    this.polys.push({ pts: m, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(m), cy: centroidY(m) });
+    const mArea = polyArea(m);
+    this.polys.push({ pts: m, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(m), cy: centroidY(m), area: mArea, isCore, neighbors: [], coreDistance: 0 });
   }
 
   /** Emit a polygon that already straddles the symmetry axis. */
-  emitSym(pts: number[], depth: number, target: number, accent = false): void {
+  emitSym(pts: number[], depth: number, target: number, accent = false, isCore = false): void {
     if (this.polys.length + 1 > this.limit) return;
-    this.polys.push({ pts, depth, shade: this.shadeFor(pts, target), accent, feature: polyFeature(pts), index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(pts), cy: centroidY(pts) });
+    this.polys.push({ pts, depth, shade: this.shadeFor(pts, target), accent, feature: polyFeature(pts), index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(pts), cy: centroidY(pts), area: polyArea(pts), isCore, neighbors: [], coreDistance: 0 });
   }
 }
 
@@ -491,10 +503,10 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     const nt = 0.035 + 0.03 * p.accentAmount;
     const na = lerpP(N, W, nt);
     const nb = lerpP(N, T, nt);
-    em.emitSym([N.x, N.y, na.x, na.y, nb.x, nb.y, na.x, -na.y], budDepthBase + 6, 0.85, true);
-    const cr = Math.max(0.4, p.coreSize * L * 0.6);
+    em.emitSym([N.x, N.y, na.x, na.y, nb.x, nb.y, na.x, -na.y], budDepthBase + 6, 0.85, true, false);
+    const cr = Math.max(1.2, p.coreSize * L * 1.5);
     const cxp = T.x + (N.x - T.x) * 0.42;
-    em.emitSym([cxp + cr * 2.6, 0, cxp, cr, cxp - cr * 2.6, 0, cxp, -cr], budDepthBase + 6, 0.7, true);
+    em.emitSym([cxp + cr * 2.6, 0, cxp, cr, cxp - cr * 2.6, 0, cxp, -cr], budDepthBase + 6, 0.7, true, true);
   }
 
   // Both chains start at the wingtip, so the largest bulbs sit at the shoulder and
