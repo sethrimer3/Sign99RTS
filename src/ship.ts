@@ -662,18 +662,7 @@ export class PlayerShip extends Entity {
       }
     }
     this.healthRegenDelay = PASSIVE_HEALTH_REGEN_DELAY;
-    if (amount > 0) {
-      if (this.hullDamage) {
-        if (source) this.lastDamageSource = source;
-        this.hullDamage.hit(this, amount, impact);
-        if (this.health <= 0 || this.hullDamage.coreIntegrity <= 0) {
-          this.health = 0;
-          this.destroy();
-        }
-      } else {
-        super.takeDamage(amount, source, impact);
-      }
-    }
+    if (amount > 0) super.takeDamage(amount, source, impact);
   }
 
   private updateShield(dt: number): void {

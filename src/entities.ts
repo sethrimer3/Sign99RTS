@@ -150,12 +150,6 @@ export abstract class Entity {
     if (incomingDamage && this.areaShield) amount = this.areaShield.absorbDamage(amount, _source);
     if (incomingDamage && amount <= 0) return;
     if (amount > 0 && _source) this.lastDamageSource = _source;
-    const previousHealth = this.health;
-    this.health -= amount;
-    if (this.health <= 0) {
-      this.health = 0;
-      this.destroy();
-    }
     if (amount > 0 && this.hullDamage) {
       const fallback: HullImpact | undefined = _source ? {
         kind: _source.type === EntityType.Laser || _source.type === EntityType.ExciterBeam ? 'laser' : 'bullet',
@@ -163,7 +157,17 @@ export abstract class Entity {
         dx: _source.velocity.length() > 0.001 ? _source.velocity.x : this.position.x - _source.position.x,
         dy: _source.velocity.length() > 0.001 ? _source.velocity.y : this.position.y - _source.position.y,
       } : undefined;
-      this.hullDamage.hit(this, Math.min(previousHealth, amount), impact ?? fallback);
+      this.hullDamage.hit(this, amount, impact ?? fallback);
+      if (this.health <= 0 || this.hullDamage.coreIntegrity <= 0) {
+        this.health = 0;
+        this.destroy();
+      }
+    } else {
+      this.health -= amount;
+      if (this.health <= 0) {
+        this.health = 0;
+        this.destroy();
+      }
     }
     if (this.health > this.maxHealth) {
       this.health = this.maxHealth;

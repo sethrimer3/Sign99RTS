@@ -552,18 +552,7 @@ export class FighterShip extends Entity {
       amount -= blocked;
       this.shieldRegenDelay = SHIELD_REGEN_DELAY;
     }
-    if (amount > 0) {
-      if (this.hullDamage) {
-        if (source) this.lastDamageSource = source;
-        this.hullDamage.hit(this, amount, impact);
-        if (this.health <= 0 || this.hullDamage.coreIntegrity <= 0) {
-          this.health = 0;
-          this.destroy();
-        }
-      } else {
-        super.takeDamage(amount, source, impact);
-      }
-    }
+    if (amount > 0) super.takeDamage(amount, source, impact);
   }
 
   protected markTookDamage(): void {
