@@ -50,6 +50,7 @@ export interface NetShipState {
   battery: number;
   shield: number;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
 }
 
 export interface NetProjectileState {
@@ -75,6 +76,7 @@ export interface NetFighterState {
   vy: number;
   angle: number;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
 }
 
 export interface NetBuildingState {
@@ -89,6 +91,7 @@ export interface NetBuildingState {
   buildProgress: number;
   powered: boolean;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
 }
 
 export interface NetTerritoryCircleState {

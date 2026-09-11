@@ -144,6 +144,7 @@ export interface SerializedShip {
   battery: number;
   shield: number;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
 }
 
 export interface SerializedProjectile {
@@ -169,6 +170,7 @@ export interface SerializedFighter {
   vx: number; vy: number;
   angle: number;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
   advancedTier?: boolean;
 }
 
@@ -197,6 +199,7 @@ export interface SerializedBuilding {
   buildProgress: number;
   powered: boolean;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
   /** Upgrade housed by a physical research lab; absent for ordinary structures. */
   researchItem?: string;
   isResearching?: boolean;

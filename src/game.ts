@@ -2116,7 +2116,10 @@ export class Game {
       const b = buildingById.get(sb.id);
       if (b) {
         // Update existing building.
-        b.health = sb.health;
+        if (b.buildingDamage) {
+            b.buildingDamage.applySnapshot(sb.structure, b as any);
+          }
+          b.health = sb.health;
         b.buildProgress = sb.buildProgress;
         b.powered = sb.powered;
         if (b instanceof ResearchLab) {
@@ -2138,7 +2141,10 @@ export class Game {
           const newBuilding = createBuildingFromDef(def, new Vec2(sb.x, sb.y), sb.team as Team);
           // Force id to match host's authoritative id so future snapshots find it.
           (newBuilding as unknown as { id: number }).id = sb.id;
-          newBuilding.health = sb.health;
+          if (newBuilding.buildingDamage) {
+              newBuilding.buildingDamage.applySnapshot(sb.structure, newBuilding as any);
+            }
+            newBuilding.health = sb.health;
           newBuilding.buildProgress = sb.buildProgress;
           newBuilding.powered = sb.powered;
           if (newBuilding instanceof ResearchLab) {
@@ -2323,6 +2329,7 @@ export class Game {
         buildProgress: b.buildProgress,
         powered: b.powered,
         alive: b.alive,
+          structure: b.buildingDamage?.snapshot(),
         researchItem: b instanceof ResearchLab ? b.researchItem ?? undefined : undefined,
         isResearching: b instanceof ResearchLab ? b.isResearching : undefined,
         shield: b instanceof ShieldGenerator ? b.shield : undefined,
