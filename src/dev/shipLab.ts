@@ -36,15 +36,58 @@ const PARAM_ORDER: (keyof ProceduralShipParams)[] = [
   'length', 'spanToLength', 'tipSweep', 'tailNotch',
   'structureDepth', 'gasketBias',
   'budCount', 'budScale', 'budFalloff', 'budTwist', 'budDepth', 'budEmbed',
-  'wingPairs', 'wingStation', 'wingSweep', 'wingChord', 'wingSpan', 'wingDetail',
+  'wingPairs', 'wingElements', 'wingStation', 'wingGroupGap', 'wingSweep', 'wingChord',
+  'wingSpan', 'wingRake', 'wingDetail', 'wingBuds', 'wingSerration',
   'finCount', 'finLength', 'finSpread',
   'shadeBands', 'shadeDepthMix', 'hueSpread', 'accentHueShift', 'accentAmount', 'coreSize',
   'asymmetry', 'lineThickness', 'glowAmount',
 ];
 
 const INTEGER_KEYS = new Set<keyof ProceduralShipParams>([
-  'structureDepth', 'budCount', 'budDepth', 'wingPairs', 'wingDetail', 'finCount', 'shadeBands',
+  'structureDepth', 'budCount', 'budDepth', 'wingPairs', 'wingElements', 'wingDetail',
+  'wingBuds', 'finCount', 'shadeBands',
 ]);
+
+
+/** Plain-language slider labels. The serialized param names never change, so designs
+ *  saved before these labels existed still load. */
+const PARAM_LABELS: Partial<Record<keyof ProceduralShipParams, string>> = {
+  spanToLength: 'hull  Long \u2194 Wide',
+  length: 'hull length',
+  tipSweep: 'wingtip station',
+  tailNotch: 'tail notch',
+  structureDepth: 'gasket depth',
+  gasketBias: 'gasket bias',
+  budCount: 'bulbs per edge',
+  budScale: 'bulb size',
+  budFalloff: 'bulb falloff',
+  budTwist: 'bulb spiral twist',
+  budDepth: 'bulbs on bulbs',
+  budEmbed: 'bulb embed',
+  wingPairs: 'wing pairs (separate)',
+  wingElements: 'elements per pair (merged)',
+  wingStation: 'wing position',
+  wingGroupGap: 'gap between pairs',
+  wingSweep: 'wing sweep-back',
+  wingChord: 'wing width (fore-aft)',
+  wingSpan: 'wing span (outward)',
+  wingRake: 'wing reach  aft \u2194 forward',
+  wingDetail: 'wing gasket depth',
+  wingBuds: 'wing edge bulbs',
+  wingSerration: 'wing serrated edge',
+  finCount: 'fins',
+  finLength: 'fin length',
+  finSpread: 'fin spread',
+  shadeBands: 'shade bands',
+  shadeDepthMix: 'shade  space \u2194 depth',
+  hueSpread: 'hue drift',
+  accentHueShift: 'accent hue',
+  accentAmount: 'accent amount',
+  coreSize: 'core size',
+  asymmetry: 'asymmetry',
+  lineThickness: 'rim line',
+  glowAmount: 'rim glow',
+};
 
 function step(key: keyof ProceduralShipParams): number {
   if (INTEGER_KEYS.has(key)) return 1;
@@ -333,7 +376,8 @@ function makeSlider(key: keyof ProceduralShipParams): HTMLElement {
   const row = document.createElement('div');
   row.className = 'row';
   const label = document.createElement('label');
-  label.textContent = key;
+  label.textContent = PARAM_LABELS[key] ?? key;
+  label.title = key;
   const input = document.createElement('input');
   input.type = 'range';
   input.min = String(lo);
@@ -399,6 +443,7 @@ function savePreset(name: string): void {
     if (preset) { current = { seed: preset.def.seed, params: { ...preset.def.params } }; invalidate(); buildPanel(); }
   },
   setZoom(z: number) { previewZoom = z; },
+  setParams(ov: Partial<ProceduralShipParams>) { current.params = { ...current.params, ...ov }; invalidate(); buildPanel(); },
   setTeam(i: number) { teamIndex = i; customColor = null; },
   setRts(v: boolean) { showRtsScale = v; },
   setDebug(k: keyof ShipDebugOverlay, v: boolean) { debug[k] = v; },

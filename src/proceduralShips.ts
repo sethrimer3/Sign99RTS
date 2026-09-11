@@ -36,7 +36,7 @@ export function hashStringToSeed(s: string): number {
 export interface ProceduralShipParams {
   // Planform
   length: number;          // fore-aft extent in world units
-  spanToLength: number;    // span / length. > 1 = wing-dominant delta/manta
+  spanToLength: number;    // span / length. < 1 = long//dart, > 1 = wide/manta
   tipSweep: number;        // wingtip station along the length, 0 = at the tail
   tailNotch: number;       // tail notch station along the length
   // Sierpinski structure
@@ -50,12 +50,17 @@ export interface ProceduralShipParams {
   budDepth: number;        // bud-on-bud recursion
   budEmbed: number;        // how far the bud sits off its edge (1 = tangent)
   // Wings and fins
-  wingPairs: number;
-  wingStation: number;     // where the first wing root sits along the leading edge
+  wingPairs: number;       // distinct, separated wing groups (a 2nd reads as a canard)
+  wingElements: number;    // abutting elements within one group — one feathered surface
+  wingStation: number;     // where the aft-most wing group starts along the leading edge
+  wingGroupGap: number;    // clear gap between distinct groups, fraction of the edge
   wingSweep: number;       // sweep-back of the wing tip, fraction of length
-  wingChord: number;       // root chord, fraction of the leading edge
-  wingSpan: number;        // wing extension beyond the hull, fraction of span
+  wingChord: number;       // root chord of one element, fraction of the leading edge
+  wingSpan: number;        // wing extension beyond the hull, fraction of LENGTH
+  wingRake: number;        // 0 = tip rakes aft, 1 = tip reaches forward toward the nose
   wingDetail: number;      // gasket recursion depth applied to each wing
+  wingBuds: number;        // bulb chain along each wing's leading edge
+  wingSerration: number;   // stepped/serrated trailing edge
   finCount: number;
   finLength: number;       // fraction of length
   finSpread: number;       // lateral spread of the fin fan, fraction of span
@@ -74,7 +79,7 @@ export interface ProceduralShipParams {
 
 export const DEFAULT_PARAMS: ProceduralShipParams = {
   length: 120,
-  spanToLength: 1.45,
+  spanToLength: 0.66,
   tipSweep: 0.30,
   tailNotch: 0.20,
   structureDepth: 3,
@@ -86,11 +91,16 @@ export const DEFAULT_PARAMS: ProceduralShipParams = {
   budDepth: 1,
   budEmbed: 0.55,
   wingPairs: 1,
-  wingStation: 0.36,
+  wingElements: 2,
+  wingStation: 0.34,
+  wingGroupGap: 0.1,
   wingSweep: 0.16,
-  wingChord: 0.26,
-  wingSpan: 0.18,
+  wingChord: 0.2,
+  wingSpan: 0.3,
+  wingRake: 0.35,
   wingDetail: 3,
+  wingBuds: 2,
+  wingSerration: 0.45,
   finCount: 2,
   finLength: 0.2,
   finSpread: 0.3,
@@ -116,7 +126,7 @@ export interface ProceduralShipDefinition {
 // ---------------------------------------------------------------------------
 
 /** Hard cap on emitted polygons so no slider combination produces a pathological ship. */
-export const MAX_POLYGONS = 400;
+export const MAX_POLYGONS = 480;
 
 export interface ShipPolygon {
   pts: number[];      // flat [x0,y0,x1,y1,...] in ship-local units
@@ -346,6 +356,44 @@ function budChain(
   }
 }
 
+
+/** One wing element: the hull's gasket rule, a stepped trailing edge, and its own bulb
+ *  chain along the leading edge, so a wing is as rewarding to look at as the hull core. */
+function emitWing(
+  em: Emitter, rootA: P, rootB: P, tipF: P, bias: number, levels: number,
+  depthBase: number, p: ProceduralShipParams, anchors: { x: number; y: number; r: number }[],
+  outermost: boolean,
+): void {
+  gasket(em, rootA, rootB, tipF, 0, levels, bias, null, 0.94, depthBase, 0.52, 0.98);
+  const inner: P = { x: (rootA.x + rootB.x + tipF.x) / 3, y: (rootA.y + rootB.y + tipF.y) / 3 };
+
+  const steps = Math.round(p.wingSerration * 5);
+  if (steps > 0) {
+    const depth = p.wingSerration * 0.05 * p.length;
+    for (let i = 0; i < steps; i++) {
+      if (em.full) break;
+      const a = lerpP(rootB, tipF, i / steps);
+      const b = lerpP(rootB, tipF, (i + 1) / steps);
+      const mid = lerpP(a, b, 0.5);
+      let sx = -(b.y - a.y), sy = b.x - a.x;
+      const len = Math.hypot(sx, sy) || 1;
+      sx /= len; sy /= len;
+      // Point the step inward: an outward spike would open a gap of background between
+      // every pair of teeth and shred the silhouette.
+      if ((inner.x - mid.x) * sx + (inner.y - mid.y) * sy < 0) { sx = -sx; sy = -sy; }
+      em.emit(triPts(a, b, { x: mid.x + sx * depth, y: mid.y + sy * depth }), depthBase + levels + 1, 0.9 - i * 0.06);
+    }
+  }
+
+  // Only the outermost element of a group carries a bulb chain; chains on every element
+  // overlap each other and read as debris rather than a row of studs.
+  const buds = outermost ? Math.round(p.wingBuds) : 0;
+  if (buds > 0) {
+    const wp: ProceduralShipParams = { ...p, budTwist: p.budTwist * 0.2, budEmbed: 0.3, budDepth: 0 };
+    budChain(em, tipF, rootA, inner, buds, p.budScale * 0.55, depthBase + levels + 2, bias, wp, anchors);
+  }
+}
+
 /** Polygons a full mirrored gasket recursion to `depth` emits: 2 * (3^(d+1)-1)/2. */
 function gasketCost(depth: number): number {
   return Math.pow(3, depth + 1) - 1;
@@ -388,6 +436,7 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   // from a feature that rounded down cascades to the next.
   const wingPairs = Math.round(Math.max(0, Math.min(3, p.wingPairs)));
   const wantWingDetail = Math.round(Math.max(0, Math.min(3, p.wingDetail)));
+  const wingElements = Math.round(Math.max(1, Math.min(3, p.wingElements)));
   const finCount = Math.round(Math.max(0, Math.min(4, p.finCount)));
   const budCount = Math.round(Math.max(0, p.budCount));
   const budLevels = Math.round(Math.max(0, p.budDepth));
@@ -396,7 +445,9 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   const finCost = finCount * 2;
   const pool = Math.max(24, MAX_POLYGONS - ACCENT_RESERVE - finCost);
   const hullReq = gasketCost(maxDepth);
-  const wingReq = wingPairs * gasketCost(wantWingDetail);
+  const wingUnits = wingPairs * wingElements;
+  const wingReq = wingUnits * (gasketCost(wantWingDetail)
+    + Math.round(p.wingSerration * 5) * 2 + Math.round(p.wingBuds) * 2 * 9);
   const budReq = 2 * budCount * (10 + budLevels * 8);
   const totalReq = hullReq + wingReq + budReq;
   const k = totalReq > pool ? pool / totalReq : 1;
@@ -404,7 +455,7 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   const hullDepth = affordableDepth(maxDepth, hullReq * k);
   const spare = Math.max(0, Math.floor(hullReq * k) - gasketCost(hullDepth));
   const wingAlloc = Math.floor(wingReq * k) + Math.floor(spare * 0.6);
-  const perWing = wingPairs > 0 ? Math.floor(wingAlloc / wingPairs) : 0;
+  const perWing = wingUnits > 0 ? Math.floor(wingAlloc / wingUnits) : 0;
   const wingLevels = affordableDepth(wantWingDetail, perWing);
 
   em.setQuota(gasketCost(hullDepth));
@@ -430,32 +481,35 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   // taper forward and aft — the cardioid-neck reading.
   const inside: P = { x: (N.x + W.x + T.x) / 3, y: (N.y + W.y + T.y) / 3 };
 
-  // Wings: a separate swept planform reaching well beyond the hull edge, so the
-  // silhouette reads as a winged craft. Painted under the bulb chains.
+  // Wings: distinct groups, each of `wingElements` abutting elements. Elements inside a
+  // group merge into one feathered surface (no notches between them); separate groups
+  // stay clearly apart and shrink toward the nose, so a second pair reads as a canard.
   em.setQuota(wingAlloc);
-  for (let i = 0; i < wingPairs; i++) {
-    if (em.full) break;
-    // Consecutive wings abut along the leading edge rather than leaving a station gap,
-    // which is what bit the black V notches out between them.
-    const u0 = Math.min(0.9, p.wingStation + i * p.wingChord);
-    const u1 = Math.min(0.985, u0 + p.wingChord);
-    const r0 = lerpP(N, W, u0);
-    const r1 = lerpP(N, W, u1);
-    // Outboard is straight +y and sweep is straight aft, so the wing keeps a readable
-    // delta planform instead of being dragged along the hull's leading-edge normal.
-    // Tip is placed relative to the hull's widest point, not the root, so a wing rooted
-    // inboard still clears the hull instead of being buried inside it.
-    const out = wingOut * (1 - i * 0.12);
-    const sw = p.wingSweep * L + out * 0.4;
-    const tipF: P = { x: r0.x - sw, y: span * 0.5 + out };
-    // Both root points are seated a hair inboard of the leading edge so the root chord
-    // seals against the hull instead of leaving a notch of background; the overlap is a
-    // thin sliver, far too small to bring back the flat dark crossing band.
-    const rootA = lerpP(r0, inside, 0.045);
-    const rootB0 = lerpP(r1, inside, 0.045);
-    const rootB: P = { x: rootB0.x - sw * 0.22, y: rootB0.y };
-    // The wing carries the same gasket rule as the hull so it reads as part of one object.
-    gasket(em, rootA, rootB, tipF, 0, wingLevels, bias, null, 0.94, wingDepth, 0.52, 0.98);
+  let groupU = p.wingStation;
+  for (let grp = 0; grp < wingPairs; grp++) {
+    if (em.full || groupU < 0.02) break;
+    const gScale = Math.pow(0.66, grp);
+    const chordG = Math.max(0.03, p.wingChord * gScale);
+    for (let e = 0; e < wingElements; e++) {
+      if (em.full) break;
+      const u0 = Math.min(0.94, groupU + e * chordG);
+      const u1 = Math.min(0.985, u0 + chordG);
+      if (u0 >= 0.94) break;
+      const r0 = lerpP(N, W, u0);
+      const r1 = lerpP(N, W, u1);
+      // Span falls off only slightly across elements of one group so their tips stay
+      // close enough not to bite notches out between them.
+      const out = p.wingSpan * L * gScale * (1 - e * 0.12);
+      const sw = p.wingSweep * L + out * 0.4;
+      // wingRake pulls the tip forward toward the nose; 0 leaves it raked aft.
+      const tipF: P = { x: r0.x - sw + p.wingRake * (N.x - r0.x) * 0.8, y: span * 0.5 + out };
+      // Root points seated a hair inboard so the chord seals against the hull.
+      const rootA = lerpP(r0, inside, 0.045);
+      const rootB0 = lerpP(r1, inside, 0.045);
+      const rootB: P = { x: rootB0.x - sw * 0.22, y: rootB0.y };
+      emitWing(em, rootA, rootB, tipF, bias, wingLevels, wingDepth, p, anchors, e === wingElements - 1);
+    }
+    groupU -= chordG * wingElements + p.wingGroupGap;
   }
 
   // Fins: narrow elongated triangles raked off the trailing edge.
@@ -835,11 +889,16 @@ const PARAM_RANGES: Record<keyof ProceduralShipParams, [number, number]> = {
   budDepth: [0, 2],
   budEmbed: [0, 1.2],
   wingPairs: [0, 3],
+  wingElements: [1, 3],
   wingStation: [0.05, 0.8],
+  wingGroupGap: [0, 0.35],
   wingSweep: [-0.1, 0.45],
-  wingChord: [0.05, 0.5],
-  wingSpan: [0, 0.5],
+  wingChord: [0.05, 0.6],
+  wingSpan: [0, 0.7],
+  wingRake: [0, 1],
   wingDetail: [0, 3],
+  wingBuds: [0, 4],
+  wingSerration: [0, 1],
   finCount: [0, 4],
   finLength: [0.05, 0.45],
   finSpread: [0, 0.5],
@@ -879,7 +938,7 @@ export function randomizeParams(randomSeed: number): ProceduralShipParams {
     out[key] = (lo ?? rlo) + rng() * ((hi ?? rhi) - (lo ?? rlo));
   };
   pick('length', 80, 200);
-  pick('spanToLength', 0.55, 2.2);
+  pick('spanToLength', 0.45, 1.6);
   pick('tipSweep', 0.1, 0.55);
   pick('tailNotch', 0.05, 0.4);
   out.structureDepth = 2 + Math.floor(rng() * 3);
@@ -890,12 +949,17 @@ export function randomizeParams(randomSeed: number): ProceduralShipParams {
   pick('budTwist', -0.8, 0.9);
   out.budDepth = Math.floor(rng() * 2.4);
   pick('budEmbed', 0.3, 0.85);
-  out.wingPairs = Math.floor(rng() * 3.2);
+  out.wingPairs = 1 + Math.floor(rng() * 2.2);
+  out.wingElements = 1 + Math.floor(rng() * 3);
   out.wingDetail = 1 + Math.floor(rng() * 3);
+  out.wingBuds = Math.floor(rng() * 4);
+  pick('wingGroupGap', 0.04, 0.25);
+  pick('wingRake', 0, 0.8);
+  pick('wingSerration', 0, 0.9);
   pick('wingStation', 0.15, 0.6);
   pick('wingSweep', 0, 0.35);
-  pick('wingChord', 0.12, 0.4);
-  pick('wingSpan', 0.05, 0.35);
+  pick('wingChord', 0.1, 0.38);
+  pick('wingSpan', 0.12, 0.55);
   out.finCount = Math.floor(rng() * 4.2);
   pick('finLength', 0.1, 0.38);
   pick('finSpread', 0.03, 0.35);
