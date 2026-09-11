@@ -60,9 +60,9 @@ export interface ProceduralShipParams {
   finSpread: number;       // lateral spread of the fin fan, fraction of span
   // Shading
   shadeBands: number;
-  shadeDepthMix: number;   // 0 = shade purely by distance from nose, 1 = purely by depth
+  shadeDepthMix: number;   // 0 = purely the smooth spatial field, 1 = purely recursion depth
   hueSpread: number;       // degrees of hue drift across the ramp
-  accentHueShift: number;  // degrees; ~150 gives the warm-in-cool contrast
+  accentHueShift: number;  // 150 = the hue-derived default accent; slides it from there
   accentAmount: number;    // 0..1, how much accent geometry is emitted
   coreSize: number;        // accent core radius, fraction of length
   // Misc
@@ -85,7 +85,7 @@ export const DEFAULT_PARAMS: ProceduralShipParams = {
   budDepth: 1,
   budEmbed: 0.55,
   wingPairs: 1,
-  wingStation: 0.34,
+  wingStation: 0.36,
   wingSweep: 0.16,
   wingChord: 0.26,
   wingSpan: 0.18,
@@ -93,11 +93,11 @@ export const DEFAULT_PARAMS: ProceduralShipParams = {
   finLength: 0.2,
   finSpread: 0.3,
   shadeBands: 8,
-  shadeDepthMix: 0.72,
+  shadeDepthMix: 0.3,
   hueSpread: 34,
   accentHueShift: 150,
   accentAmount: 0.7,
-  coreSize: 0.055,
+  coreSize: 0.05,
   asymmetry: 0,
   lineThickness: 0,
   glowAmount: 0.18,
@@ -190,13 +190,14 @@ class Emitter {
 
   get full(): boolean { return this.polys.length + 2 > MAX_POLYGONS; }
 
-  /** Shade blends a structural target (recursion depth / part type) with normalized
-   *  distance from the nose, so the ship bands deliberately instead of mottling. */
+  /** Shade is primarily a smooth spatial field — bright along the spine and toward the
+   *  nose, darkening aft and outboard — so quantizing it yields bands that flow across
+   *  the whole form. Recursion depth only perturbs it (shadeDepthMix). */
   shadeFor(pts: number[], target: number): number {
-    const dx = (this.noseX - centroidX(pts)) / (this.L * 1.05);
-    const dy = Math.abs(centroidY(pts)) / (this.span * 0.7 + 1e-6);
-    const dist = Math.min(1, Math.sqrt(dx * dx * 0.9 + dy * dy * 0.45));
-    return Math.min(1, Math.max(0, this.depthMix * target + (1 - this.depthMix) * (1 - dist)));
+    const aft = Math.min(1, Math.max(0, (this.noseX - centroidX(pts)) / (this.L * 1.02)));
+    const out = Math.min(1, Math.abs(centroidY(pts)) / (this.span * 0.5 + 1e-6));
+    const spatial = 1 - (0.52 * Math.pow(aft, 0.85) + 0.48 * Math.pow(out, 1.15));
+    return Math.min(1, Math.max(0, this.depthMix * target + (1 - this.depthMix) * spatial));
   }
 
   /** Emit a right-half polygon and its mirror. */
@@ -256,51 +257,48 @@ function insetTri(a: P, b: P, c: P, k: number): number[] {
 /** Classic gasket step with a generalized midpoint: each level's three corner
  *  children are kept and painted over their parent, so the dropped centres survive
  *  as visible bands of the parent's shade. */
-function gasket(em: Emitter, a: P, b: P, c: P, depth: number, maxDepth: number, bias: number, edges: number[][], inset: number): void {
+function gasket(
+  em: Emitter, a: P, b: P, c: P, depth: number, maxDepth: number, bias: number,
+  edges: number[][] | null, inset: number, depthBase = 0, shadeLo = 0.02, shadeHi = 0.95,
+): void {
   const t = maxDepth === 0 ? 1 : depth / maxDepth;
-  em.emit(depth === 0 ? triPts(a, b, c) : insetTri(a, b, c, inset), depth, 0.02 + 0.93 * t);
+  em.emit(depth === 0 ? triPts(a, b, c) : insetTri(a, b, c, inset), depthBase + depth, shadeLo + (shadeHi - shadeLo) * t);
   if (depth >= maxDepth || em.full) return;
   const ab = lerpP(a, b, bias);
   const bc = lerpP(b, c, bias);
   const ca = lerpP(c, a, bias);
-  if (depth < 2) edges.push([ab.x, ab.y, bc.x, bc.y, ca.x, ca.y]);
-  gasket(em, a, ab, ca, depth + 1, maxDepth, bias, edges, inset);
-  gasket(em, ab, b, bc, depth + 1, maxDepth, bias, edges, inset);
-  gasket(em, ca, bc, c, depth + 1, maxDepth, bias, edges, inset);
+  if (edges && depth < 2) edges.push([ab.x, ab.y, bc.x, bc.y, ca.x, ca.y]);
+  gasket(em, a, ab, ca, depth + 1, maxDepth, bias, edges, inset, depthBase, shadeLo, shadeHi);
+  gasket(em, ab, b, bc, depth + 1, maxDepth, bias, edges, inset, depthBase, shadeLo, shadeHi);
+  gasket(em, ca, bc, c, depth + 1, maxDepth, bias, edges, inset, depthBase, shadeLo, shadeHi);
 }
 
-const LOBE_SIDES = 9;
-
-/** A bulb: a slightly outward-elongated n-gon, the round counterpart to the gasket's
- *  straight edges. Cheap and it reads as a Mandelbrot bulb at any size. */
-function lobe(cx: number, cy: number, r: number, rot: number): number[] {
-  const out = new Array<number>(LOBE_SIDES * 2);
+/** A bulb is a small arrowhead in the hull's own angular language, nose pointing out
+ *  along `rot`. Real Mandelbrot bulbs are encrusted with their own filigree, so these
+ *  get gasket-subdivided too and read as self-similar craft rather than bubbles. */
+function budTri(cx: number, cy: number, r: number, rot: number): [P, P, P] {
   const co = Math.cos(rot), si = Math.sin(rot);
-  for (let i = 0; i < LOBE_SIDES; i++) {
-    const a = (i / LOBE_SIDES) * Math.PI * 2;
-    const lx = Math.cos(a) * r * 1.12, ly = Math.sin(a) * r * 0.88;
-    out[i * 2] = cx + lx * co - ly * si;
-    out[i * 2 + 1] = cy + lx * si + ly * co;
-  }
-  return out;
+  const at = (lx: number, ly: number): P => ({ x: cx + lx * co - ly * si, y: cy + lx * si + ly * co });
+  return [at(r * 1.02, 0), at(-r * 0.72, r * 1.0), at(-r * 0.72, -r * 1.0)];
 }
 
 /** Bulbs budding on a parent bulb's rim — the self-similar step that makes the chain
  *  read as Mandelbrot rather than as beads on a string. */
 function budChildren(
   em: Emitter, cx: number, cy: number, r: number, rot: number, count: number,
-  depthBase: number, level: number, p: ProceduralShipParams,
+  depthBase: number, level: number, bias: number, p: ProceduralShipParams,
 ): void {
   if (level > Math.round(p.budDepth) || count < 1 || em.full) return;
   for (let j = 0; j < Math.min(2, count); j++) {
     if (em.full) return;
-    const rc = (r * 0.42) / Math.pow(j + 1, p.budFalloff * 0.5);
-    if (rc < p.length * 0.008) return;
-    const ang = rot + (j - (count - 1) * 0.5) * (0.85 + p.budTwist * 0.6) + p.budTwist;
-    const px = cx + Math.cos(ang) * (r * 0.94 + rc * 0.7);
-    const py = cy + Math.sin(ang) * (r * 0.94 + rc * 0.7);
-    em.emit(lobe(px, py, rc, ang), depthBase + level, 0.66 + level * 0.14);
-    budChildren(em, px, py, rc, ang, Math.max(1, count - 1), depthBase, level + 1, p);
+    const rc = (r * 0.46) / Math.pow(j + 1, p.budFalloff * 0.5);
+    if (rc < p.length * 0.01) return;
+    const ang = rot + (j - (count - 1) * 0.5) * (0.8 + p.budTwist * 0.6) + p.budTwist;
+    const px = cx + Math.cos(ang) * (r * 0.8 + rc * 0.55);
+    const py = cy + Math.sin(ang) * (r * 0.8 + rc * 0.55);
+    const [ba, bb, bc] = budTri(px, py, rc, ang);
+    gasket(em, ba, bb, bc, 0, 1, bias, null, 0.93, depthBase + 2, 0.42, 0.78);
+    budChildren(em, px, py, rc, ang, Math.max(1, count - 1), depthBase, level + 1, bias, p);
   }
 }
 
@@ -308,7 +306,7 @@ function budChildren(
  *  Mandelbrot's bulb chains read the way they do — and are packed tangent to each other. */
 function budChain(
   em: Emitter, A: P, B: P, inside: P, count: number, scale: number,
-  depthBase: number, p: ProceduralShipParams, anchors: { x: number; y: number; r: number }[],
+  depthBase: number, bias: number, p: ProceduralShipParams, anchors: { x: number; y: number; r: number }[],
 ): void {
   const ex = B.x - A.x, ey = B.y - A.y;
   const len = Math.hypot(ex, ey);
@@ -327,14 +325,17 @@ function budChain(
     const px = A.x + ux * cursor + nx * r * p.budEmbed * 0.45;
     const py = A.y + uy * cursor + ny * r * p.budEmbed * 0.45;
     const rot = Math.atan2(ny, nx) + p.budTwist * n;
-    // Accent lands on a small mid-chain bulb, never the largest one: keeps the warm
-    // contrast to a few percent of the area.
-    const accent = n === 2 && p.accentAmount > 0.35;
-    em.emit(lobe(px, py, r, rot), depthBase, 0.4 + n * 0.05, accent);
-    // A concentric highlight turns a flat blob into a bulb with its own bright interior.
-    em.emit(lobe(px + Math.cos(rot) * r * 0.16, py + Math.sin(rot) * r * 0.16, r * 0.52, rot), depthBase + 1, 0.82, false);
+    const [ba, bb, bc] = budTri(px, py, r, rot);
+    const levels = n < 2 && r > p.length * 0.05 ? 2 : 1;
+    gasket(em, ba, bb, bc, 0, levels, bias, null, 0.94, depthBase, 0.34, 0.86);
+    // Accent rides the bulb's own nose, never a whole bulb: keeps the warm contrast
+    // to a few percent of the area.
+    if (n >= 1 && n <= 2 && p.accentAmount > 0.35) {
+      const nose = budTri(px + Math.cos(rot) * r * 0.72, py + Math.sin(rot) * r * 0.72, r * 0.3, rot);
+      em.emit(triPts(nose[0], nose[1], nose[2]), depthBase + 3, 0.88, true);
+    }
     anchors.push({ x: px, y: py, r });
-    budChildren(em, px, py, r, rot, Math.max(1, count - 2), depthBase + 2, 1, p);
+    budChildren(em, px, py, r, rot, Math.max(1, count - 2), depthBase + 4, 1, bias, p);
     cursor += r * 0.92;
   }
 }
@@ -363,40 +364,44 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   const bias = Math.min(0.92, Math.max(0.08, p.gasketBias + jBias));
   gasket(em, N, W, T, 0, maxDepth, bias, edges, 0.955);
 
+  const wingDepth = maxDepth + 1;
+  const budDepthBase = wingDepth + 3;
+
+  // Accents: a nose cap that is a scaled copy of the hull nose, and a core lozenge.
+  // Emitted before the bulb chains so the polygon cap can never starve them.
+  if (p.accentAmount > 0) {
+    const nt = 0.035 + 0.03 * p.accentAmount;
+    const na = lerpP(N, W, nt);
+    const nb = lerpP(N, T, nt);
+    em.emitSym([N.x, N.y, na.x, na.y, nb.x, nb.y, na.x, -na.y], budDepthBase + 6, 0.85, true);
+    const cr = Math.max(0.4, p.coreSize * L * 0.6);
+    const cxp = T.x + (N.x - T.x) * 0.42;
+    em.emitSym([cxp + cr * 2.6, 0, cxp, cr, cxp - cr * 2.6, 0, cxp, -cr], budDepthBase + 6, 0.7, true);
+  }
+
   // Both chains start at the wingtip, so the largest bulbs sit at the shoulder and
   // taper forward and aft — the cardioid-neck reading.
   const inside: P = { x: (N.x + W.x + T.x) / 3, y: (N.y + W.y + T.y) / 3 };
-  const budDepthBase = maxDepth + 1;
-  budChain(em, W, N, inside, Math.round(p.budCount), p.budScale, budDepthBase, p, anchors);
-  budChain(em, W, T, inside, Math.round(p.budCount), p.budScale * 0.85, budDepthBase, p, anchors);
 
-  // Wings: swept deltas rooted on the leading edge, each given one level of the same gasket rule.
+  // Wings: a separate swept planform reaching well beyond the hull edge, so the
+  // silhouette reads as a winged craft. Painted under the bulb chains.
   const wingPairs = Math.round(Math.max(0, Math.min(3, p.wingPairs)));
-  const wingDepth = budDepthBase + Math.round(p.budDepth) + 2;
-  const lead = { x: W.x - N.x, y: W.y - N.y };
-  const leadLen = Math.hypot(lead.x, lead.y) || 1;
-  const lu = { x: lead.x / leadLen, y: lead.y / leadLen };
-  const ln = { x: -lu.y, y: lu.x };
-  if (ln.y < 0) { ln.x = -ln.x; ln.y = -ln.y; }
   for (let i = 0; i < wingPairs; i++) {
     if (em.full) break;
     const u0 = Math.min(0.88, p.wingStation + i * (p.wingChord + 0.08));
     const u1 = Math.min(0.98, u0 + p.wingChord);
     const r0 = lerpP(N, W, u0);
     const r1 = lerpP(N, W, u1);
-    // Tip rides the leading-edge normal and sweeps back along the edge, so the wing
-    // grows out of the hull instead of reading as a bolted-on slab.
-    const out = p.wingSpan * span * 0.8;
-    const sw = p.wingSweep * L;
-    const anchor = lerpP(r0, r1, 0.72);
-    const tipP: P = { x: anchor.x + ln.x * out + lu.x * sw, y: anchor.y + ln.y * out + lu.y * sw };
-    em.emit(triPts(r0, r1, tipP), wingDepth, 0.26);
-    const m0 = lerpP(r0, r1, bias);
-    const m1 = lerpP(r1, tipP, bias);
-    const m2 = lerpP(tipP, r0, bias);
-    em.emit(insetTri(r0, m0, m2, 0.94), wingDepth + 1, 0.5);
-    em.emit(insetTri(m0, r1, m1, 0.94), wingDepth + 1, 0.62);
-    em.emit(insetTri(m2, m1, tipP, 0.94), wingDepth + 1, 0.8);
+    // Outboard is straight +y and sweep is straight aft, so the wing keeps a readable
+    // delta planform instead of being dragged along the hull's leading-edge normal.
+    // Tip is placed relative to the hull's widest point, not the root, so a wing rooted
+    // inboard still clears the hull instead of being buried inside it.
+    const out = p.wingSpan * span * 0.6;
+    const sw = p.wingSweep * L + out * 0.4;
+    const tipF: P = { x: r0.x - sw, y: span * 0.5 + out };
+    const heel: P = { x: r1.x - sw * 0.3, y: r1.y + out * 0.16 };
+    em.emit(triPts(r0, heel, tipF), wingDepth, 0.2);
+    gasket(em, r0, heel, tipF, 0, 1, bias, null, 0.93, wingDepth + 1, 0.4, 0.84);
   }
 
   // Fins: narrow elongated triangles raked off the trailing edge.
@@ -414,16 +419,10 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     em.emit(triPts(r0, r1, apex), wingDepth + 2, 0.6 + f * 0.22);
   }
 
-  // Accents: a nose cap that is a scaled copy of the hull nose, and a core lozenge.
-  if (p.accentAmount > 0) {
-    const nt = 0.07 + 0.06 * p.accentAmount;
-    const na = lerpP(N, W, nt);
-    const nb = lerpP(N, T, nt);
-    em.emitSym([N.x, N.y, na.x, na.y, nb.x, nb.y, na.x, -na.y], wingDepth + 3, 0.85, true);
-    const cr = Math.max(0.5, p.coreSize * L);
-    const cxp = T.x + (N.x - T.x) * 0.42;
-    em.emitSym([cxp + cr * 1.9, 0, cxp, cr, cxp - cr * 1.9, 0, cxp, -cr], wingDepth + 3, 0.7, true);
-  }
+  // Both chains start at the wingtip, so the largest bulbs sit at the shoulder and
+  // taper forward and aft — the cardioid-neck reading.
+  budChain(em, W, N, inside, Math.round(p.budCount), p.budScale, budDepthBase, bias, p, anchors);
+  budChain(em, W, T, inside, Math.round(p.budCount), p.budScale * 0.85, budDepthBase, bias, p, anchors);
 
   // Silhouette = convex hull of everything emitted, so the rim traces wings and buds too.
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -536,6 +535,11 @@ export function getShadeRamp(color: Color, bands: number, hueSpread: number, acc
   const b = Math.min(255, color.b * color.intensity);
   let [h, s] = rgbToHsl(r, g, b);
   if (s < 0.18) s = 0.18;
+  // The accent target is chosen from the hull hue rather than being a fixed rotation:
+  // a warm hull gets an ice-cyan accent, a cool hull gets amber. A fixed +150 turned
+  // green factions magenta. accentHueShift still slides the accent hue continuously.
+  const hullWarm = h >= 330 || h <= 72;
+  const accentH = (hullWarm ? 196 : 36) + (accentHueShift - 150);
   const fills: string[] = [];
   const accents: string[] = [];
   for (let i = 0; i < bands; i++) {
@@ -543,7 +547,7 @@ export function getShadeRamp(color: Color, bands: number, hueSpread: number, acc
     const l = 0.12 + u * u * 0.25 + u * 0.55;                 // dark field -> bright highlight
     const sat = s * (1 - Math.pow(Math.max(0, u - 0.45) / 0.55, 2) * 0.82);
     fills.push(hslToCss(h + hueSpread * (u - 0.25), Math.min(1, sat), Math.min(0.95, l)));
-    accents.push(hslToCss(h + accentHueShift + hueSpread * 0.3 * u, Math.min(1, 0.62 + 0.3 * s), 0.36 + u * 0.42));
+    accents.push(hslToCss(accentH + hueSpread * 0.25 * u, 0.78, 0.46 + u * 0.32));
   }
   ramp = { fills, accents, rim: hslToCss(h + hueSpread * 0.9, Math.min(1, s * 0.5), 0.88) };
   rampCache.set(key, ramp);
