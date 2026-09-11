@@ -304,6 +304,7 @@ export class PlayerShip extends Entity {
     this.velocity = new Vec2(0, 0);
     this.health = this.maxHealth;
     this.alive = true;
+    this.damageStage = 0;
     this.battery = this.maxBattery;
     this.energyRegenDelay = 0;
     this.energyDrainMark = this.maxBattery;
@@ -623,8 +624,9 @@ export class PlayerShip extends Entity {
    * actually changes — a ship sitting at constant HP costs nothing.
    */
   updateDamageVisuals(debris: ShipDebrisSystem | null, hit: Vec2 | null = null): void {
-    if (!this.design || !this.alive) return;
-    const frac = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
+    if (!this.design) return;
+    // A lethal hit still crosses the remaining stages before dead-entity cleanup.
+    const frac = !this.alive ? 0 : this.maxHealth > 0 ? this.health / this.maxHealth : 1;
     const stage = damageStageForHealth(frac);
     if (stage === this.damageStage) return;
     const prev = this.damageStage;

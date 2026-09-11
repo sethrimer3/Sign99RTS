@@ -6,6 +6,7 @@ import { ShipDebrisSystem } from './shipDebris.js';
 import { Camera } from './camera.js';
 import { Vec2 } from './math.js';
 import { Colors } from './colors.js';
+import { PlayerShip } from './ship.js';
 
 class TestPath {
   moveTo() {} lineTo() {} closePath() {} addPath() {}
@@ -18,6 +19,25 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('procedural component damage', () => {
+  it('sheds on lethal hits once and restores the hull on respawn', () => {
+    const ship = new PlayerShip(new Vec2(0, 0));
+    ship.setDesign(SHIP_PRESETS[0].def);
+    ship.spawnInvincibilityTimer = 0;
+    const debris = new ShipDebrisSystem();
+    const emit = vi.spyOn(debris, 'emitShedComponents');
+    ship.takeDamage(ship.maxHealth * 2);
+    expect(ship.alive).toBe(false);
+    ship.updateDamageVisuals(debris);
+    expect(ship.visualDamageStage).toBe(7);
+    expect(debris.activeCount).toBeGreaterThan(0);
+    ship.updateDamageVisuals(debris);
+    expect(emit).toHaveBeenCalledTimes(1);
+    ship.revive(new Vec2(100, 100));
+    expect(ship.visualDamageStage).toBe(0);
+    ship.updateDamageVisuals(debris);
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
   it.each(SHIP_PRESETS)('$name sheds whole groups with monotonic, shared stages', ({ def }) => {
     const geo = getShipGeometry(def);
     expect(getShipGeometry({ seed: def.seed, params: { ...def.params } })).toBe(geo);
@@ -51,9 +71,11 @@ describe('procedural component damage', () => {
     const ctx = { save() {}, restore() {}, translate() {}, rotate() {}, scale() {}, fill: vi.fn(), stroke: vi.fn() };
     drawProceduralShip(ctx as unknown as CanvasRenderingContext2D, camera, def,
       { position: new Vec2(0, 0), rotation: 0, damageStage: 7 });
-    expect(ctx.fill).toHaveBeenCalledWith(geo.stageSilhouettes[7]);
-    expect(ctx.stroke).toHaveBeenCalledWith(geo.stageSilhouettes[7]);
-    expect(ctx.stroke).not.toHaveBeenCalledWith(geo.silhouette);
+    expect(ctx.fill.mock.calls[0][0]).toBe(geo.stageSilhouettes[7]);
+    for (const call of ctx.stroke.mock.calls) {
+      expect(call[0]).toBe(geo.stageSilhouettes[7]);
+      expect(call[0]).not.toBe(geo.silhouette);
+    }
   });
 
   it('keeps flying fragments stable through lab edits, caps the pool and releases it', () => {
@@ -70,7 +92,7 @@ describe('procedural component damage', () => {
     camera.setScreenSize(1280, 720);
     const ctx = { save() {}, restore() {}, translate() {}, rotate() {}, scale() {}, fill: vi.fn() };
     system.draw(ctx as unknown as CanvasRenderingContext2D, camera);
-    expect(ctx.fill).toHaveBeenCalledWith(path);
+    expect(ctx.fill.mock.calls[0][0]).toBe(path);
     for (let i = 0; i < 4; i++) emit(geo.shedOrder);
     expect(system.activeCount).toBe(system.poolCapacity);
     system.update(31);
