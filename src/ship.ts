@@ -135,12 +135,11 @@ export class PlayerShip extends Entity {
    *   const frigateDesign: ProceduralShipDefinition = { seed: 4404, params: { ...DEFAULT_PARAMS, spanToLength: 0.62 } };
    *   ship.setDesign(frigateDesign);
    *
-   * The Ship Lab's USE IN GAME button sets it for every ship via DEV_SHIP_DESIGN_KEY.
+   * The Ship Lab can override P1's family; all other colours retain their fixed fleet.
    */
   design: ProceduralShipDefinition | null = null;
 
-  /** Quantised damage stage for the procedural hull. Purely visual: hitbox, HP and all
-   *  stats are unaffected by how many components have been shed. */
+  /** HP stage for diagnostics. Actual missing pieces are tracked by hullDamage. */
   private damageStage = 0;
   synonymousPierceMultiplier = 1;
   synonymousFireSpeedLevel = 0;
@@ -621,11 +620,7 @@ export class PlayerShip extends Entity {
     this.hullDamage?.reset();
   }
 
-  /**
-   * Re-quantise the visual damage stage and, on a transition, shed the components that
-   * fall away between the old stage and the new one. Only does work when the stage
-   * actually changes — a ship sitting at constant HP costs nothing.
-   */
+  /** Repair / fallback HP reconciliation and pooled debris emission, once per tick. */
   updateDamageVisuals(debris: ShipDebrisSystem | null, hit: Vec2 | null = null): void {
     if (!this.design) return;
     this.hullDamage?.syncHealth(this);

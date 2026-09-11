@@ -93,6 +93,11 @@ interface TrailPoint {
   age: number;
 }
 
+const fighterPreviewCamera = new Camera();
+fighterPreviewCamera.setScreenSize(0, 0);
+fighterPreviewCamera.zoom = 1;
+const fighterPreviewOrigin = new Vec2(0, 0);
+
 /** Canonical Terran fighter hull, shared by gameplay and miniature UI previews. */
 export function drawTerranFighterHull(
   ctx: CanvasRenderingContext2D,
@@ -101,23 +106,13 @@ export function drawTerranFighterHull(
   hostile: boolean,
   alpha: number = 0.72,
 ): void {
-  ctx.strokeStyle = colorToCSS(color, alpha);
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  if (hostile) {
-    ctx.moveTo(-r * 0.18, -r * 0.12);
-    ctx.lineTo(-r * 1.0, -r * 0.92);
-    ctx.lineTo(-r * 0.58, -r * 0.30);
-    ctx.moveTo(-r * 0.18, r * 0.12);
-    ctx.lineTo(-r * 1.0, r * 0.92);
-    ctx.lineTo(-r * 0.58, r * 0.30);
-  }
-  ctx.moveTo(r * 1.2, 0);
-  ctx.lineTo(-r * 0.6, -r * 0.6);
-  ctx.lineTo(-r * 0.3, 0);
-  ctx.lineTo(-r * 0.6, r * 0.6);
-  ctx.closePath();
-  ctx.stroke();
+  const def = gameplayFleetDesign(hostile ? Team.Player2 : Team.Player1, 'fighter');
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  drawProceduralShip(ctx, fighterPreviewCamera, def, {
+    position: fighterPreviewOrigin, rotation: 0, scale: r * 1.4 / shipDesignRadius(def), color,
+  });
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -750,27 +745,7 @@ export class FighterShip extends Entity {
     const coreColor = teamColor(this.team);
     this.drawMotionTrail(ctx, camera, coreColor);
 
-    // Damage flicker: near-death fighters flicker their outline and twist slightly
-    const damageFrac = 1 - this.healthFraction;
     const coreTime = performance.now() * 0.001 + this.orbitPhase;
-    let outlineAlpha = 0.72;
-    if (damageFrac > 0.55) {
-      // High-frequency flicker when critically damaged
-      const flicker = 0.5 + 0.5 * Math.sin(coreTime * (12 + this.id % 7));
-      outlineAlpha = 0.25 + flicker * 0.55 * (1 - (damageFrac - 0.55) / 0.45);
-    }
-    // Small random angle twist when near death (uses id+time for per-ship variation)
-    const twistOffset = damageFrac > 0.70
-      ? Math.sin(coreTime * 8.3 + this.id * 0.41) * 0.18 * ((damageFrac - 0.70) / 0.30)
-      : 0;
-
-    ctx.save();
-    ctx.translate(screen.x, screen.y);
-    ctx.rotate(this.angle + twistOffset);
-
-    // The shared renderer owns its world transform, so draw after restoring this one.
-
-    ctx.restore();
     this.drawFleetHull(ctx, camera);
 
     const groupColor = GROUP_COLORS[this.group];

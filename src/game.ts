@@ -2073,7 +2073,7 @@ export class Game {
           }
           // Sync health/battery regardless of position correction.
           const localDesign = sd.design === undefined ? fleetDesign(sd.team, 'hero') : sd.design;
-          if (localShip.design?.seed !== localDesign?.seed || (sd.design !== undefined && JSON.stringify(localShip.design) !== JSON.stringify(localDesign))) localShip.setDesign(localDesign);
+          if (localShip.design !== localDesign && (sd.design === undefined || JSON.stringify(localShip.design) !== JSON.stringify(localDesign))) localShip.setDesign(localDesign);
           localShip.maxHealth = sd.maxHealth;
           localShip.health = sd.health;
           localShip.alive = sd.alive;
@@ -2097,7 +2097,7 @@ export class Game {
       ship.velocity.y = sd.vy;
       ship.angle = sd.angle;
       const remoteDesign = sd.design === undefined ? fleetDesign(sd.team, 'hero') : sd.design;
-      if (ship.design?.seed !== remoteDesign?.seed || (sd.design !== undefined && JSON.stringify(ship.design) !== JSON.stringify(remoteDesign))) ship.setDesign(remoteDesign);
+      if (ship.design !== remoteDesign && (sd.design === undefined || JSON.stringify(ship.design) !== JSON.stringify(remoteDesign))) ship.setDesign(remoteDesign);
       ship.maxHealth = sd.maxHealth;
       ship.health = sd.health;
       ship.alive = sd.alive;
@@ -2185,7 +2185,8 @@ export class Game {
         f.velocity.x = sf.vx;
         f.velocity.y = sf.vy;
         f.angle = sf.angle;
-        f.fleetDesignOverride = sf.design ?? fleetDesign(sf.team, sf.entityType === EntityType.Bomber ? 'bomber' : 'fighter');
+        const fighterDesign = sf.design ?? fleetDesign(sf.team, sf.entityType === EntityType.Bomber ? 'bomber' : 'fighter');
+        if (!sf.design || JSON.stringify(f.fleetDesignOverride) !== JSON.stringify(fighterDesign)) f.fleetDesignOverride = fighterDesign;
         if (sf.maxHealth !== undefined) f.maxHealth = sf.maxHealth;
         if (sf.health !== undefined) f.health = sf.health;
         f.hullDamage?.applySnapshot(sf.hull, f);

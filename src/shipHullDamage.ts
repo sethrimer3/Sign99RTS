@@ -110,7 +110,11 @@ export class ShipHullDamage {
   applySnapshot(snapshot: HullSnapshot | undefined, body: HullBody, emit = true): void {
     const geo = this.ensure();
     if (!geo) return;
-    const next = (snapshot?.removed ?? []).filter((i, at, all) => Number.isInteger(i) && i >= 0 && i < geo.polyCount && all.indexOf(i) === at).slice(0, geo.polyCount);
+    const seen = new Set<number>();
+    const next = (snapshot?.removed ?? []).slice(0, geo.polyCount).filter(i => {
+      if (!Number.isInteger(i) || i < 0 || i >= geo.polyCount || seen.has(i)) return false;
+      seen.add(i); return true;
+    });
     this.observedHealth = body.maxHealth > 0 ? body.health / body.maxHealth : 0;
     if (next.length === this.order.length && next.every((v, i) => v === this.order[i])) return;
     const added = next.filter(i => !this.gone.has(i));
