@@ -138,6 +138,9 @@ export interface ShipPolygon {
   index: number;
   /** 0 = spine/core/nose, 1 = outermost tip. Drives the shed order. */
   peripheral: number;
+  /** >0 = detaches as one unit with its group (a whole wing element, a fin, a bulb
+   *  chain). 0 = sheds individually. Gives "that ship lost a wing" over confetti. */
+  group: number;
   cx: number;
   cy: number;
 }
@@ -212,6 +215,9 @@ class Emitter {
     private asym: number,
   ) {}
 
+  /** Components emitted while this is non-zero detach together. */
+  group = 0;
+
   /** Per-feature quota so the cap is shared out rather than won first-come-first-served. */
   private limit = MAX_POLYGONS;
   setQuota(n: number): void { this.limit = Math.min(MAX_POLYGONS, this.polys.length + Math.max(0, n)); }
@@ -233,17 +239,17 @@ class Emitter {
     if (this.full) return;
     const shade = this.shadeFor(pts, target);
     const feature = polyFeature(pts);
-    this.polys.push({ pts, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, cx: centroidX(pts), cy: centroidY(pts) });
+    this.polys.push({ pts, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(pts), cy: centroidY(pts) });
     const m = new Array<number>(pts.length);
     const k = 1 - this.asym;
     for (let i = 0; i < pts.length; i += 2) { m[i] = pts[i]; m[i + 1] = -pts[i + 1] * k; }
-    this.polys.push({ pts: m, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, cx: centroidX(m), cy: centroidY(m) });
+    this.polys.push({ pts: m, depth, shade, accent, feature, index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(m), cy: centroidY(m) });
   }
 
   /** Emit a polygon that already straddles the symmetry axis. */
   emitSym(pts: number[], depth: number, target: number, accent = false): void {
     if (this.polys.length + 1 > this.limit) return;
-    this.polys.push({ pts, depth, shade: this.shadeFor(pts, target), accent, feature: polyFeature(pts), index: this.polys.length, peripheral: 0, cx: centroidX(pts), cy: centroidY(pts) });
+    this.polys.push({ pts, depth, shade: this.shadeFor(pts, target), accent, feature: polyFeature(pts), index: this.polys.length, peripheral: 0, group: this.group, cx: centroidX(pts), cy: centroidY(pts) });
   }
 }
 
@@ -470,6 +476,7 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   const perWing = wingUnits > 0 ? Math.floor(wingAlloc / wingUnits) : 0;
   const wingLevels = affordableDepth(wantWingDetail, perWing);
 
+  em.group = 0;
   em.setQuota(gasketCost(hullDepth));
   gasket(em, N, W, T, 0, hullDepth, bias, edges, 0.955);
 
@@ -497,6 +504,7 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   // group merge into one feathered surface (no notches between them); separate groups
   // stay clearly apart and shrink toward the nose, so a second pair reads as a canard.
   em.setQuota(wingAlloc);
+  let groupId = 0;
   let groupU = p.wingStation;
   for (let grp = 0; grp < wingPairs; grp++) {
     if (em.full || groupU < 0.02) break;
@@ -519,7 +527,9 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
       const rootA = lerpP(r0, inside, 0.045);
       const rootB0 = lerpP(r1, inside, 0.045);
       const rootB: P = { x: rootB0.x - sw * 0.22, y: rootB0.y };
+      em.group = ++groupId;
       emitWing(em, rootA, rootB, tipF, bias, wingLevels, wingDepth, p, anchors, e === wingElements - 1);
+      em.group = 0;
     }
     groupU -= chordG * wingElements + p.wingGroupGap;
   }
@@ -536,14 +546,19 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     const mid = lerpP(r0, r1, 0.5);
     // Base sits on the trailing edge, apex rakes aft: a tapered fin, not a tooth.
     const apex: P = { x: mid.x - fl, y: mid.y + fl * 0.18 };
+    em.group = ++groupId;
     em.emit(triPts(r0, r1, apex), wingDepth + 2, 0.6 + f * 0.22);
+    em.group = 0;
   }
 
   // Both chains start at the wingtip, so the largest bulbs sit at the shoulder and
   // taper forward and aft — the cardioid-neck reading.
   em.setQuota(MAX_POLYGONS - em.count);
+  em.group = ++groupId;
   budChain(em, W, N, inside, budCount, p.budScale, budDepthBase, bias, p, anchors);
+  em.group = ++groupId;
   budChain(em, W, T, inside, budCount, p.budScale * 0.85, budDepthBase, bias, p, anchors);
+  em.group = 0;
 
   // Silhouette = convex hull of everything emitted, so the rim traces wings and buds too.
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -574,21 +589,44 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   const bands = Math.round(Math.max(2, Math.min(12, p.shadeBands)));
   const buckets = bakeBuckets(em.polys, bands);
 
-  // Peripherality: far from the spine, deep in the recursion and small = sheds first.
-  // Accents (nose cap, core) are pinned to 0 so the ship keeps a recognisable core.
+  // Peripherality is weighted hard toward outboard distance and SIZE, so the big outer
+  // panels go early and damage is legible at a glance; small interior gasket leaves no
+  // longer soak up the whole shed budget. Accents stay pinned to 0.
   const halfW = Math.max(1, Math.max(Math.abs(minY), Math.abs(maxY)));
   let maxFeat = 1;
   for (const poly of em.polys) if (poly.feature > maxFeat) maxFeat = poly.feature;
   const maxD = Math.max(1, hullDepth + 12);
   for (const poly of em.polys) {
     poly.peripheral = poly.accent ? 0 : Math.min(1,
-      0.45 * Math.min(1, Math.abs(poly.cy) / halfW)
-      + 0.35 * Math.min(1, poly.depth / maxD)
-      + 0.20 * (1 - poly.feature / maxFeat));
+      0.58 * Math.min(1, Math.abs(poly.cy) / halfW)
+      + 0.27 * (poly.feature / maxFeat)
+      + 0.15 * Math.min(1, poly.depth / maxD));
   }
-  // Seeded jitter keeps the order deterministic but stops it looking mechanical.
-  const shedOrder = em.polys.map((poly) => poly.index)
-    .sort((a, b) => (em.polys[b].peripheral + (rng() - 0.5) * 0.22) - (em.polys[a].peripheral + (rng() - 0.5) * 0.22));
+
+  // Build shed entries: an ungrouped polygon sheds alone, a group (wing element, fin,
+  // bulb chain) sheds as one unit so the ship visibly loses whole structures.
+  const jitter = () => (rng() - 0.5) * 0.18;
+  const groups = new Map<number, number[]>();
+  const entries: { score: number; members: number[] }[] = [];
+  for (const poly of em.polys) {
+    if (poly.group === 0) { entries.push({ score: poly.peripheral + jitter(), members: [poly.index] }); continue; }
+    let members = groups.get(poly.group);
+    if (!members) { members = []; groups.set(poly.group, members); }
+    members.push(poly.index);
+  }
+  for (const members of groups.values()) {
+    let peak = 0, sum = 0;
+    for (const idx of members) {
+      const v = em.polys[idx].peripheral;
+      if (v > peak) peak = v;
+      sum += v;
+    }
+    // Bias groups ahead of loose polygons of the same score so whole structures go first.
+    entries.push({ score: peak * 0.6 + (sum / members.length) * 0.4 + 0.12 + jitter(), members });
+  }
+  entries.sort((a, b) => b.score - a.score);
+  const shedOrder: number[] = [];
+  for (const entry of entries) for (const idx of entry.members) shedOrder.push(idx);
 
   return {
     polygons: em.polys,

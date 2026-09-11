@@ -11,6 +11,26 @@ import type { ProceduralShipDefinition } from './proceduralShips.js';
 
 /** Hard global cap; oldest is evicted first so a large battle cannot explode. */
 const POOL_SIZE = 320;
+/** Wreckage drifts for this long before fading, shortened as the field fills up. */
+const LIFE_MIN = 15;
+const LIFE_MAX = 30;
+/** Seconds of fade at the end of a piece's life. */
+const FADE_TIME = 2.5;
+/** Vacuum drift: a touch of damping reads better than none. */
+const DRIFT_DAMPING = 0.06;
+/** Collision work is staggered across this many frames. */
+const COLLIDE_PHASES = 4;
+
+/** Minimal shape a debris collider must expose — deliberately structural so this module
+ *  does not depend on Entity and cannot be tempted to mutate gameplay state. */
+export interface DebrisCollider {
+  position: { x: number; y: number };
+  radius: number;
+}
+/** Broadphase hook. The caller fills `out` with nearby ships/buildings and returns it. */
+export type DebrisColliderQuery = (x: number, y: number, radius: number, out: DebrisCollider[]) => DebrisCollider[];
+/** Optional hook letting drifting wreckage stir the space-dust field. */
+export type DebrisFluidSink = (x: number, y: number, vx: number, vy: number, color: Color) => void;
 
 interface DebrisPiece {
   active: boolean;
@@ -23,6 +43,8 @@ interface DebrisPiece {
   scale: number;
   life: number;
   maxLife: number;
+  radius: number;
+  phase: number;
   shade: number;
   accent: boolean;
   color: Color | null;
@@ -33,7 +55,7 @@ interface DebrisPiece {
 function createPiece(): DebrisPiece {
   return {
     active: false, def: null, index: 0, x: 0, y: 0, vx: 0, vy: 0,
-    angle: 0, spin: 0, scale: 1, life: 0, maxLife: 1, shade: 0.5,
+    angle: 0, spin: 0, scale: 1, life: 0, maxLife: 1, radius: 1, phase: 0, shade: 0.5,
     accent: false, color: null, stamp: 0,
   };
 }
@@ -45,6 +67,17 @@ export class ShipDebrisSystem {
   private _particleScale = 1;
   private _performanceScale = 1;
   private stamp = 0;
+  private frame = 0;
+  private colliderQuery: DebrisColliderQuery | null = null;
+  private fluidSink: DebrisFluidSink | null = null;
+  private scratch: DebrisCollider[] = [];
+
+  /** Reuse the game's existing entity broadphase rather than inventing one. */
+  setColliderQuery(query: DebrisColliderQuery | null): void { this.colliderQuery = query; }
+  setFluidSink(sink: DebrisFluidSink | null): void { this.fluidSink = sink; }
+
+  /** Collision checks performed on the last update — for perf reporting. */
+  collisionChecks = 0;
 
   activeCount = 0;
   drawnCount = 0;
@@ -103,6 +136,10 @@ export class ShipDebrisSystem {
       const ol = Math.hypot(ox, oy) || 1;
       ox /= ol; oy /= ol;
       const speed = 26 + rng() * 52;
+      // Field pressure: the fuller the pool, the shorter new wreckage lasts, so a big
+      // battle ages out gracefully instead of slamming into the hard cap.
+      const fill = this.activeIndices.length / POOL_SIZE;
+      const lifeScale = 1 - 0.72 * fill * fill;
       const piece = this.acquire();
       piece.def = def;
       piece.index = poly.index;
@@ -112,15 +149,37 @@ export class ShipDebrisSystem {
       piece.angle = rotation;
       piece.spin = (rng() - 0.5) * 5.5;
       piece.scale = scale;
-      piece.maxLife = 0.85 + rng() * 0.75;
+      piece.maxLife = (LIFE_MIN + rng() * (LIFE_MAX - LIFE_MIN)) * lifeScale;
       piece.life = piece.maxLife;
+      piece.radius = Math.max(0.5, poly.feature * scale);
+      piece.phase = (this.frame + i) % COLLIDE_PHASES;
       piece.shade = poly.shade;
       piece.accent = poly.accent;
       piece.color = color;
     }
   }
 
+  /** Impart impulse to wreckage near a weapon impact. Called from the existing hit path. */
+  pushFrom(x: number, y: number, radius: number, strength: number): void {
+    if (this.activeIndices.length === 0) return;
+    const r2 = radius * radius;
+    for (let i = 0; i < this.activeIndices.length; i++) {
+      const piece = this.pool[this.activeIndices[i]];
+      const dx = piece.x - x, dy = piece.y - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > r2 || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2);
+      const falloff = 1 - d / radius;
+      const push = strength * falloff / Math.max(0.6, piece.radius * 0.35);
+      piece.vx += (dx / d) * push;
+      piece.vy += (dy / d) * push;
+      piece.spin += (Math.random() - 0.5) * falloff * 3;
+    }
+  }
+
   update(dt: number): void {
+    this.frame++;
+    this.collisionChecks = 0;
     for (let i = this.activeIndices.length - 1; i >= 0; i--) {
       const poolIndex = this.activeIndices[i];
       const piece = this.pool[poolIndex];
@@ -134,9 +193,47 @@ export class ShipDebrisSystem {
       }
       piece.x += piece.vx * dt;
       piece.y += piece.vy * dt;
-      piece.vx *= 1 - 1.15 * dt;
-      piece.vy *= 1 - 1.15 * dt;
+      const damp = 1 - DRIFT_DAMPING * dt;
+      piece.vx *= damp;
+      piece.vy *= damp;
       piece.angle += piece.spin * dt;
+      piece.spin *= 1 - 0.25 * dt;
+
+      // Bounce off ships and buildings. Staggered across COLLIDE_PHASES frames so the
+      // broadphase cost is a quarter of the naive per-piece-per-frame figure. Debris is
+      // never tested against debris — that is the quadratic case and it is not wanted.
+      if (this.colliderQuery && (this.frame % COLLIDE_PHASES) === piece.phase) {
+        const near = this.colliderQuery(piece.x, piece.y, piece.radius, this.scratch);
+        this.collisionChecks += near.length;
+        for (let c = 0; c < near.length; c++) {
+          const ent = near[c];
+          const dx = piece.x - ent.position.x;
+          const dy = piece.y - ent.position.y;
+          const minD = ent.radius + piece.radius;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= minD * minD || d2 < 1e-6) continue;
+          const d = Math.sqrt(d2);
+          const nx = dx / d, ny = dy / d;
+          // Push out and reflect. Only the debris piece is modified — the entity is
+          // read-only here, so nothing gameplay-visible changes.
+          piece.x = ent.position.x + nx * minD;
+          piece.y = ent.position.y + ny * minD;
+          const along = piece.vx * nx + piece.vy * ny;
+          if (along < 0) {
+            piece.vx -= 1.55 * along * nx;
+            piece.vy -= 1.55 * along * ny;
+            piece.spin += (piece.vx * ny - piece.vy * nx) * 0.012;
+          }
+          break;
+        }
+      }
+
+      // Stir the space dust in the wreckage's wake — cheap, and only in this direction:
+      // having every piece SAMPLE the fluid field per frame would be the expensive one.
+      if (this.fluidSink && piece.color && (this.frame % 8) === (piece.phase * 2)) {
+        const sp = piece.vx * piece.vx + piece.vy * piece.vy;
+        if (sp > 90) this.fluidSink(piece.x, piece.y, piece.vx * 0.28, piece.vy * 0.28, piece.color);
+      }
     }
     this.activeCount = this.activeIndices.length;
   }
@@ -154,7 +251,7 @@ export class ShipDebrisSystem {
       const band = Math.max(0, Math.min(geo.shadeBands - 1, Math.round(piece.shade * (geo.shadeBands - 1))));
       const drawScale = camera.zoom * piece.scale;
       ctx.save();
-      ctx.globalAlpha = Math.min(1, piece.life / piece.maxLife);
+      ctx.globalAlpha = Math.min(1, piece.life / Math.min(FADE_TIME, piece.maxLife));
       ctx.translate(screen.x, screen.y);
       ctx.rotate(piece.angle);
       ctx.scale(drawScale, drawScale);

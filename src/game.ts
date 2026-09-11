@@ -167,6 +167,7 @@ export class Game {
   private fighterExhaustAccum: number = 0;
   private activeGuidedMissile: GuidedMissile | null = null;
   private spaceFluid: SpaceFluid;
+  private debrisFluidWired = false;
   private glowLayer: GlowLayer;
   private crystalNebula: CrystalNebula;
   private distantSuns: DistantSuns;
@@ -458,6 +459,20 @@ export class Game {
     // Wire adaptive scale into particle system
     this.state.particles.setAdaptiveScale(renderBudget.renderLoadScale);
     this.state.shipDebris.setAdaptiveScale(renderBudget.renderLoadScale);
+    if (!this.debrisFluidWired) {
+      this.debrisFluidWired = true;
+      // Drifting wreckage stirs the space dust in its wake. One-directional on purpose:
+      // debris emits impulses, it never samples the field.
+      this.state.shipDebris.setFluidSink((x, y, vx, vy, color) => {
+        this.spaceFluid.addForce({
+          x, y, vx, vy,
+          r: Math.min(255, color.r * color.intensity),
+          g: Math.min(255, color.g * color.intensity),
+          b: Math.min(255, color.b * color.intensity),
+          strength: 0.5,
+        });
+      });
+    }
 
     requestAnimationFrame((t) => this.loop(t));
   }

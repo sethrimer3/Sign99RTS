@@ -10,7 +10,7 @@ import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, Synon
 import { isSynonymousDriftMine } from './synonymousMine.js';
 import { FighterShip, SwarmShip, syncFighterResearchUpgrades } from './fighter.js';
 import { ParticleSystem } from './particles.js';
-import { ShipDebrisSystem } from './shipDebris.js';
+import { ShipDebrisSystem, type DebrisCollider } from './shipDebris.js';
 import { RingEffectSystem } from './ringeffects.js';
 import { Camera } from './camera.js';
 import { Audio } from './audio.js';
@@ -199,6 +199,9 @@ export class GameState {
   particles: ParticleSystem;
   /** Shed procedural-hull components flying away. Visual only. */
   shipDebris: ShipDebrisSystem;
+  /** Scratch buffers so the debris broadphase allocates nothing per frame. */
+  private debrisBroadphase: Entity[] = [];
+  private debrisProbe: Vec2 = new Vec2(0, 0);
   explosionGlows: ExplosionGlow[] = [];
   /** Ring/blackout pulse effects (PR9). */
   ringEffects: RingEffectSystem = new RingEffectSystem();
@@ -324,6 +327,20 @@ export class GameState {
     this.playerShips.set(0, new PlayerShip(playerStart, Team.Player));
     this.particles = new ParticleSystem();
     this.shipDebris = new ShipDebrisSystem();
+    // Reuse the existing entity broadphase. Conduits are grid cells on `this.grid`, not
+    // Entity instances, so they are never returned here and are excluded by construction.
+    this.shipDebris.setColliderQuery((x, y, r, out) => {
+      this.debrisBroadphase.length = 0;
+      this.debrisProbe.x = x;
+      this.debrisProbe.y = y;
+      this.spatialIndex.queryCircle(this.debrisProbe, r, this.debrisBroadphase);
+      out.length = 0;
+      for (let i = 0; i < this.debrisBroadphase.length; i++) {
+        const e = this.debrisBroadphase[i];
+        if (e instanceof PlayerShip || e instanceof FighterShip || e instanceof BuildingBase) out.push(e);
+      }
+      return out;
+    });
     this.factionByTeam.set(Team.Player, 'terran');
     this.factionByTeam.set(Team.Enemy, 'terran');
   }
@@ -1597,6 +1614,9 @@ export class GameState {
    */
   emitShipHitSpray(target: Entity, hitSource: Vec2, intensity: number = 1): void {
     if (isLegacyGraphics()) return;
+    // Weapon impacts shove nearby wreckage around. Reuses this existing hit path rather
+    // than adding a second one; purely a velocity change on cosmetic debris.
+    this.shipDebris.pushFrom(hitSource.x, hitSource.y, 90 + 40 * intensity, 55 * intensity);
     if (!(target instanceof PlayerShip || target instanceof FighterShip)) return;
     this.particles.emitShipDamageSpray(target.position, target.radius, hitSource, intensity);
   }
