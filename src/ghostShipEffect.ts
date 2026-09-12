@@ -27,15 +27,18 @@ const HOLD_MIN = 0.35;
 /** Seconds of faction -> black -> transparent dissolution at the tail. */
 const DISSOLVE_TIME = 2.4;
 /** Alpha ease-in so fragments do not pop on. */
-const FADE_IN_TIME = 0.14;
+const FADE_IN_TIME = 0.06;
 /** Head must travel this far (world units, scaled by ship radius / 22) between spine nodes. */
-const EMIT_SPACING_BASE = 13;
-/** Spacing grows past this speed so a Shift-boosting ghost does not flood the pool. */
-const MAX_NODES_PER_SECOND = 28;
+const EMIT_SPACING_BASE = 20;
+/** Spacing grows past this rate so a Shift-boosting ghost does not flood the pool; clusters
+ *  also lose recursion depth with speed so the spine stays continuous rather than sparse. */
+const MAX_NODES_PER_SECOND = 32;
+/** Head speed (world units/s) at which clusters drop to their shallowest recursion. */
+const SPEED_FOR_MIN_DEPTH = 500;
 /** Emission is bounded per update so a hitch cannot dump the whole ring in one frame. */
 const MAX_NODES_PER_UPDATE = 6;
 /** Newest fragments still in their bright phase get a glow halo, capped for budget. */
-const MAX_GLOW_FRAGMENTS = 28;
+const MAX_GLOW_FRAGMENTS = 18;
 
 const WHITE: Color = { r: 255, g: 255, b: 255, intensity: 1 };
 
@@ -77,8 +80,6 @@ export class GhostShipEffect {
   private time = 0;
   private headX = 0;
   private headY = 0;
-  private prevHeadX = 0;
-  private prevHeadY = 0;
   private headAngle = 0;
   private curlPhase = 0;
   private distanceSinceEmit = 0;
@@ -114,10 +115,10 @@ export class GhostShipEffect {
     this.phaseC = rng() * Math.PI * 2;
     this.curlPhase = rng() * Math.PI * 2;
     this.headAngle = facing;
-    this.headX = this.prevHeadX = x;
-    this.headY = this.prevHeadY = y;
+    this.headX = x;
+    this.headY = y;
     // Seed the structure immediately so death does not show an empty frame.
-    this.emitNode(x, y, facing);
+    this.emitNode(x, y, facing, ghostRecursionLevels(this.densityScale));
   }
 
   /** Drop all visual state. Used on respawn and runtime reset. */
@@ -144,17 +145,17 @@ export class GhostShipEffect {
     // Low-frequency modulation: amplitude and angular rate each drift with a pair of
     // incommensurate sinusoids, so curvature wanes toward straight runs and waxes into loops.
     const ampWave = 0.5 + 0.5 * Math.sin(t * 0.37 + this.phaseA) * Math.cos(t * 0.19 + this.phaseB);
-    const amplitude = this.radius * (0.12 + 1.25 * ampWave * ampWave);
-    const rate = 1.1 + 2.6 * (0.5 + 0.5 * Math.sin(t * 0.29 + this.phaseC));
+    const amplitude = this.radius * (0.12 + 2.8 * ampWave * ampWave);
+    const rate = 1.4 + 4.2 * (0.5 + 0.5 * Math.sin(t * 0.29 + this.phaseC));
     this.curlPhase += rate * dt;
 
-    this.prevHeadX = this.headX;
-    this.prevHeadY = this.headY;
+    const prevX = this.headX;
+    const prevY = this.headY;
     this.headX = anchorX + Math.cos(this.curlPhase) * amplitude;
     this.headY = anchorY + Math.sin(this.curlPhase) * amplitude;
 
-    const dx = this.headX - this.prevHeadX;
-    const dy = this.headY - this.prevHeadY;
+    const dx = this.headX - prevX;
+    const dy = this.headY - prevY;
     const step = Math.hypot(dx, dy);
     if (step > 1e-4) this.headAngle = Math.atan2(dy, dx);
     else this.headAngle = anchorFacing;
@@ -165,6 +166,7 @@ export class GhostShipEffect {
     const density = this.densityScale;
     let spacing = EMIT_SPACING_BASE * (this.radius / 22) / Math.max(0.35, density);
     spacing = Math.max(spacing, speed / MAX_NODES_PER_SECOND);
+    const levels = ghostRecursionLevels(density * (1 - 0.75 * Math.min(1, speed / SPEED_FOR_MIN_DEPTH)));
 
     this.distanceSinceEmit += step;
     let emitted = 0;
@@ -172,7 +174,7 @@ export class GhostShipEffect {
       this.distanceSinceEmit -= spacing;
       // Place the node back along the step so multiple nodes per frame stay evenly spaced.
       const back = step > 1e-4 ? this.distanceSinceEmit / step : 0;
-      this.emitNode(this.headX - dx * back, this.headY - dy * back, this.headAngle);
+      this.emitNode(this.headX - dx * back, this.headY - dy * back, this.headAngle, levels);
       emitted++;
     }
     if (emitted >= MAX_NODES_PER_UPDATE) this.distanceSinceEmit = 0;
@@ -190,40 +192,35 @@ export class GhostShipEffect {
 
   /** Grow one fractal cluster at a spine node. Every parameter derives from the ship seed
    *  and the monotonic node index, so a replay of the same path grows identical geometry. */
-  private emitNode(x: number, y: number, tangent: number): void {
+  private emitNode(x: number, y: number, tangent: number, levels: number): void {
     const index = this.nodeIndex++;
     const rng = seededRandom((this.seed + Math.imul(index + 1, 0x9e3779b1)) >>> 0);
-    const levels = ghostRecursionLevels(this.densityScale);
     // Pool pressure shortens the hold phase of new fragments so a fast ghost ages out
     // gracefully instead of slamming into the ring cap (same idea as ShipDebrisSystem).
     const fill = this.activeCount / GHOST_FRAGMENT_CAP;
     const hold = HOLD_MIN + (HOLD_MAX - HOLD_MIN) * (1 - 0.85 * fill * fill);
     const rootSize = this.radius * (0.42 + rng() * 0.22);
     const rootAngle = tangent + (rng() - 0.5) * 0.9;
-    this.bud(x, y, rootAngle, rootSize, levels, hold, rng);
+    this.bud(x, y, rootAngle, rootSize, levels, hold, true, rng);
   }
 
-  /** Recursive Julia-like budding: a parent triangle sprouts smaller rotated children from
-   *  its base vertices, occasionally a third from the apex, each generation shrinking. */
-  private bud(x: number, y: number, angle: number, size: number, levels: number, hold: number, rng: () => number): void {
+  /** Recursive Julia-like budding: the root sprouts a child from each base vertex; deeper
+   *  generations bud from one side (occasionally both), twisting further each step so the
+   *  cluster curls like a bulb chain. Roughly 3 / 6 / 9 triangles at 1 / 2 / 3 levels. */
+  private bud(x: number, y: number, angle: number, size: number, levels: number, hold: number, root: boolean, rng: () => number): void {
     this.spawnTriangle(x, y, angle, size, hold, rng);
     if (levels <= 0) return;
     const twist = 0.55 + rng() * 0.75;
-    const falloff = 0.5 + rng() * 0.16;
-    const childSize = size * falloff;
-    const branch = rng() < 0.3;
+    const childSize = size * (0.5 + rng() * 0.16);
+    const preferred = rng() < 0.5 ? -1 : 1;
+    const both = root || rng() < 0.35;
     for (let side = -1; side <= 1; side += 2) {
+      if (!both && side !== preferred) continue;
       const va = angle + side * 2.25;
       const vx = x + Math.cos(va) * size * 0.72;
       const vy = y + Math.sin(va) * size * 0.72;
       const ca = angle + side * twist + (rng() - 0.5) * 0.35;
-      this.bud(vx + Math.cos(ca) * childSize * 0.45, vy + Math.sin(ca) * childSize * 0.45, ca, childSize, levels - 1, hold, rng);
-    }
-    if (branch) {
-      const ca = angle + (rng() - 0.5) * 0.5;
-      const ax = x + Math.cos(angle) * size;
-      const ay = y + Math.sin(angle) * size;
-      this.bud(ax + Math.cos(ca) * childSize * 0.5, ay + Math.sin(ca) * childSize * 0.5, ca, childSize * 0.8, levels - 1, hold, rng);
+      this.bud(vx + Math.cos(ca) * childSize * 0.45, vy + Math.sin(ca) * childSize * 0.45, ca, childSize, levels - 1, hold, false, rng);
     }
   }
 
@@ -297,10 +294,6 @@ export class GhostShipEffect {
   drawGlow(glow: GlowLayer, camera: Camera): void {
     if (!this.active || this.written === 0 || !glow.enabled) return;
     const p = this.scratch;
-    p.x = this.headX; p.y = this.headY;
-    glow.circleWorld(camera, p, this.radius * 1.4, WHITE, 0.16);
-    glow.circleWorld(camera, p, this.radius * 3.2, this.color, 0.07);
-
     // Walk backwards from the newest slot; fragments are written in age order.
     let halos = 0;
     for (let n = 0; n < this.written && halos < MAX_GLOW_FRAGMENTS; n++) {
@@ -310,8 +303,14 @@ export class GhostShipEffect {
       if (heat <= 0) break;
       p.x = (this.ax[i] + this.bx[i] + this.cx[i]) / 3;
       p.y = (this.ay[i] + this.by[i] + this.cy[i]) / 3;
+      if (n === 0) {
+        // Head bloom sits on the newest cluster rather than the raw anchor so it never
+        // floats ahead of the geometry at speed.
+        glow.circleWorld(camera, p, this.radius * 0.9, WHITE, 0.14);
+        glow.circleWorld(camera, p, this.radius * 1.8, this.color, 0.05);
+      }
       if (!camera.isOnScreen(p, this.size[i] * 3)) continue;
-      glow.circleWorld(camera, p, this.size[i] * 1.7, WHITE, 0.3 * heat * smooth01(age / FADE_IN_TIME));
+      glow.circleWorld(camera, p, this.size[i] * 1.25, WHITE, 0.12 * heat * smooth01(age / FADE_IN_TIME));
       halos++;
     }
   }
