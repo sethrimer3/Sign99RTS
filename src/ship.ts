@@ -38,6 +38,12 @@ const SHIP_UPGRADE_STEP = 0.25;
 export const SHIP_HP_MAX_LEVEL = 4;
 export const SHIP_SPEED_ENERGY_MAX_LEVEL = 4;
 export const SHIP_SHIELD_MAX_LEVEL = 2;
+export const SHIP_REPAIR_MAX_LEVEL = 3;
+/**
+ * Component regrowth rate per repair level, as a multiple of the passive HP regen
+ * rate: L1 0.5x, L2 1.0x, L3 1.5x. Level 0 restores no structure at all.
+ */
+const SHIP_REPAIR_RATE_PER_LEVEL = 0.5;
 const PASSIVE_HEALTH_REGEN_DELAY = 5;
 const PASSIVE_HEALTH_REGEN_RATE = 1;
 const TRAIL_LIFETIME = 0.42;
@@ -117,6 +123,7 @@ export class PlayerShip extends Entity {
   hpLevel = 0;
   speedEnergyLevel = 0;
   shieldLevel = 0;
+  repairLevel = 0;
   private readonly baseMaxHealth: number;
   private readonly baseMaxSpeed: number;
   private readonly baseThrustPower: number;
@@ -242,6 +249,7 @@ export class PlayerShip extends Entity {
     // Dev override from the Ship Lab, if one has been set. No-op when the key is absent.
     this.design = gameplayFleetDesign(team, 'hero');
     this.hullDamage = new ShipHullDamage(() => this.design);
+    this.hullDamage.attach(this);
   }
 
   update(dt: number): void {
@@ -502,7 +510,7 @@ export class PlayerShip extends Entity {
       this.applySynonymousResearchUpgrade(item);
       return;
     }
-    const match = /^(shipHp|shipSpeedEnergy|shipShield)(\d)$/.exec(item);
+    const match = /^(shipHp|shipSpeedEnergy|shipShield|shipRepair)(\d)$/.exec(item);
     if (match) {
       const [, kind, levelStr] = match;
       const level = parseInt(levelStr, 10);
@@ -512,6 +520,8 @@ export class PlayerShip extends Entity {
       } else if (kind === 'shipSpeedEnergy') {
         this.speedEnergyLevel = Math.min(SHIP_SPEED_ENERGY_MAX_LEVEL, Math.max(this.speedEnergyLevel, level));
         this.recomputeSpeedEnergyStats();
+      } else if (kind === 'shipRepair') {
+        this.repairLevel = Math.min(SHIP_REPAIR_MAX_LEVEL, Math.max(this.repairLevel, level));
       } else if (kind === 'shipShield') {
         this.shieldUnlocked = true;
         this.shieldLevel = Math.min(SHIP_SHIELD_MAX_LEVEL, Math.max(this.shieldLevel, level));
@@ -536,6 +546,7 @@ export class PlayerShip extends Entity {
     this.hpLevel = 0;
     this.speedEnergyLevel = 0;
     this.shieldLevel = 0;
+    this.repairLevel = 0;
     this.shieldUnlocked = false;
     this.dashUnlocked = false;
     this.synonymousPierceMultiplier = 1;
@@ -552,13 +563,14 @@ export class PlayerShip extends Entity {
     this.hpLevel = [...items].filter((item) => /^shipHp\d$/.test(item)).length;
     this.speedEnergyLevel = [...items].filter((item) => /^shipSpeedEnergy\d$/.test(item)).length;
     this.shieldLevel = [...items].filter((item) => /^shipShield\d$/.test(item)).length;
+    this.repairLevel = [...items].filter((item) => /^shipRepair\d$/.test(item)).length;
     this.shieldUnlocked = this.shieldLevel > 0;
     this.synonymousFireSpeedLevel = [...items].filter((item) => /^synonymousFireSpeed\d$/.test(item)).length;
     this.recomputeHpStats();
     this.recomputeSpeedEnergyStats();
     this.recomputeShieldStats();
     for (const item of items) {
-      if (/^(shipHp|shipSpeedEnergy|shipShield|synonymousFireSpeed)\d$/.test(item)) continue;
+      if (/^(shipHp|shipSpeedEnergy|shipShield|shipRepair|synonymousFireSpeed)\d$/.test(item)) continue;
       this.applyResearchUpgrade(item);
     }
     this.health = Math.max(1, Math.min(this.maxHealth, this.maxHealth * healthFraction));
@@ -685,7 +697,11 @@ export class PlayerShip extends Entity {
       const regenMult = fullEnergy ? FULL_ENERGY_HEALTH_REGEN_MULT : 1;
       const amount = PASSIVE_HEALTH_REGEN_RATE * regenMult * dt;
       if (this.hullDamage) {
-        this.hullDamage.repair(this, amount);
+        // Structural regrowth is the researched part; without it HP only recovers
+        // up to the ceiling the surviving hull mass supports.
+        const restoreComponents = this.repairLevel > 0;
+        const rate = restoreComponents ? this.repairLevel * SHIP_REPAIR_RATE_PER_LEVEL : 1;
+        this.hullDamage.repair(this, amount * rate, restoreComponents);
       } else {
         this.health = Math.min(this.maxHealth, this.health + amount);
       }

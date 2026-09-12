@@ -18,7 +18,7 @@ import { Audio } from './audio.js';
 import { GameState } from './gamestate.js';
 import { ShipGroup, TacticalOrder, Team } from './entities.js';
 import { RESEARCH_COST, RESEARCH_MODE, CONDUIT_COST, ACTIVE_RESEARCH_ITEMS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
-import { SHIP_WEAPON_OPTIONS, type ShipWeaponId, SHIP_HP_MAX_LEVEL, SHIP_SPEED_ENERGY_MAX_LEVEL, SHIP_SHIELD_MAX_LEVEL } from './ship.js';
+import { SHIP_WEAPON_OPTIONS, type ShipWeaponId, SHIP_HP_MAX_LEVEL, SHIP_SPEED_ENERGY_MAX_LEVEL, SHIP_SHIELD_MAX_LEVEL, SHIP_REPAIR_MAX_LEVEL } from './ship.js';
 import { worldToCell, cellKey, cellCenter, footprintCenter, footprintOrigin, GRID_CELL_SIZE } from './grid.js';
 import { defsByTier, BuildDef, getBuildDef } from './builddefs.js';
 import { drawDecodedText } from './decodeText.js';
@@ -62,6 +62,9 @@ const RESEARCH_DESCRIPTIONS: Record<string, string> = {
   shipSpeedEnergy4:     'Boosts speed, energy regen, and fire rate by 25% (of base). Level 4 of 4 — maximum, +100% total.',
   shipShield1:          'Unlocks a rechargeable shield equal to 25% of max HP. Regenerates 5s after taking no damage. Level 1 of 2.',
   shipShield2:          'Increases shield capacity to 50% of max HP. Level 2 of 2 — maximum.',
+  shipRepair1:          'Hull components slowly regrow from the core outward while out of combat. Level 1 of 3.',
+  shipRepair2:          'Doubles structural regrowth speed. Level 2 of 3.',
+  shipRepair3:          'Triples structural regrowth speed. Level 3 of 3 — maximum.',
   shipDash:             'Shift tap burns 25% energy to dash forward with a bright trail.',
   synonymousPierce:     'Harmonic tunneling lets shots phase through multiple targets.',
   synonymousSpeed:      'Enhances drone cohesion and overall movement speed.',
@@ -314,6 +317,9 @@ const RESEARCH_LABELS: Record<string, string> = {
   shipSpeedEnergy4: 'Speed +\nEnergy IV',
   shipShield1: 'Shield I',
   shipShield2: 'Shield II',
+  shipRepair1: 'Hull\nRepair I',
+  shipRepair2: 'Hull\nRepair II',
+  shipRepair3: 'Hull\nRepair III',
   shipDash: 'Dash',
   synonymousPierce: 'Harmonic\nTunneling',
   synonymousSpeed: 'Cohesion\nDrive',
@@ -578,9 +584,10 @@ function buildResearchRoot(state: GameState): RadialItem[] {
   const nextHp = firstMissing('shipHp', SHIP_HP_MAX_LEVEL);
   const nextSpeedEnergy = firstMissing('shipSpeedEnergy', SHIP_SPEED_ENERGY_MAX_LEVEL);
   const nextShield = firstMissing('shipShield', SHIP_SHIELD_MAX_LEVEL);
+  const nextRepair = firstMissing('shipRepair', SHIP_REPAIR_MAX_LEVEL);
   return visibleCategories([
     category('Defensive Turrets', ['missileturret', 'exciterturret', 'massdriverturret', 'regenturret', 'advancedRegenTurrets']),
-    category('Main Ship', [nextHp, nextSpeedEnergy, nextShield, 'shipDash']),
+    category('Main Ship', [nextHp, nextSpeedEnergy, nextShield, nextRepair, 'shipDash']),
     category('Fighters', [
       'fighterTargeting', 'fighterWeapon1', 'fighterWeapon2', 'fighterSpeed1', 'fighterSpeed2',
       'fighterHp1', 'fighterHp2', 'fighterYard1', 'fighterYard2', 'bomberyard', 'swarmyard',
@@ -1407,6 +1414,7 @@ class ShipMenu {
             [`HP ${ship.hpLevel}/${SHIP_HP_MAX_LEVEL}`, 'shipHp1'],
             [`Speed + Energy + Fire Speed ${ship.speedEnergyLevel}/${SHIP_SPEED_ENERGY_MAX_LEVEL}`, 'shipSpeedEnergy1'],
             [`Shield Aura ${ship.shieldLevel}/${SHIP_SHIELD_MAX_LEVEL}`, 'shipShield1'],
+            [`Hull Repair ${ship.repairLevel}/${SHIP_REPAIR_MAX_LEVEL}`, 'shipRepair1'],
             ['Dash', 'shipDash'],
           ]),
     ] as Array<[string, string]>;

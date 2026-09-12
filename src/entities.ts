@@ -160,7 +160,7 @@ export abstract class Entity {
         dy: _source.velocity.length() > 0.001 ? _source.velocity.y : this.position.y - _source.position.y,
       } : undefined;
       this.hullDamage.hit(this, amount, impact ?? fallback);
-      if (this.health <= 0 || this.hullDamage.coreIntegrity <= 0) {
+      if (this.health <= 0 || this.hullDamage.coreDestroyed) {
         this.health = 0;
         this.destroy();
       }
@@ -171,9 +171,7 @@ export abstract class Entity {
         dx: _source.velocity.length() > 0.001 ? _source.velocity.x : this.position.x - _source.position.x,
         dy: _source.velocity.length() > 0.001 ? _source.velocity.y : this.position.y - _source.position.y,
       } : undefined;
-      // BuildingStructureBody has footprintCells, which is expected by buildingDamage.
-      // We will cast this as any here to avoid cyclic type dependencies if needed, or just let structural typing work.
-      this.buildingDamage.hit(this as any, amount, impact ?? fallback);
+      this.buildingDamage.hit(this, amount, impact ?? fallback);
       if (this.health <= 0 || this.buildingDamage.connectedMass <= 0) {
         this.health = 0;
         this.destroy();
@@ -193,9 +191,9 @@ export abstract class Entity {
   repair(amount: number): void {
     if (!this.alive || amount <= 0) return;
     if (this.hullDamage) {
-      this.hullDamage.repair(this as any, amount);
+      this.hullDamage.repair(this, amount);
     } else if (this.buildingDamage) {
-      this.buildingDamage.repair(this as any, amount);
+      this.buildingDamage.repair(this, amount);
     } else {
       this.health = Math.min(this.maxHealth, this.health + amount);
     }

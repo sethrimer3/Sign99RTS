@@ -26,8 +26,14 @@ export class ShipHullDamage {
   private pending: Array<{ indices: number[]; hit: HullImpact }> = [];
   private mesh: Mesh | null = null;
   private dirty = false;
-  
-  coreIntegrity: number = -1;
+  /** Binary min-heap (by coreDistance, then index) of gone polygons touching attached geometry. */
+  private frontier: number[] = [];
+  private inFrontier = new Set<number>();
+  private frontierDirty = true;
+
+  /** False until a body has been attached; until then `coreIntegrity` carries no meaning. */
+  coreInitialized = false;
+  coreIntegrity: number = 0;
   maxCoreIntegrity: number = 0;
   connectedMass: number = 0;
 
@@ -35,6 +41,11 @@ export class ShipHullDamage {
 
   get coreIntegrityFrac(): number {
     return this.maxCoreIntegrity > 0 ? this.coreIntegrity / this.maxCoreIntegrity : 1;
+  }
+
+  /** Only ever true once a body has been attached and the core has actually been breached. */
+  get coreDestroyed(): boolean {
+    return this.coreInitialized && this.coreIntegrity <= 0;
   }
 
   private ensure(): ShipGeometry | null {
@@ -50,8 +61,10 @@ export class ShipHullDamage {
   reset(): void {
     this.gone.clear(); this.order.length = 0; this.pending.length = 0;
     this.mesh = null; this.dirty = false;
+    this.frontier.length = 0; this.inFrontier.clear(); this.frontierDirty = true;
     this.definition = null; this.geometry = null;
-    this.coreIntegrity = -1; this.maxCoreIntegrity = 0; this.connectedMass = 0;
+    this.coreInitialized = false;
+    this.coreIntegrity = 0; this.maxCoreIntegrity = 0; this.connectedMass = 0;
   }
 
   get removedIndices(): readonly number[] { return this.order; }
@@ -63,13 +76,27 @@ export class ShipHullDamage {
     return undefined;
   }
 
+  /** Attach a body so the core budget is known. Safe (and idempotent) to call at any time. */
+  attach(body: HullBody): void {
+    this.ensure();
+    this.initCore(body);
+  }
+
   private initCore(body: HullBody) {
-    if (this.coreIntegrity === -1) {
-      this.maxCoreIntegrity = body.maxHealth * 0.25;
-      this.coreIntegrity = this.maxCoreIntegrity;
+    const budget = body.maxHealth * 0.25;
+    if (!this.coreInitialized) {
+      this.coreInitialized = true;
+      this.maxCoreIntegrity = budget;
+      this.coreIntegrity = budget;
       if (this.geometry) {
         this.connectedMass = this.geometry.totalMass;
       }
+    } else if (this.maxCoreIntegrity !== budget) {
+      // Ships are attached at spawn but max HP moves with research; keep the
+      // core budget proportional so upgrades never resurrect or kill a core.
+      const frac = this.coreIntegrityFrac;
+      this.maxCoreIntegrity = budget;
+      this.coreIntegrity = budget * frac;
     }
   }
 
@@ -128,6 +155,7 @@ export class ShipHullDamage {
          break; // Damage corridor hit the core, stop excavating
       } else {
          this.gone.add(index);
+         this.frontierDirty = true;
          this.order.push(index);
          detached.push(index);
          massBudget -= poly.area;
@@ -151,6 +179,7 @@ export class ShipHullDamage {
       for (const poly of geo.polygons) {
         if (!this.gone.has(poly.index)) {
           this.gone.add(poly.index);
+          this.frontierDirty = true;
           detached.push(poly.index);
         }
       }
@@ -180,6 +209,7 @@ export class ShipHullDamage {
     for (const poly of geo.polygons) {
       if (!this.gone.has(poly.index) && !reachable.has(poly.index) && !poly.isCore) {
         this.gone.add(poly.index);
+        this.frontierDirty = true;
         disconnected.push(poly.index);
       }
     }
@@ -196,8 +226,17 @@ export class ShipHullDamage {
     }
   }
 
-  repair(body: HullBody, amount: number): void {
-    if (amount <= 0 || this.coreIntegrity <= 0) return;
+  /**
+   * Regrow shed polygons from the core outward: always the gone polygon with the
+   * smallest `coreDistance` among those touching still-attached geometry, so nothing
+   * ever reappears floating free of the hull.
+   *
+   * `restoreComponents = false` tops up HP/core only (used when the ship has not
+   * researched the structural-repair upgrade); HP is then capped by the mass that
+   * is still connected, so a gutted hull cannot heal past its structural ceiling.
+   */
+  repair(body: HullBody, amount: number, restoreComponents = true): void {
+    if (amount <= 0 || this.coreDestroyed) return;
     const geo = this.ensure();
     if (!geo) return;
     this.initCore(body);
@@ -205,40 +244,99 @@ export class ShipHullDamage {
     let massToRestore = (amount / body.maxHealth) * geo.totalMass;
     let restoredMass = 0;
 
-    while (massToRestore > 0 && this.gone.size > 0) {
-      let bestCandidate = -1;
-      let bestDist = Infinity;
-      for (const idx of this.gone) {
-        const poly = geo.polygons[idx];
-        let adjacent = false;
-        for (const n of poly.neighbors) {
-          if (!this.gone.has(n)) { adjacent = true; break; }
-        }
-        if (adjacent && poly.coreDistance < bestDist) {
-          bestDist = poly.coreDistance;
-          bestCandidate = idx;
-        }
-      }
-      if (bestCandidate === -1) break;
-      
-      this.gone.delete(bestCandidate);
-      const orderIdx = this.order.indexOf(bestCandidate);
-      if (orderIdx >= 0) this.order.splice(orderIdx, 1);
+    if (restoreComponents) {
+      this.rebuildFrontierIfDirty(geo);
+      while (massToRestore > 0 && this.gone.size > 0) {
+        const bestCandidate = this.popFrontier(geo);
+        if (bestCandidate === -1) break;
 
-      const restoredArea = geo.polygons[bestCandidate].area;
-      massToRestore -= restoredArea;
-      restoredMass += restoredArea;
-      this.dirty = true;
+        this.gone.delete(bestCandidate);
+        // Neighbours of a restored polygon are now adjacent to attached geometry.
+        for (const n of geo.polygons[bestCandidate].neighbors) {
+          if (this.gone.has(n)) this.pushFrontier(geo, n);
+        }
+
+        const restoredArea = geo.polygons[bestCandidate].area;
+        massToRestore -= restoredArea;
+        restoredMass += restoredArea;
+        this.dirty = true;
+      }
     }
 
     if (restoredMass > 0) {
+      // Compact the removal order once per call instead of splicing per polygon.
+      let write = 0;
+      for (let read = 0; read < this.order.length; read++) {
+        const idx = this.order[read];
+        if (this.gone.has(idx)) this.order[write++] = idx;
+      }
+      this.order.length = write;
       this.recalculateConnectivity(geo, { kind: 'bullet', x: body.position.x, y: body.position.y, dx: 0, dy: 0 });
       body.health = body.maxHealth * (this.connectedMass / geo.totalMass);
+    } else if (!restoreComponents) {
+      const ceiling = body.maxHealth * (this.gone.size > 0 ? this.connectedMass / geo.totalMass : 1);
+      body.health = Math.min(ceiling, body.health + amount);
     }
-    
+
     if (massToRestore > 0 && this.coreIntegrity < this.maxCoreIntegrity) {
       this.coreIntegrity = Math.min(this.maxCoreIntegrity, this.coreIntegrity + (massToRestore / geo.totalMass) * body.maxHealth);
     }
+  }
+
+  private rebuildFrontierIfDirty(geo: ShipGeometry): void {
+    if (!this.frontierDirty) return;
+    this.frontierDirty = false;
+    this.frontier.length = 0;
+    this.inFrontier.clear();
+    for (const idx of this.gone) {
+      for (const n of geo.polygons[idx].neighbors) {
+        if (!this.gone.has(n)) { this.pushFrontier(geo, idx); break; }
+      }
+    }
+  }
+
+  /** Ordering key: core-outward, ties broken by polygon index so LAN peers agree. */
+  private frontierBefore(geo: ShipGeometry, a: number, b: number): boolean {
+    const da = geo.polygons[a].coreDistance, db = geo.polygons[b].coreDistance;
+    return da !== db ? da < db : a < b;
+  }
+
+  private pushFrontier(geo: ShipGeometry, idx: number): void {
+    if (this.inFrontier.has(idx)) return;
+    this.inFrontier.add(idx);
+    const heap = this.frontier;
+    let i = heap.length;
+    heap.push(idx);
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (!this.frontierBefore(geo, heap[i], heap[parent])) break;
+      const t = heap[i]; heap[i] = heap[parent]; heap[parent] = t;
+      i = parent;
+    }
+  }
+
+  private popFrontier(geo: ShipGeometry): number {
+    const heap = this.frontier;
+    while (heap.length > 0) {
+      const top = heap[0];
+      const last = heap.pop()!;
+      if (heap.length > 0) {
+        heap[0] = last;
+        let i = 0;
+        for (;;) {
+          const l = i * 2 + 1, r = l + 1;
+          let best = i;
+          if (l < heap.length && this.frontierBefore(geo, heap[l], heap[best])) best = l;
+          if (r < heap.length && this.frontierBefore(geo, heap[r], heap[best])) best = r;
+          if (best === i) break;
+          const t = heap[i]; heap[i] = heap[best]; heap[best] = t;
+          i = best;
+        }
+      }
+      this.inFrontier.delete(top);
+      if (this.gone.has(top)) return top;
+    }
+    return -1;
   }
 
   applySnapshot(snapshot: HullSnapshot | undefined, body: HullBody, emit = true): void {
@@ -256,6 +354,7 @@ export class ShipHullDamage {
     this.order = next; 
     this.gone = new Set(next); 
     this.dirty = true;
+    this.frontierDirty = true;
     
     if (snapshot?.coreIntegrityFrac !== undefined) {
       this.coreIntegrity = this.maxCoreIntegrity * snapshot.coreIntegrityFrac;

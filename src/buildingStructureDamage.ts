@@ -7,7 +7,11 @@ import { GRID_CELL_SIZE } from './grid.js';
 export interface BuildingStructureBody {
   id: number;
   position: Vec2;
-  footprintCells: number; // e.g., 2 for a 2x2 building
+  /**
+   * Footprint in grid cells (e.g. 2 for a 2x2 building). `null` on buildings that
+   * never declare one; those keep an empty structural mesh, as before.
+   */
+  footprintCells?: number | null;
   health: number;
   maxHealth: number;
   synonymousVisualKind?: string | null;
@@ -193,10 +197,11 @@ export class BuildingStructureDamage {
   constructor(private seedFallback: number) {}
 
   public ensure(body: BuildingStructureBody): BSPGeometry {
-    if (this.geo && this.geo.footprintCells === body.footprintCells) return this.geo;
-      if (this.geo && this.geo.footprintCells !== body.footprintCells) this.appliedSeed = undefined;
-    const seed = this.appliedSeed ?? (this.seedFallback ^ (body.footprintCells * 1234567));
-    this.geo = generateBSPGeometry(body.footprintCells, seed);
+    const cells = body.footprintCells ?? 0;
+    if (this.geo && this.geo.footprintCells === cells) return this.geo;
+      if (this.geo && this.geo.footprintCells !== cells) this.appliedSeed = undefined;
+    const seed = this.appliedSeed ?? (this.seedFallback ^ (cells * 1234567));
+    this.geo = generateBSPGeometry(cells, seed);
     
     
     this.removedIndices = [];

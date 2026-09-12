@@ -81,7 +81,7 @@ export abstract class BuildingBase extends Entity {
     const screen = camera.worldToScreen(this.position);
     ctx.save();
     if (this.buildingDamage) {
-      const path = this.buildingDamage.renderMesh(this as any);
+      const path = this.buildingDamage.renderMesh(this);
       if (path) {
         ctx.translate(screen.x, screen.y);
         ctx.scale(camera.zoom, camera.zoom);
@@ -101,7 +101,7 @@ export abstract class BuildingBase extends Entity {
   override destroy(): void {
     super.destroy();
     if (this.buildingDamage) {
-      this.buildingDamage.collapseAll(this as any);
+      this.buildingDamage.collapseAll(this);
     }
   }
 

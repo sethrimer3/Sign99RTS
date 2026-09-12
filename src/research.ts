@@ -14,6 +14,7 @@ export function researchIcon(item: string): string {
     shipHp1: 'H1', shipHp2: 'H2', shipHp3: 'H3', shipHp4: 'H4',
     shipSpeedEnergy1: 'E1', shipSpeedEnergy2: 'E2', shipSpeedEnergy3: 'E3', shipSpeedEnergy4: 'E4',
     shipShield1: 'Q1', shipShield2: 'Q2', shipDash: '>>',
+    shipRepair1: 'R1', shipRepair2: 'R2', shipRepair3: 'R3',
     weaponCannon: 'CN', weaponGatling: 'GT', weaponLaser: 'LZ', weaponGuidedMissile: 'GM',
     fighterTargeting: 'FT', fighterWeapon1: 'W1', fighterWeapon2: 'W2',
     fighterSpeed1: 'S1', fighterSpeed2: 'S2', fighterHp1: 'FH1', fighterHp2: 'FH2',

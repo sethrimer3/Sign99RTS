@@ -1,5 +1,3 @@
-import type { HullSnapshot } from '../shipHullDamage.js';
-import type { ProceduralShipDefinition } from '../proceduralShips.js';
 /**
  * LAN multiplayer protocol message types for Sign99RTS.
  *
@@ -15,6 +13,9 @@ import type { ProceduralShipDefinition } from '../proceduralShips.js';
  *   Non-host:  connect → server sends server_connected(clientId) →
  *              client sends join_request → server sends welcome(slotN) or join_rejected
  */
+
+import type { HullSnapshot } from '../shipHullDamage.js';
+import type { ProceduralShipDefinition } from '../proceduralShips.js';
 
 // ---------------------------------------------------------------------------
 // Lobby slot model
@@ -144,7 +145,6 @@ export interface SerializedShip {
   battery: number;
   shield: number;
   alive: boolean;
-  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
 }
 
 export interface SerializedProjectile {
@@ -170,7 +170,6 @@ export interface SerializedFighter {
   vx: number; vy: number;
   angle: number;
   alive: boolean;
-  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
   advancedTier?: boolean;
 }
 

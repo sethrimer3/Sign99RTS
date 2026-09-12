@@ -4,6 +4,7 @@ import { pointToSegmentDistance, Vec2 } from './math.js';
 import { Entity, Team, EntityType } from './entities.js';
 import { PlayerShip } from './ship.js';
 import { BuildingBase, CommandPost, ResearchLab, ShieldGenerator, Wall } from './building.js';
+import { tickBaseRepairAura } from './baseRepairAura.js';
 import { Shipyard } from './building.js';
 import { SynonymousMineLayer, TetherTurret, TurretBase } from './turret.js';
 import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, SynonymousNovaBomb } from './projectile.js';
@@ -241,6 +242,8 @@ export class GameState {
     expiresAt: number;
   }> = new Map();
   private spatialIndex: SpatialIndex = new SpatialIndex(GRID_CELL_SIZE * 3);
+  /** Countdown to the next command-post repair pulse. */
+  baseRepairAuraTimer = 0;
   private spatialQueryScratch: Entity[] = [];
   /** Scratch reused by {@link resolveGatlingBullet} for spatial queries. */
   private gatlingQueryScratch: Entity[] = [];
@@ -642,6 +645,7 @@ export class GameState {
     // Tick pending conduit fronts. Every eligible frontier cell builds together.
     this.tickPendingConduits(dt);
     this.tickAdvancedRegenConduitRepair(dt);
+    tickBaseRepairAura(this, dt);
 
     // Research progress
     this.tickResearch(dt);
@@ -654,7 +658,7 @@ export class GameState {
       fighter.hullDamage?.flush(fighter, this.shipDebris, teamColor(fighter.team));
     }
     for (const b of this.buildings) {
-      b.buildingDamage?.flush(b as any, this.shipDebris, teamColor(b.team));
+      b.buildingDamage?.flush(b, this.shipDebris, teamColor(b.team));
     }
     this.updateExplosionGlows(dt);
     this.ringEffects.update(dt);

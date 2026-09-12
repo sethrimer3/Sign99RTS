@@ -55,6 +55,7 @@ import { loadCinematicLevel, saveCinematicLevel, setCinematicLevel, type Cinemat
 import { loadLegacyGraphics, saveLegacyGraphics, setLegacyGraphics } from './graphicsmode.js';
 import { setProjectileTrailLayers } from './projectileTrail.js';
 import { setBuildingCoreEffectTier } from './buildingCoreEffect.js';
+import { drawBaseRepairAura } from './baseRepairAura.js';
 import { setWarmGlowTier } from './warmGlow.js';
 import {
   drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, drawBaseLockwardEffect, type ShipCommandGroup, type WaypointMarker,
@@ -1528,6 +1529,9 @@ export class Game {
       'shipSpeedEnergy4',
       'shipShield1',
       'shipShield2',
+      'shipRepair1',
+      'shipRepair2',
+      'shipRepair3',
       'weaponGatling',
       'weaponLaser',
     ];
@@ -2097,7 +2101,7 @@ export class Game {
       ship.velocity.y = sd.vy;
       ship.angle = sd.angle;
       const remoteDesign = sd.design === undefined ? fleetDesign(sd.team, 'hero') : sd.design;
-      if (ship.design !== remoteDesign && (sd.design === undefined || JSON.stringify(ship.design) !== JSON.stringify(remoteDesign))) ship.setDesign(remoteDesign);
+      if (ship.design !== remoteDesign) ship.setDesign(remoteDesign);
       ship.maxHealth = sd.maxHealth;
       ship.health = sd.health;
       ship.alive = sd.alive;
@@ -2117,7 +2121,7 @@ export class Game {
       if (b) {
         // Update existing building.
         if (b.buildingDamage) {
-            b.buildingDamage.applySnapshot(sb.structure, b as any);
+            b.buildingDamage.applySnapshot(sb.structure, b);
           }
           b.health = sb.health;
         b.buildProgress = sb.buildProgress;
@@ -2142,7 +2146,7 @@ export class Game {
           // Force id to match host's authoritative id so future snapshots find it.
           (newBuilding as unknown as { id: number }).id = sb.id;
           if (newBuilding.buildingDamage) {
-              newBuilding.buildingDamage.applySnapshot(sb.structure, newBuilding as any);
+              newBuilding.buildingDamage.applySnapshot(sb.structure, newBuilding);
             }
             newBuilding.health = sb.health;
           newBuilding.buildProgress = sb.buildProgress;
@@ -2192,7 +2196,7 @@ export class Game {
         f.velocity.y = sf.vy;
         f.angle = sf.angle;
         const fighterDesign = sf.design ?? fleetDesign(sf.team, sf.entityType === EntityType.Bomber ? 'bomber' : 'fighter');
-        if (!sf.design || JSON.stringify(f.fleetDesignOverride) !== JSON.stringify(fighterDesign)) f.fleetDesignOverride = fighterDesign;
+        if (f.fleetDesignOverride !== fighterDesign) f.fleetDesignOverride = fighterDesign;
         if (sf.maxHealth !== undefined) f.maxHealth = sf.maxHealth;
         if (sf.health !== undefined) f.health = sf.health;
         f.hullDamage?.applySnapshot(sf.hull, f);
@@ -2559,6 +2563,7 @@ export class Game {
     this.spaceFluid.step(this.lastFrameMs);
     this.spaceFluid.render(ctx);
     drawConfluenceTerritory(ctx, this.camera, this.state, this.territoryPulseTime);
+    drawBaseRepairAura(ctx, this.camera, this.state, this.localPlayerTeam(), this.state.gameTime);
     this.state.grid.draw(
       ctx,
       this.camera,

@@ -137,3 +137,60 @@ describe('impact-directed structural damage', () => {
     expect(hit.mock.calls.at(-1)?.[2]).toMatchObject({ kind: 'laser', dx: 0, dy: 400 });
   });
 });
+
+describe('core-outward structural repair', () => {
+  it('regrows only polygons touching attached geometry, nearest the core first', () => {
+    const { body, hull, geo, hit } = fixture();
+    hit('explosion', 34);
+    const shed = new Set(hull.removedIndices);
+    expect(shed.size).toBeGreaterThan(8);
+
+    const restoreOrder: number[] = [];
+    for (let step = 0; step < 600 && hull.removedIndices.length > 0; step++) {
+      const before = new Set(hull.removedIndices);
+      // Candidates are exactly the gone polygons touching still-attached geometry.
+      const candidates = [...before].filter((i) => geo.polygons[i].neighbors.some((n) => !before.has(n)));
+      expect(candidates.length).toBeGreaterThan(0);
+      const nearestCandidate = Math.min(...candidates.map((i) => geo.polygons[i].coreDistance));
+
+      hull.repair(body, body.maxHealth * 1e-6);
+      const after = new Set(hull.removedIndices);
+      const restored = [...before].filter((i) => !after.has(i));
+      expect(restored.length).toBe(1);
+      // Core-outward: the regrowth front always advances at its point closest to the core.
+      expect(geo.polygons[restored[0]].coreDistance).toBe(nearestCandidate);
+      expect(candidates).toContain(restored[0]);
+      restoreOrder.push(restored[0]);
+    }
+
+    expect(restoreOrder.length).toBeGreaterThan(8);
+    expect(new Set(restoreOrder).size).toBe(restoreOrder.length);
+    // The very first thing to come back is the innermost survivor of the blast.
+    const shedDistances = [...shed].map((i) => geo.polygons[i].coreDistance);
+    expect(geo.polygons[restoreOrder[0]].coreDistance).toBe(Math.min(...shedDistances.filter(
+      (_, k) => geo.polygons[[...shed][k]].neighbors.some((n) => !shed.has(n)))));
+    expect(hull.removedIndices.length).toBe(0);
+    expect(body.health).toBeCloseTo(body.maxHealth, 5);
+  });
+
+  it('leaves the hull alone when component restoration is switched off', () => {
+    const { body, hull, hit } = fixture();
+    hit('bullet', 20);
+    const shed = [...hull.removedIndices];
+    expect(shed.length).toBeGreaterThan(0);
+    const hurt = body.health;
+    hull.repair(body, 5, false);
+    expect([...hull.removedIndices]).toEqual(shed);
+    // HP may not climb past the ceiling the surviving connected mass supports.
+    expect(body.health).toBeLessThanOrEqual(hurt + 1e-6);
+  });
+
+  it('gated repair is unlocked by shipRepair research', () => {
+    const ship = new PlayerShip(new Vec2(0, 0));
+    expect(ship.repairLevel).toBe(0);
+    ship.syncResearchUpgrades(new Set(['shipRepair1', 'shipRepair2']));
+    expect(ship.repairLevel).toBe(2);
+    ship.syncResearchUpgrades(new Set());
+    expect(ship.repairLevel).toBe(0);
+  });
+});

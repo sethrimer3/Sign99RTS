@@ -308,7 +308,7 @@ function findRespawnCommandPost(state: GameState, localTeam: Team): CommandPost 
 function countShipResearchUpgrades(state: GameState): number {
   let count = 0;
   for (const key of state.researchedItems) {
-    if (key.startsWith('shipHp') || key.startsWith('shipSpeedEnergy') || key.startsWith('shipShield')) count++;
+    if (key.startsWith('shipHp') || key.startsWith('shipSpeedEnergy') || key.startsWith('shipShield') || key.startsWith('shipRepair')) count++;
   }
   return count;
 }

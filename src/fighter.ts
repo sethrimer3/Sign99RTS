@@ -183,6 +183,7 @@ export class FighterShip extends Entity {
       ENTITY_RADIUS.fighter * PLAYER_SHIP_SCALE,
     );
     this.hullDamage = new ShipHullDamage(() => this.design, 1.05);
+    this.hullDamage.attach(this);
     this.group = group;
     this.homeYard = homeYard;
     this.turnRate = SHIP_STATS.fighter.turnRate;
