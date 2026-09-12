@@ -1085,6 +1085,11 @@ export function drawProceduralShip(
   }
   lastFillCalls = fills;
 
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 1.2 / scale;
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.stroke(silhouette);
+
   if (p.lineThickness > 0) {
     ctx.lineJoin = 'round';
     ctx.lineWidth = Math.max(0.6, p.lineThickness) / scale;
