@@ -8,6 +8,8 @@ import { CommandPost } from './building.js';
 import { AIShip } from './vsaibot.js';
 import { isHostile, isPlayableTeam, teamColor } from './teamutils.js';
 import { WORLD_HEIGHT, WORLD_WIDTH } from './constants.js';
+import { GhostShipEffect } from './ghostShipEffect.js';
+import { hashStringToSeed } from './proceduralShips.js';
 
 export interface PlayerRespawnRuntime {
   respawnTimer: number;
@@ -16,32 +18,9 @@ export interface PlayerRespawnRuntime {
   ghostPos: Vec2 | null;
   ghostVel: Vec2;
   ghostFacing: number;
-  ghostLights: GhostLight[];
+  /** Purely visual fractal "spirit ship" grown behind the spectator anchor. */
+  ghostEffect: GhostShipEffect;
 }
-
-export interface GhostTrailSample {
-  x: number;
-  y: number;
-  age: number;
-}
-
-export interface GhostLight {
-  x: number;
-  y: number;
-  response: number;
-  sampleTimer: number;
-  trail: GhostTrailSample[];
-}
-
-/** Hull-perimeter points, in ship-radius units, ordered around the outline. */
-const GHOST_HULL_POINTS: ReadonlyArray<readonly [number, number]> = [
-  [1.38, 0], [0.82, -0.38], [0.22, -0.62], [-0.42, -0.72],
-  [-0.90, -0.72], [-0.70, -0.36], [-0.52, 0], [-0.70, 0.36],
-  [-0.90, 0.72], [-0.42, 0.72], [0.22, 0.62], [0.82, 0.38],
-];
-const GHOST_RADIUS = 22;
-const GHOST_TRAIL_SAMPLES = 8;
-const GHOST_TRAIL_LIFETIME = 0.34;
 
 export interface AIRespawnRuntime {
   respawnTimer: number;
@@ -56,7 +35,7 @@ export function createPlayerRespawnRuntime(): PlayerRespawnRuntime {
     ghostPos: null,
     ghostVel: new Vec2(0, 0),
     ghostFacing: 0,
-    ghostLights: [],
+    ghostEffect: new GhostShipEffect(),
   };
 }
 
@@ -77,7 +56,7 @@ export function resetRespawnRuntime(
   playerRuntime.ghostPos = null;
   playerRuntime.ghostVel = new Vec2(0, 0);
   playerRuntime.ghostFacing = 0;
-  playerRuntime.ghostLights.length = 0;
+  playerRuntime.ghostEffect.clear();
   aiRuntime.respawnTimer = 0;
   aiRuntime.deathHandled = false;
 }
@@ -99,7 +78,7 @@ export function updatePlayerRespawn(
     runtime.ghostPos = state.player.position.clone();
     runtime.ghostVel = state.player.velocity.clone();
     runtime.ghostFacing = state.player.angle;
-    resetGhostLights(runtime);
+    beginGhostEffect(state, runtime);
     state.player.alive = false;
     runtime.deathHandled = true;
     runtime.respawnTimer = 0;
@@ -112,7 +91,7 @@ export function updatePlayerRespawn(
     runtime.respawnTimer = 0;
     runtime.ghostPos = null;
     runtime.ghostVel = new Vec2(0, 0);
-    runtime.ghostLights.length = 0;
+    runtime.ghostEffect.clear();
     return;
   }
 
@@ -120,7 +99,7 @@ export function updatePlayerRespawn(
     runtime.ghostPos = state.player.position.clone();
     runtime.ghostVel = new Vec2(0, 0);
     runtime.ghostFacing = state.player.angle;
-    resetGhostLights(runtime);
+    beginGhostEffect(state, runtime);
   }
 
   if (!respawnCp) {
@@ -152,7 +131,7 @@ export function updatePlayerRespawn(
     runtime.loss = false;
     runtime.ghostPos = null;
     runtime.ghostVel = new Vec2(0, 0);
-    runtime.ghostLights.length = 0;
+    runtime.ghostEffect.clear();
     hud.showMessage('Respawned!', Colors.friendly_status, 2);
   }
 }
@@ -219,67 +198,22 @@ export function updateGhostSpectator(
   runtime.ghostPos.x = Math.max(0, Math.min(WORLD_WIDTH, runtime.ghostPos.x));
   runtime.ghostPos.y = Math.max(0, Math.min(WORLD_HEIGHT, runtime.ghostPos.y));
   if (aimWorld) runtime.ghostFacing = runtime.ghostPos.angleTo(aimWorld);
-  updateGhostLights(runtime, dt);
+  runtime.ghostEffect.update(dt, runtime.ghostPos.x, runtime.ghostPos.y, runtime.ghostFacing);
 }
 
-function resetGhostLights(runtime: PlayerRespawnRuntime): void {
-  runtime.ghostLights.length = 0;
+/** Grow the spirit ship from the death pose, seeded by the procedural design so the same
+ *  ship always leaves the same organism. Visual only: nothing here touches gameplay state. */
+function beginGhostEffect(state: GameState, runtime: PlayerRespawnRuntime): void {
   if (!runtime.ghostPos) return;
-  const cos = Math.cos(runtime.ghostFacing);
-  const sin = Math.sin(runtime.ghostFacing);
-  for (let i = 0; i < GHOST_HULL_POINTS.length; i++) {
-    const [hx, hy] = GHOST_HULL_POINTS[i];
-    const ox = hx * GHOST_RADIUS;
-    const oy = hy * GHOST_RADIUS;
-    const x = runtime.ghostPos.x + ox * cos - oy * sin;
-    const y = runtime.ghostPos.y + ox * sin + oy * cos;
-    runtime.ghostLights.push({
-      x,
-      y,
-      response: 5 + (i % 5) * 1.7,
-      sampleTimer: 0,
-      trail: [{ x, y, age: 0 }],
-    });
-  }
-}
-
-function updateGhostLights(runtime: PlayerRespawnRuntime, dt: number): void {
-  if (!runtime.ghostPos) return;
-  if (runtime.ghostLights.length !== GHOST_HULL_POINTS.length) resetGhostLights(runtime);
-  const cos = Math.cos(runtime.ghostFacing);
-  const sin = Math.sin(runtime.ghostFacing);
-  for (let i = 0; i < runtime.ghostLights.length; i++) {
-    const light = runtime.ghostLights[i];
-    const [hx, hy] = GHOST_HULL_POINTS[i];
-    const ox = hx * GHOST_RADIUS;
-    const oy = hy * GHOST_RADIUS;
-    const targetX = runtime.ghostPos.x + ox * cos - oy * sin;
-    const targetY = runtime.ghostPos.y + ox * sin + oy * cos;
-    if (Math.hypot(targetX - light.x, targetY - light.y) > 420) {
-      light.x = targetX;
-      light.y = targetY;
-      light.trail.length = 0;
-    } else {
-      const follow = 1 - Math.exp(-light.response * dt);
-      light.x += (targetX - light.x) * follow;
-      light.y += (targetY - light.y) * follow;
-    }
-
-    let write = 0;
-    for (let read = 0; read < light.trail.length; read++) {
-      const sample = light.trail[read];
-      sample.age += dt;
-      if (sample.age <= GHOST_TRAIL_LIFETIME) light.trail[write++] = sample;
-    }
-    light.trail.length = write;
-    light.sampleTimer += dt;
-    const last = light.trail[light.trail.length - 1];
-    if (!last || light.sampleTimer >= 0.035 || Math.hypot(light.x - last.x, light.y - last.y) >= 2.5) {
-      light.trail.push({ x: light.x, y: light.y, age: 0 });
-      light.sampleTimer = 0;
-      if (light.trail.length > GHOST_TRAIL_SAMPLES) light.trail.shift();
-    }
-  }
+  const seed = state.player.design?.seed ?? hashStringToSeed('ghost-' + state.player.team);
+  runtime.ghostEffect.reset(
+    runtime.ghostPos.x,
+    runtime.ghostPos.y,
+    runtime.ghostFacing,
+    seed,
+    state.player.radius,
+    teamColor(state.player.team),
+  );
 }
 
 function refundPlannedConstruction(state: GameState, hud: HUD, team: Team): void {

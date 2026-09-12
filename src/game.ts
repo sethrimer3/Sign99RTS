@@ -362,6 +362,7 @@ export class Game {
       quality === 'ultraLow' ? 16 : quality === 'low' ? 32 : quality === 'medium' ? 64 : quality === 'high' ? 96 : 128,
     );
     this.state?.particles.setParticleScale(this.visualPreset.particleScale);
+    this.playerRespawn.ghostEffect.setParticleScale(this.visualPreset.particleScale);
     this.starfield.setShootingStarsEnabled(this.visualPreset.shootingStarsEnabled);
     setProjectileTrailLayers(quality === 'ultraHigh' ? 4 : quality === 'high' ? 3 : quality === 'medium' ? 2 : 1);
     setBuildingCoreEffectTier(quality);
@@ -462,6 +463,7 @@ export class Game {
     // Wire adaptive scale into particle system
     this.state.particles.setAdaptiveScale(renderBudget.renderLoadScale);
     this.state.shipDebris.setAdaptiveScale(renderBudget.renderLoadScale);
+    this.playerRespawn.ghostEffect.setAdaptiveScale(renderBudget.renderLoadScale);
     if (!this.debrisFluidWired) {
       this.debrisFluidWired = true;
       // Drifting wreckage stirs the space dust in its wake. One-directional on purpose:
@@ -2588,7 +2590,7 @@ export class Game {
     drawBaseLockwardEffect(ctx, this.camera, this.state);
     drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn);
     drawWaypointMarkers(ctx, this.camera, this.state, this.waypointMarkers);
-    drawGlowLayer(this.glowLayer, this.camera, this.state, this.visualPreset, renderBudget.renderLoadScale);
+    drawGlowLayer(this.glowLayer, this.camera, this.state, this.visualPreset, renderBudget.renderLoadScale, this.playerRespawn.ghostEffect);
     this.glowLayer.compositeTo(ctx);
     // Keep command selections and the live drag box crisp above world glows.
     drawCommandModeOverlay(

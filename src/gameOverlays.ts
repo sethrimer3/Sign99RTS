@@ -24,7 +24,7 @@ import type { VisualQualityPreset } from './visualquality.js';
 import { buildingBlocksShips, buildingFootprintOrigin } from './buildingCollision.js';
 import { t } from './i18n.js';
 import type { PlayerRespawnRuntime } from './respawnRuntime.js';
-import { teamColor } from './teamutils.js';
+import type { GhostShipEffect } from './ghostShipEffect.js';
 
 // ---------------------------------------------------------------------------
 // Overlay cache — holds canvas gradients/patterns that are rebuilt only when
@@ -96,56 +96,8 @@ export function drawGhostSpectator(
   state: GameState,
   runtime: PlayerRespawnRuntime,
 ): void {
-  if (state.player.alive || !runtime.ghostPos || runtime.ghostLights.length === 0) return;
-  const tint = teamColor(state.player.team);
-  const pulse = 0.86 + Math.sin(state.gameTime * 5.2) * 0.1;
-  const layers = [
-    { width: 5.8, alpha: 0.10 },
-    { width: 2.8, alpha: 0.24 },
-    { width: 1.1, alpha: 0.58 },
-  ] as const;
-
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  // Each light owns a tiny world-space history. Segment width and opacity
-  // increase toward the newest sample, producing a tapered luminous ribbon.
-  for (const light of runtime.ghostLights) {
-    const count = light.trail.length;
-    if (count >= 2) {
-      for (const layer of layers) {
-        ctx.strokeStyle = colorToCSS(tint);
-        for (let i = 1; i < count; i++) {
-          const a = light.trail[i - 1];
-          const b = light.trail[i];
-          const head = i / (count - 1);
-          const life = Math.max(0, 1 - (a.age + b.age) * 0.5 / 0.34);
-          const strength = head * head * life;
-          if (strength < 0.015) continue;
-          ctx.globalAlpha = layer.alpha * strength * pulse;
-          ctx.lineWidth = Math.max(0.35, layer.width * camera.zoom * (0.12 + head * 0.88));
-          ctx.beginPath();
-          ctx.moveTo(camera.screenX(a.x), camera.screenY(a.y));
-          ctx.lineTo(camera.screenX(b.x), camera.screenY(b.y));
-          ctx.stroke();
-        }
-      }
-    }
-
-    const x = camera.screenX(light.x);
-    const y = camera.screenY(light.y);
-    const ballRadius = Math.max(1, 2.25 * camera.zoom);
-    ctx.globalAlpha = 0.12 * pulse;
-    ctx.fillStyle = colorToCSS(tint);
-    ctx.beginPath(); ctx.arc(x, y, ballRadius * 3.2, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 0.38 * pulse;
-    ctx.beginPath(); ctx.arc(x, y, ballRadius * 1.75, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 0.92 * pulse;
-    ctx.beginPath(); ctx.arc(x, y, ballRadius * 0.65, 0, Math.PI * 2); ctx.fill();
-  }
-  ctx.restore();
+  if (state.player.alive || !runtime.ghostPos) return;
+  runtime.ghostEffect.draw(ctx, camera);
 }
 
 export function drawLossOverlay(
@@ -421,6 +373,7 @@ export function drawGlowLayer(
   state: GameState,
   visualPreset: VisualQualityPreset,
   renderLoadScale: number = 1.0,
+  ghost?: GhostShipEffect,
 ): void {
   if (!visualPreset.glowEnabled) return;
 
@@ -472,6 +425,8 @@ export function drawGlowLayer(
   }
 
   // Priority 3: Player ship glows (always draw — player experience critical)
+  // The dead player's spirit ship is their avatar while spectating, so it shares this tier.
+  if (ghost && !state.player.alive) ghost.drawGlow(glow, camera);
   for (const ship of state.playerShips.values()) {
     if (!ship.alive || !camera.isOnScreen(ship.position, 220)) continue;
     const r = ship.radius;
