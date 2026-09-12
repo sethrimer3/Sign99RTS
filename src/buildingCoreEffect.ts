@@ -125,14 +125,14 @@ export interface CoreEffectOpts {
   side: number;
   /** Screen-space edge length of one corner node (= 1 conduit cell). */
   nodeSize: number;
-  /** 0..1 — how strongly the effect shows (usually HP fraction; 0 => nothing). */
-  intensity: number;
+  /** 0..1 fraction or an array of 4 fractions for independent cores. */
+  intensity: number | [number, number, number, number];
   /** Seconds, for scrolling the layers. */
   timeSec: number;
-  /** Per-building constant so neighbours don't scroll in lock-step. */
+  /** Ensures different buildings have uncorrelated noise offsets. */
   seed: number;
-  /** Allow the warm frame bloom (caller already checks the graphics tier). */
-  glow: boolean;
+  /** Whether to draw the outer bloom. Can be disabled if masking limits it anyway. */
+  glow?: boolean;
 }
 
 /** Layer scroll directions (unit-ish vectors) and relative speeds / scales. */
@@ -147,28 +147,74 @@ const LAYERS = [
  * along each edge that connects them (kept flush to the outer edge so it reads
  * like the original connecting lines in the base art).
  */
-function maskPath(x: number, y: number, side: number, node: number): Path2D {
+function maskPath(x: number, y: number, side: number, node: number, coreIndex?: number): Path2D {
   const p = new Path2D();
   const n = Math.min(node, side * 0.5);
-  // corners
-  p.rect(x, y, n, n);
-  p.rect(x + side - n, y, n, n);
-  p.rect(x, y + side - n, n, n);
-  p.rect(x + side - n, y + side - n, n, n);
-  // connecting bands (flush to each edge, spanning the gap between the squares)
   const bw = Math.max(1, n * 0.4);
   const gap = side - 2 * n;
-  if (gap > 0) {
-    p.rect(x + n, y, gap, bw); // top
-    p.rect(x + n, y + side - bw, gap, bw); // bottom
-    p.rect(x, y + n, bw, gap); // left
-    p.rect(x + side - bw, y + n, bw, gap); // right
+
+  if (coreIndex === undefined) {
+    p.rect(x, y, n, n);
+    p.rect(x + side - n, y, n, n);
+    p.rect(x, y + side - n, n, n);
+    p.rect(x + side - n, y + side - n, n, n);
+    if (gap > 0) {
+      p.rect(x + n, y, gap, bw);
+      p.rect(x + n, y + side - bw, gap, bw);
+      p.rect(x, y + n, bw, gap);
+      p.rect(x + side - bw, y + n, bw, gap);
+    }
+  } else {
+    // Top Left
+    if (coreIndex === 0) {
+      p.rect(x, y, n, n);
+      if (gap > 0) {
+        p.rect(x + n, y, gap / 2, bw);
+        p.rect(x, y + n, bw, gap / 2);
+      }
+    }
+    // Top Right
+    else if (coreIndex === 1) {
+      p.rect(x + side - n, y, n, n);
+      if (gap > 0) {
+        p.rect(x + n + gap / 2, y, gap / 2, bw);
+        p.rect(x + side - bw, y + n, bw, gap / 2);
+      }
+    }
+    // Bottom Left
+    else if (coreIndex === 2) {
+      p.rect(x, y + side - n, n, n);
+      if (gap > 0) {
+        p.rect(x + n, y + side - bw, gap / 2, bw);
+        p.rect(x, y + n + gap / 2, bw, gap / 2);
+      }
+    }
+    // Bottom Right
+    else if (coreIndex === 3) {
+      p.rect(x + side - n, y + side - n, n, n);
+      if (gap > 0) {
+        p.rect(x + n + gap / 2, y + side - bw, gap / 2, bw);
+        p.rect(x + side - bw, y + n + gap / 2, bw, gap / 2);
+      }
+    }
   }
   return p;
 }
 
-export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: CoreEffectOpts): void {
-  const { x, y, side, nodeSize, timeSec, seed, glow } = opts;
+export interface FieryCoreOpts {
+  path: Path2D;
+  x: number;
+  y: number;
+  side: number;
+  nodeSize: number; // used for scaling the noise
+  intensity: number;
+  timeSec: number;
+  seed: number;
+  glow?: boolean;
+}
+
+export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOpts): void {
+  const { path, x, y, side, nodeSize, timeSec, seed, glow } = opts;
   const intensity = Math.max(0, Math.min(1, opts.intensity));
   if (intensity <= 0.001 || side < 6) return;
 
@@ -176,9 +222,7 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
   if (!noiseTile) noiseTile = buildNoiseTile();
   const tile = noiseTile;
 
-  const path = maskPath(x, y, side, nodeSize);
   const n = Math.min(nodeSize, side * 0.5);
-
   const layers = LAYERS.slice(0, layerCount);
   const tileRun = (drawn: number, ox: number, oy: number) => {
     for (let ty = -1; ty <= Math.ceil(side / drawn) + 1; ty++) {
@@ -213,8 +257,7 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
   ctx.fillStyle = grad;
   ctx.fillRect(x, y, side, side);
 
-  // 2) carve the flame shapes out of the bed — dark noise gaps darken it, so
-  //    the sharp ridged pattern reads as licking fire tongues.
+  // 2) carve the flame shapes out of the bed
   ctx.globalCompositeOperation = 'multiply';
   for (let li = 0; li < layers.length; li++) {
     const s = scroll(li);
@@ -222,7 +265,7 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
     tileRun(s.drawn, s.ox, s.oy);
   }
 
-  // 3) additive hot cores — the brightest noise crests glow white-yellow.
+  // 3) additive hot cores
   ctx.globalCompositeOperation = 'lighter';
   for (let li = 0; li < layers.length; li++) {
     const s = scroll(li);
@@ -232,9 +275,22 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
 
   ctx.restore();
 
-  // 4) soft warm shader-style bloom around the node frame (High / Ultra only).
-  //    Shared renderer — same glow reused by laser beams etc. (see warmGlow.ts).
   if (glow && glowEnabled) {
     renderWarmGlow(ctx, path, { intensity, ...warmGlowFrameStyle(n) });
+  }
+}
+
+export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: CoreEffectOpts): void {
+  if (Array.isArray(opts.intensity)) {
+    for (let i = 0; i < 4; i++) {
+      const v = opts.intensity[i];
+      if (v > 0.001) {
+        const path = maskPath(opts.x, opts.y, opts.side, opts.nodeSize, i);
+        renderFieryCore(ctx, { ...opts, intensity: v, path, glow: opts.glow ?? true });
+      }
+    }
+  } else {
+    const path = maskPath(opts.x, opts.y, opts.side, opts.nodeSize);
+    renderFieryCore(ctx, { ...opts, intensity: opts.intensity as number, path, glow: opts.glow ?? true });
   }
 }

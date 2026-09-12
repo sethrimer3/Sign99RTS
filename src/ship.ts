@@ -14,6 +14,14 @@ import { getDistantSunScreenPosition } from './suns.js';
 import { getCinematicLevel } from './cinematic.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
+import {
+  drawProceduralShip, shipDesignRadius,
+  damageStageForHealth,
+  type ProceduralShipDefinition,
+} from './proceduralShips.js';
+import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
+import { gameplayFleetDesign } from './shipFamilies.js';
+import type { ShipDebrisSystem } from './shipDebris.js';
 
 const BATTERY_MAX = 100;
 const BATTERY_REGEN_RATE = 16;
@@ -117,6 +125,22 @@ export class PlayerShip extends Entity {
   /** Countdown timer for the brief shield-hit flash ring (set when shield absorbs damage). */
   private shieldHitFlashTimer = 0;
   faction: FactionType = 'terran';
+  /**
+   * Optional procedural hull. Null renders the stock triangle, unchanged.
+   *
+   * This is runtime state pointing at an immutable, shared definition — never copy the
+   * params per ship, or every ship gets its own cached geometry. To give a unit type a
+   * fixed look, declare one module-level definition and assign it:
+   *
+   *   const frigateDesign: ProceduralShipDefinition = { seed: 4404, params: { ...DEFAULT_PARAMS, spanToLength: 0.62 } };
+   *   ship.setDesign(frigateDesign);
+   *
+   * The Ship Lab can override P1's family; all other colours retain their fixed fleet.
+   */
+  design: ProceduralShipDefinition | null = null;
+
+  /** HP stage for diagnostics. Actual missing pieces are tracked by hullDamage. */
+  private damageStage = 0;
   synonymousPierceMultiplier = 1;
   synonymousFireSpeedLevel = 0;
   synonymousVitalityUnlocked = false;
@@ -215,6 +239,9 @@ export class PlayerShip extends Entity {
     this.baseEnergyRegenRate = this.baseBatteryRegenRate;
     this.friction = 1.0;
     this.aimWorld = new Vec2(position.x + 100, position.y);
+    // Dev override from the Ship Lab, if one has been set. No-op when the key is absent.
+    this.design = gameplayFleetDesign(team, 'hero');
+    this.hullDamage = new ShipHullDamage(() => this.design);
   }
 
   update(dt: number): void {
@@ -278,6 +305,8 @@ export class PlayerShip extends Entity {
     this.velocity = new Vec2(0, 0);
     this.health = this.maxHealth;
     this.alive = true;
+    this.damageStage = 0;
+    this.hullDamage?.reset();
     this.battery = this.maxBattery;
     this.energyRegenDelay = 0;
     this.energyDrainMark = this.maxBattery;
@@ -584,6 +613,23 @@ export class PlayerShip extends Entity {
     }
   }
 
+  /** Swap the hull renderer. Pass null to return to the stock triangle. */
+  setDesign(design: ProceduralShipDefinition | null): void {
+    this.design = design;
+    this.damageStage = 0;
+    this.hullDamage?.reset();
+  }
+
+  /** Repair / fallback HP reconciliation and pooled debris emission, once per tick. */
+  updateDamageVisuals(debris: ShipDebrisSystem | null, hit: Vec2 | null = null): void {
+    if (!this.design) return;
+    this.hullDamage?.flush(this, debris, teamColor(this.team));
+    this.damageStage = damageStageForHealth(this.healthFraction);
+  }
+
+  /** Current visual damage stage (diagnostics / dev preview). */
+  get visualDamageStage(): number { return this.damageStage; }
+
   setFaction(faction: FactionType): void {
     this.faction = faction;
     if (faction === 'synonymous') {
@@ -599,9 +645,9 @@ export class PlayerShip extends Entity {
     return baseCooldown / fireRateMultiplier;
   }
 
-  override takeDamage(amount: number, source?: Entity): void {
+  override takeDamage(amount: number, source?: Entity, impact?: HullImpact): void {
     if (!this.alive || amount <= 0) {
-      super.takeDamage(amount, source);
+      super.takeDamage(amount, source, impact);
       return;
     }
     // Spawn invincibility blocks all incoming damage during the grace period
@@ -616,7 +662,7 @@ export class PlayerShip extends Entity {
       }
     }
     this.healthRegenDelay = PASSIVE_HEALTH_REGEN_DELAY;
-    if (amount > 0) super.takeDamage(amount, source);
+    if (amount > 0) super.takeDamage(amount, source, impact);
   }
 
   private updateShield(dt: number): void {
@@ -637,7 +683,12 @@ export class PlayerShip extends Entity {
     if (this.health > 0 && this.health < this.maxHealth) {
       const fullEnergy = this.battery >= this.maxBattery;
       const regenMult = fullEnergy ? FULL_ENERGY_HEALTH_REGEN_MULT : 1;
-      this.health = Math.min(this.maxHealth, this.health + PASSIVE_HEALTH_REGEN_RATE * regenMult * dt);
+      const amount = PASSIVE_HEALTH_REGEN_RATE * regenMult * dt;
+      if (this.hullDamage) {
+        this.hullDamage.repair(this, amount);
+      } else {
+        this.health = Math.min(this.maxHealth, this.health + amount);
+      }
     }
   }
 
@@ -844,6 +895,16 @@ export class PlayerShip extends Entity {
     const coreColor = teamColor(this.team);
     this.drawDashTrail(ctx, camera, coreColor);
     this.drawMotionTrail(ctx, camera, coreColor);
+    if (this.design) {
+      // Normalise the design's own world-space length against this unit's radius so the
+      // ship occupies the same footprint as the stock hull whatever the design's scale.
+      const scale = (this.radius * 1.4) / shipDesignRadius(this.design);
+      drawProceduralShip(ctx, camera, this.design, {
+        position: this.position, rotation: this.angle, scale, color: coreColor,
+        damageMesh: this.hullDamage?.renderMesh(),
+      });
+      return;
+    }
     if (this.faction === 'synonymous') {
       if (!this.synonymousRenderer) this.synonymousRenderer = new SynonymousShipRenderer();
       this.synonymousRenderer.draw(ctx, camera, this, Input.isDown('q'));

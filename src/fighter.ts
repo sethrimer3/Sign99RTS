@@ -7,6 +7,9 @@ import { TICK_RATE } from './constants.js';
 import { Shipyard } from './building.js';
 import { Colors, colorToCSS, Color } from './colors.js';
 import { ENTITY_RADIUS, HP_VALUES, PLAYER_SHIP_SCALE, SHIP_STATS, WEAPON_STATS } from './constants.js';
+import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
+import { gameplayFleetDesign } from './shipFamilies.js';
+import { drawProceduralShip, shipDesignRadius, type ProceduralShipDefinition } from './proceduralShips.js';
 import { teamColor } from './teamutils.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
@@ -90,6 +93,11 @@ interface TrailPoint {
   age: number;
 }
 
+const fighterPreviewCamera = new Camera();
+fighterPreviewCamera.setScreenSize(0, 0);
+fighterPreviewCamera.zoom = 1;
+const fighterPreviewOrigin = new Vec2(0, 0);
+
 /** Canonical Terran fighter hull, shared by gameplay and miniature UI previews. */
 export function drawTerranFighterHull(
   ctx: CanvasRenderingContext2D,
@@ -98,23 +106,13 @@ export function drawTerranFighterHull(
   hostile: boolean,
   alpha: number = 0.72,
 ): void {
-  ctx.strokeStyle = colorToCSS(color, alpha);
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  if (hostile) {
-    ctx.moveTo(-r * 0.18, -r * 0.12);
-    ctx.lineTo(-r * 1.0, -r * 0.92);
-    ctx.lineTo(-r * 0.58, -r * 0.30);
-    ctx.moveTo(-r * 0.18, r * 0.12);
-    ctx.lineTo(-r * 1.0, r * 0.92);
-    ctx.lineTo(-r * 0.58, r * 0.30);
-  }
-  ctx.moveTo(r * 1.2, 0);
-  ctx.lineTo(-r * 0.6, -r * 0.6);
-  ctx.lineTo(-r * 0.3, 0);
-  ctx.lineTo(-r * 0.6, r * 0.6);
-  ctx.closePath();
-  ctx.stroke();
+  const def = gameplayFleetDesign(hostile ? Team.Player2 : Team.Player1, 'fighter');
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  drawProceduralShip(ctx, fighterPreviewCamera, def, {
+    position: fighterPreviewOrigin, rotation: 0, scale: r * 1.4 / shipDesignRadius(def), color,
+  });
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +120,8 @@ export function drawTerranFighterHull(
 // ---------------------------------------------------------------------------
 
 export class FighterShip extends Entity {
+  fleetDesignOverride: ProceduralShipDefinition | null = null;
+  get design() { return this.fleetDesignOverride ?? gameplayFleetDesign(this.team, this.type === EntityType.Bomber ? 'bomber' : 'fighter'); }
   group: ShipGroup;
   docked: boolean = true;
   order: FighterOrder = 'idle';
@@ -182,6 +182,7 @@ export class FighterShip extends Entity {
       SHIP_STATS.fighter.health,
       ENTITY_RADIUS.fighter * PLAYER_SHIP_SCALE,
     );
+    this.hullDamage = new ShipHullDamage(() => this.design, 1.05);
     this.group = group;
     this.homeYard = homeYard;
     this.turnRate = SHIP_STATS.fighter.turnRate;
@@ -539,9 +540,9 @@ export class FighterShip extends Entity {
     this.shieldRegenDelay = 0;
   }
 
-  override takeDamage(amount: number, source?: Entity): void {
+  override takeDamage(amount: number, source?: Entity, impact?: HullImpact): void {
     if (!this.alive || amount <= 0) {
-      super.takeDamage(amount, source);
+      super.takeDamage(amount, source, impact);
       return;
     }
     this.markTookDamage();
@@ -551,7 +552,7 @@ export class FighterShip extends Entity {
       amount -= blocked;
       this.shieldRegenDelay = SHIELD_REGEN_DELAY;
     }
-    if (amount > 0) super.takeDamage(amount, source);
+    if (amount > 0) super.takeDamage(amount, source, impact);
   }
 
   protected markTookDamage(): void {
@@ -573,7 +574,12 @@ export class FighterShip extends Entity {
       return;
     }
     if (this.health > 0 && this.health < this.maxHealth) {
-      this.health = Math.min(this.maxHealth, this.health + PASSIVE_HEALTH_REGEN_RATE * dt);
+      const amount = PASSIVE_HEALTH_REGEN_RATE * dt;
+      if (this.hullDamage) {
+        this.hullDamage.repair(this, amount);
+      } else {
+        this.health = Math.min(this.maxHealth, this.health + amount);
+      }
     }
   }
 
@@ -727,6 +733,14 @@ export class FighterShip extends Entity {
     }
   }
 
+  protected drawFleetHull(ctx: CanvasRenderingContext2D, camera: Camera): void {
+    drawProceduralShip(ctx, camera, this.design, {
+      position: this.position, rotation: this.angle,
+      scale: this.radius * 1.05 / shipDesignRadius(this.design), color: teamColor(this.team),
+      damageMesh: this.hullDamage?.renderMesh(),
+    });
+  }
+
   // --- Drawing ---
 
   draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
@@ -736,27 +750,8 @@ export class FighterShip extends Entity {
     const coreColor = teamColor(this.team);
     this.drawMotionTrail(ctx, camera, coreColor);
 
-    // Damage flicker: near-death fighters flicker their outline and twist slightly
-    const damageFrac = 1 - this.healthFraction;
     const coreTime = performance.now() * 0.001 + this.orbitPhase;
-    let outlineAlpha = 0.72;
-    if (damageFrac > 0.55) {
-      // High-frequency flicker when critically damaged
-      const flicker = 0.5 + 0.5 * Math.sin(coreTime * (12 + this.id % 7));
-      outlineAlpha = 0.25 + flicker * 0.55 * (1 - (damageFrac - 0.55) / 0.45);
-    }
-    // Small random angle twist when near death (uses id+time for per-ship variation)
-    const twistOffset = damageFrac > 0.70
-      ? Math.sin(coreTime * 8.3 + this.id * 0.41) * 0.18 * ((damageFrac - 0.70) / 0.30)
-      : 0;
-
-    ctx.save();
-    ctx.translate(screen.x, screen.y);
-    ctx.rotate(this.angle + twistOffset);
-
-    drawTerranFighterHull(ctx, r, coreColor, this.team !== Team.Player, outlineAlpha);
-
-    ctx.restore();
+    this.drawFleetHull(ctx, camera);
 
     const groupColor = GROUP_COLORS[this.group];
     const pulse = 0.5 + 0.5 * Math.sin(coreTime * 2.8);
@@ -850,6 +845,7 @@ export class SynonymousFighterShip extends FighterShip {
     advanced: boolean = false,
   ) {
     super(position, team, group, homeYard);
+    this.hullDamage = null;
     this.droneCount = advanced ? 6 : 3;
     this.droneHp = Array(this.droneCount).fill(HP_VALUES.synonymousFighterDrone);
     this.maxHealth = this.droneCount * HP_VALUES.synonymousFighterDrone;
@@ -916,9 +912,9 @@ export class SynonymousFighterShip extends FighterShip {
     );
   }
 
-  override takeDamage(amount: number, source?: Entity): void {
+  override takeDamage(amount: number, source?: Entity, impact?: HullImpact): void {
     if (!this.alive || amount <= 0) {
-      super.takeDamage(amount, source);
+      super.takeDamage(amount, source, impact);
       return;
     }
     let remaining = amount;
@@ -1083,25 +1079,7 @@ export class BomberShip extends FighterShip {
     const coreColor = teamColor(this.team);
     this.drawMotionTrail(ctx, camera, coreColor);
 
-    ctx.save();
-    ctx.translate(screen.x, screen.y);
-    ctx.rotate(this.angle);
-
-    // Larger diamond shape — team-colored for identity
-    const bomberOutline = this.team === Team.Player
-      ? colorToCSS(Colors.bullet_player_cannon, 0.78)
-      : colorToCSS(Colors.particles_explosion1, 0.82);
-    ctx.strokeStyle = bomberOutline;
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-    ctx.moveTo(r * 1.0, 0);
-    ctx.lineTo(0, -r * 0.7);
-    ctx.lineTo(-r * 0.8, 0);
-    ctx.lineTo(0, r * 0.7);
-    ctx.closePath();
-    ctx.stroke();
-
-    ctx.restore();
+    this.drawFleetHull(ctx, camera);
 
     const coreTime = performance.now() * 0.001;
     const groupColor = GROUP_COLORS[this.group];
@@ -1194,28 +1172,9 @@ export class SwarmShip extends FighterShip {
 
   override draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive || this.docked) return;
-    const screen = camera.worldToScreen(this.position);
-    const r = Math.max(1.6, this.radius * camera.zoom);
-    const color = teamColor(this.team);
-    ctx.save();
-    ctx.translate(screen.x, screen.y);
-    ctx.rotate(this.angle);
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.strokeStyle = colorToCSS(color, 0.74);
-    ctx.lineWidth = Math.max(0.8, camera.zoom);
-    ctx.beginPath();
-    ctx.moveTo(r * 1.25, 0);
-    ctx.lineTo(-r * 0.65, -r * 0.45);
-    ctx.lineTo(-r * 0.35, 0);
-    ctx.lineTo(-r * 0.65, r * 0.45);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = colorToCSS(color, 0.55);
-    ctx.beginPath();
-    ctx.arc(0, 0, r * 0.34, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    this.drawFleetHull(ctx, camera);
   }
+
 }
 
 const NOVA_BOMBER_DRONES = 10;
@@ -1231,6 +1190,7 @@ export class SynonymousNovaBomberShip extends BomberShip {
 
   constructor(position: Vec2, team: Team, group: ShipGroup, homeYard: Shipyard | null = null) {
     super(position, team, group, homeYard);
+    this.hullDamage = null;
     this.weaponRange = 245;
     this.fireRate = 130;
     this.maxHealth = NOVA_BOMBER_DRONES * NOVA_BOMBER_DRONE_HP;
@@ -1285,9 +1245,9 @@ export class SynonymousNovaBomberShip extends BomberShip {
     if (this.charging) this.chargeTimer += dt;
   }
 
-  override takeDamage(amount: number, source?: Entity): void {
+  override takeDamage(amount: number, source?: Entity, impact?: HullImpact): void {
     if (!this.alive || amount <= 0) {
-      super.takeDamage(amount, source);
+      super.takeDamage(amount, source, impact);
       return;
     }
     // Conservative sub-drone adapter: incoming damage is assigned to one

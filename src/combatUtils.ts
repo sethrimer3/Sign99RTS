@@ -208,7 +208,7 @@ export function damageLaserLine(
     const dist = Math.hypot(target.position.x - px, target.position.y - py);
     if (dist <= target.radius + hitRadius) {
       alreadyHit?.add(target.id);
-      target.takeDamage(damage, source);
+      target.takeDamage(damage, source, { kind: 'laser', x: start.x, y: start.y, dx, dy, radius: hitRadius });
       state.recentlyDamaged.add(target.id);
       if (!target.alive) {
         state.particles.emitExplosion(target.position, target.radius);
@@ -261,7 +261,7 @@ export function damageLaserLineLimited(
   const count = Math.min(pierceCount, hits.length);
   for (let i = 0; i < count; i++) {
     const target = hits[i].target;
-    target.takeDamage(damage, source);
+    target.takeDamage(damage, source, { kind: 'laser', x: start.x, y: start.y, dx, dy, radius: hitRadius });
     state.recentlyDamaged.add(target.id);
     if (!target.alive) {
       state.particles.emitExplosion(target.position, target.radius);

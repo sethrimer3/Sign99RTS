@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ResearchLab, CommandPost } from './building.js';
 import { Vec2 } from './math.js';
 import { Team } from './entities.js';
@@ -150,6 +150,8 @@ describe('ResearchLab visual effects, speeds, and orbital dots', () => {
       translate: () => {},
       rotate: () => {},
       scale: () => {},
+      clip: () => {},
+        ellipse: () => {},
       beginPath: () => {},
       closePath: () => {},
       arc: () => {},
@@ -165,7 +167,17 @@ describe('ResearchLab visual effects, speeds, and orbital dots', () => {
       canvas: { width: 1280, height: 720 },
     } as unknown as CanvasRenderingContext2D;
 
+    class MockPath2D {
+      rect() {}
+      arc() {}
+      moveTo() {}
+      lineTo() {}
+      closePath() {}
+      bezierCurveTo() {}
+    }
+    vi.stubGlobal('Path2D', MockPath2D);
     expect(() => lab.draw(mockCtx, camera)).not.toThrow();
+    vi.unstubAllGlobals();
   });
 });
 

@@ -1,0 +1,139 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fleetDesign } from './shipFamilies.js';
+import { ShipHullDamage, type HullBody, type HullImpact } from './shipHullDamage.js';
+import { getShipGeometry, invalidateShipGeometryCache, shipDesignRadius } from './proceduralShips.js';
+import { PlayerShip } from './ship.js';
+import { FighterShip } from './fighter.js';
+import { Vec2 } from './math.js';
+import { Team, ShipGroup } from './entities.js';
+import { ShipDebrisSystem } from './shipDebris.js';
+import { Colors } from './colors.js';
+import { GameState } from './gamestate.js';
+import { damageLaserLine } from './combatUtils.js';
+
+class TestPath { moveTo() {} lineTo() {} closePath() {} addPath() {} }
+beforeEach(() => { vi.stubGlobal('Path2D', TestPath); invalidateShipGeometryCache(); });
+afterEach(() => vi.unstubAllGlobals());
+function fixture(team = 1) {
+  const def = fleetDesign(team, 'hero');
+  const body: HullBody = { position: new Vec2(0, 0), angle: 0, radius: shipDesignRadius(def), health: 100, maxHealth: 100, alive: true };
+  const hull = new ShipHullDamage(() => def, 1);
+  const geo = getShipGeometry(def);
+  const hit = (kind: HullImpact['kind'], damage = 8, side = -1) => {
+    body.health -= damage;
+    hull.hit(body, damage, { kind, x: 0, y: side * 200, dx: 0, dy: -side });
+    return hull.removedIndices.map(i => geo.polygons[i]);
+  };
+  return { def, body, hull, geo, hit };
+}
+
+describe('fixed player fleets', () => {
+  it('has eight repeatable silhouettes with related, simpler escorts', () => {
+    const seeds = new Set<number>();
+    const shapes = new Set<string>();
+    for (let team = 1; team <= 8; team++) {
+      const hero = fleetDesign(team, 'hero'), fighter = fleetDesign(team, 'fighter');
+      seeds.add(hero.seed);
+      shapes.add(JSON.stringify(getShipGeometry(hero).outline));
+      expect(fleetDesign(team, 'hero')).toBe(hero);
+      expect(fighter.seed).toBe(hero.seed);
+      expect(fighter.params.wingPairs).toBe(hero.params.wingPairs);
+      expect(fighter.params.spanToLength).toBe(hero.params.spanToLength);
+      expect(getShipGeometry(fighter).polyCount).toBeLessThan(getShipGeometry(hero).polyCount);
+      const a = new PlayerShip(new Vec2(0, 0), team as Team);
+      const b = new FighterShip(new Vec2(0, 0), team as Team, ShipGroup.Red);
+      expect(a.design).toBe(hero);
+      expect(b.design).toBe(fighter);
+      expect(new FighterShip(new Vec2(20, 0), team as Team, ShipGroup.Blue).design).toBe(b.design);
+    }
+    expect(seeds.size).toBe(8); expect(shapes.size).toBe(8);
+  });
+});
+
+describe('impact-directed structural damage', () => {
+  it('bullets remove the facing surface and opposite shots choose opposite sides', () => {
+    const left = fixture().hit('bullet'), right = fixture().hit('bullet', 8, 1);
+    expect(left[0].cy).toBeLessThan(0);
+    expect(right[0].cy).toBeGreaterThan(0);
+    expect(left.filter(p => p.cy < 0).length).toBeGreaterThan(left.length * 0.8);
+    expect(right.filter(p => p.cy > 0).length).toBeGreaterThan(right.length * 0.8);
+  });
+  it('piercing beams remove both entry and exit material', () => {
+    const pieces = fixture().hit('laser');
+    expect(pieces[0].cy).toBeLessThan(0);
+    expect(pieces[1].cy).toBeGreaterThan(0);
+    expect(pieces.filter(p => p.cy < 0).length).toBeGreaterThan(1);
+    expect(pieces.filter(p => p.cy > 0).length).toBeGreaterThan(1);
+  });
+  it('explosions spread over a facing region and larger hits remove more', () => {
+    const small = fixture().hit('explosion', 5), big = fixture().hit('explosion', 20);
+    expect(big.length).toBeGreaterThan(small.length);
+    expect(small.filter(p => p.cy < 0).length).toBeGreaterThan(small.length * 0.8);
+    const bullet = fixture().hit('bullet', 5);
+    const spread = (p: typeof small) => Math.max(...p.map(v => v.cx)) - Math.min(...p.map(v => v.cx));
+    expect(spread(small)).toBeGreaterThan(spread(bullet));
+  });
+  it('rotates the impact into local hull coordinates deterministically', () => {
+    const a = fixture(), b = fixture(); a.hit('laser');
+    b.body.angle = Math.PI / 2; b.body.health = 92;
+    b.hull.hit(b.body, 8, { kind: 'laser', x: 200, y: 0, dx: -1, dy: 0 });
+    expect(b.hull.removedIndices).toEqual(a.hull.removedIndices);
+  });
+  it('successive hits dig deeper without emitting the same piece twice', () => {
+    const f = fixture(); f.hit('bullet'); const first = [...f.hull.removedIndices];
+    f.hit('bullet');
+    expect(f.hull.removedIndices.length).toBeGreaterThan(first.length);
+    expect(new Set(f.hull.removedIndices).size).toBe(f.hull.removedIndices.length);
+    expect(f.hull.removedIndices.slice(0, first.length)).toEqual(first);
+  });
+  it('repairs progressively, shares intact geometry and only rebakes changed damage', () => {
+    const f = fixture(); expect(f.hull.renderMesh()).toBeNull(); f.hit('bullet', 30);
+    const mesh = f.hull.renderMesh(); expect(f.hull.renderMesh()).toBe(mesh);
+    const count = f.hull.removedIndices.length;
+    f.hull.repair(f.body, 10);
+    expect(f.hull.removedIndices.length).toBeLessThan(count);
+    expect(f.hull.renderMesh()).not.toBe(mesh);
+    f.hull.repair(f.body, 100);
+    expect(f.hull.removedIndices).toEqual([]); expect(f.hull.renderMesh()).toBeNull();
+  });
+  it('copies exact removal state through JSON snapshots without repeat debris', () => {
+    const host = fixture(), client = fixture(); host.hit('laser', 23);
+    client.body.health = host.body.health;
+    const snapshot = JSON.parse(JSON.stringify(host.hull.snapshot()));
+    client.hull.applySnapshot(snapshot, client.body);
+    expect(client.hull.removedIndices).toEqual(host.hull.removedIndices);
+    const debris = new ShipDebrisSystem();
+    client.hull.flush(client.body, debris, Colors.mainguy); const count = debris.activeCount;
+    client.hull.applySnapshot(snapshot, client.body);
+    client.hull.flush(client.body, debris, Colors.mainguy);
+    expect(debris.activeCount).toBe(count);
+    client.body.health = 100; client.hull.applySnapshot(undefined, client.body);
+    expect(client.hull.removedIndices).toEqual([]);
+  });
+  it('works in headless simulations without Canvas or Path2D', () => {
+    vi.stubGlobal('Path2D', undefined); invalidateShipGeometryCache();
+    expect(fixture().hit('bullet').length).toBeGreaterThan(0);
+  });
+  it('absorbed damage and healing shed nothing; only actual hull damage counts', () => {
+    const ship = new PlayerShip(new Vec2(0, 0));
+    ship.takeDamage(10); expect(ship.hullDamage?.removedIndices).toEqual([]);
+    ship.spawnInvincibilityTimer = 0;
+    ship.areaShield = { absorbDamage: () => 0 };
+    ship.takeDamage(10); expect(ship.hullDamage?.removedIndices).toEqual([]);
+    ship.areaShield = null; ship.shieldUnlocked = true; ship.shield = 10;
+    ship.takeDamage(10); expect(ship.hullDamage?.removedIndices).toEqual([]);
+    ship.takeDamage(ship.maxHealth * 0.1);
+    const count = ship.hullDamage!.removedIndices.length; expect(count).toBeGreaterThan(0);
+    ship.takeDamage(-10); expect(ship.hullDamage!.removedIndices.length).toBe(count);
+  });
+  it('pooled bullets and beam combat helpers supply the actual trajectory to fighters', () => {
+    const state = new GameState();
+    const fighter = new FighterShip(new Vec2(0, 0), Team.Enemy, ShipGroup.Red);
+    fighter.docked = false; state.addEntity(fighter);
+    const hit = vi.spyOn(fighter.hullDamage!, 'hit');
+    state.applyDirectBulletHit(fighter, 1, 0, -20, 0, 100, null);
+    expect(hit.mock.calls[0][2]).toMatchObject({ kind: 'bullet', dx: 0, dy: 100 });
+    damageLaserLine(state, null, state.player, new Vec2(0, -200), new Vec2(0, 200), 1);
+    expect(hit.mock.calls.at(-1)?.[2]).toMatchObject({ kind: 'laser', dx: 0, dy: 400 });
+  });
+});

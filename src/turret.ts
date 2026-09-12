@@ -217,7 +217,7 @@ export class GatlingTurret extends TurretBase {
     );
   }
 
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const screen = camera.worldToScreen(this.position);
     const r = this.radius * camera.zoom;
@@ -285,7 +285,7 @@ export class MissileTurret extends TurretBase {
     );
   }
 
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const screen = camera.worldToScreen(this.position);
     const r = this.radius * camera.zoom;
@@ -434,7 +434,7 @@ export class ExciterTurret extends TurretBase {
     this.exciterState = 'cooldown';
   }
 
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const screen = camera.worldToScreen(this.position);
     const r = this.radius * camera.zoom;
@@ -654,7 +654,7 @@ export class MassDriverTurret extends TurretBase {
     );
   }
 
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const screen = camera.worldToScreen(this.position);
     const r = this.radius * camera.zoom;
@@ -761,7 +761,7 @@ export class RegenTurret extends TurretBase {
     this.targetEntity = best;
   }
 
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const screen = camera.worldToScreen(this.position);
     const r = this.radius * camera.zoom;
@@ -873,7 +873,7 @@ export class TetherTurret extends TurretBase {
     this.beamTargetPos = null;
   }
 
-  draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const screen = camera.worldToScreen(this.position);
     const r = this.radius * camera.zoom;
@@ -947,7 +947,7 @@ export class SynonymousMineLayer extends BuildingBase {
     this.mineTimer = 2.7;
   }
 
-  override draw(ctx: CanvasRenderingContext2D, camera: Camera): void {
+  protected override drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
     if (!this.alive) return;
     const screen = camera.worldToScreen(this.position);
     const side = this.radius * 2.6 * camera.zoom;

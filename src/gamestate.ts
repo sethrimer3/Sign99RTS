@@ -10,6 +10,7 @@ import { ChargedLaserBurst, MassDriverBullet, ProjectileBase, RegenBullet, Synon
 import { isSynonymousDriftMine } from './synonymousMine.js';
 import { FighterShip, SwarmShip, syncFighterResearchUpgrades } from './fighter.js';
 import { ParticleSystem } from './particles.js';
+import { ShipDebrisSystem, type DebrisCollider } from './shipDebris.js';
 import { RingEffectSystem } from './ringeffects.js';
 import { Camera } from './camera.js';
 import { Audio } from './audio.js';
@@ -196,6 +197,11 @@ export class GameState {
   gatlingField: GatlingField = new GatlingField();
   fighters: FighterShip[] = [];
   particles: ParticleSystem;
+  /** Shed procedural-hull components flying away. Visual only. */
+  shipDebris: ShipDebrisSystem;
+  /** Scratch buffers so the debris broadphase allocates nothing per frame. */
+  private debrisBroadphase: Entity[] = [];
+  private debrisProbe: Vec2 = new Vec2(0, 0);
   explosionGlows: ExplosionGlow[] = [];
   /** Ring/blackout pulse effects (PR9). */
   ringEffects: RingEffectSystem = new RingEffectSystem();
@@ -320,6 +326,21 @@ export class GameState {
   constructor(playerStart: Vec2 = new Vec2(0, 0)) {
     this.playerShips.set(0, new PlayerShip(playerStart, Team.Player));
     this.particles = new ParticleSystem();
+    this.shipDebris = new ShipDebrisSystem();
+    // Reuse the existing entity broadphase. Conduits are grid cells on `this.grid`, not
+    // Entity instances, so they are never returned here and are excluded by construction.
+    this.shipDebris.setColliderQuery((x, y, r, out) => {
+      this.debrisBroadphase.length = 0;
+      this.debrisProbe.x = x;
+      this.debrisProbe.y = y;
+      this.spatialIndex.queryCircle(this.debrisProbe, r, this.debrisBroadphase);
+      out.length = 0;
+      for (let i = 0; i < this.debrisBroadphase.length; i++) {
+        const e = this.debrisBroadphase[i];
+        if (e instanceof PlayerShip || e instanceof FighterShip || e instanceof BuildingBase) out.push(e);
+      }
+      return out;
+    });
     this.factionByTeam.set(Team.Player, 'terran');
     this.factionByTeam.set(Team.Enemy, 'terran');
   }
@@ -627,6 +648,14 @@ export class GameState {
 
     // Particles
     this.particles.update(dt);
+    this.shipDebris.update(dt);
+    for (const ship of this.playerShips.values()) ship.updateDamageVisuals(this.shipDebris);
+    for (const fighter of this.fighters) {
+      fighter.hullDamage?.flush(fighter, this.shipDebris, teamColor(fighter.team));
+    }
+    for (const b of this.buildings) {
+      b.buildingDamage?.flush(b as any, this.shipDebris, teamColor(b.team));
+    }
     this.updateExplosionGlows(dt);
     this.ringEffects.update(dt);
     this.ringEffects.prune();
@@ -812,7 +841,7 @@ export class GameState {
     velY: number,
     source: Entity | null,
   ): void {
-    target.takeDamage(damage, source ?? undefined);
+    target.takeDamage(damage, source ?? undefined, { kind: 'bullet', x: hitX, y: hitY, dx: velX, dy: velY });
     this.recentlyDamaged.add(target.id);
     if (!target.alive) {
       this.particles.emitExplosion(target.position, target.radius);
@@ -1287,7 +1316,7 @@ export class GameState {
       return;
     }
 
-    target.takeDamage(proj.damage, proj);
+    target.takeDamage(proj.damage, proj, { kind: 'bullet', x: proj.position.x, y: proj.position.y, dx: proj.velocity.x, dy: proj.velocity.y });
     this.recentlyDamaged.add(target.id);
     if (!target.alive) {
       this.particles.emitExplosion(target.position, target.radius);
@@ -1317,7 +1346,7 @@ export class GameState {
       // blast uses the shared 4-step ring falloff.
       const dmg = e === directTarget ? proj.damage : ringSplashDamage(proj.damage, d, blastRadius);
       if (dmg <= 0) continue;
-      e.takeDamage(dmg, proj);
+      e.takeDamage(dmg, proj, { kind: 'explosion', x: proj.position.x, y: proj.position.y, dx: e.position.x - proj.position.x, dy: e.position.y - proj.position.y });
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else {
@@ -1442,7 +1471,7 @@ export class GameState {
       if (d > proj.aoeRadius + e.radius) continue;
       const dmg = ringSplashDamage(proj.pulseDamage, d, proj.aoeRadius);
       if (dmg <= 0) continue;
-      e.takeDamage(dmg, proj);
+      e.takeDamage(dmg, proj, { kind: 'explosion', x: proj.position.x, y: proj.position.y, dx: e.position.x - proj.position.x, dy: e.position.y - proj.position.y });
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else {
@@ -1485,7 +1514,7 @@ export class GameState {
       if (d > radius + e.radius) continue;
       const dmg = ringSplashDamage(proj.damage, d, radius);
       if (dmg <= 0) continue;
-      e.takeDamage(dmg, proj);
+      e.takeDamage(dmg, proj, { kind: 'explosion', x: proj.position.x, y: proj.position.y, dx: e.position.x - proj.position.x, dy: e.position.y - proj.position.y });
       this.recentlyDamaged.add(e.id);
       if (!e.alive) this.playEntityExplosionSound(e);
       else {
@@ -1591,6 +1620,9 @@ export class GameState {
    */
   emitShipHitSpray(target: Entity, hitSource: Vec2, intensity: number = 1): void {
     if (isLegacyGraphics()) return;
+    // Weapon impacts shove nearby wreckage around. Reuses this existing hit path rather
+    // than adding a second one; purely a velocity change on cosmetic debris.
+    this.shipDebris.pushFrom(hitSource.x, hitSource.y, 90 + 40 * intensity, 55 * intensity);
     if (!(target instanceof PlayerShip || target instanceof FighterShip)) return;
     this.particles.emitShipDamageSpray(target.position, target.radius, hitSource, intensity);
   }
@@ -2006,6 +2038,7 @@ export class GameState {
       if (ship.alive) ship.draw(ctx, camera);
     }
     this.particles.draw(ctx, camera);
+    this.shipDebris.draw(ctx, camera);
     this.ringEffects.draw(ctx, camera);
   }
 

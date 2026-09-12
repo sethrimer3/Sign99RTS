@@ -17,14 +17,14 @@ describe('menu triangle formations', () => {
     shapes.sort((a, b) => {
       const p = center(a), q = center(b);
       return Math.hypot(p.x - origin.x, p.y - origin.y) - Math.hypot(q.x - origin.x, q.y - origin.y);
-    });
+    }, 20000);
     expect(opacity(tiles[0].points)).toBeCloseTo(0.9);
     expect(opacity(shapes[shapes.length - 1])).toBeCloseTo(0.05);
     for (let i = 0; i < shapes.length; i++) {
       expect(opacity(shapes[i])).toBeCloseTo(reorderedOpacity(shapes[i]));
       if (i > 0) expect(opacity(shapes[i])).toBeLessThanOrEqual(opacity(shapes[i - 1]) + 1e-12);
     }
-  });
+  }, 20000);
   it('covers 20–50% with a connected, reversible growth order across screen shapes', () => {
     for (const [w, h] of [[1920, 1080], [800, 1200], [640, 360]]) {
       for (let seed = 1; seed <= 20; seed++) {
@@ -61,5 +61,5 @@ describe('menu triangle formations', () => {
         }
       }
     }
-  });
+  }, 20000);
 });

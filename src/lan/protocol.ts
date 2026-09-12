@@ -1,3 +1,5 @@
+import type { HullSnapshot } from '../shipHullDamage.js';
+import type { ProceduralShipDefinition } from '../proceduralShips.js';
 /**
  * LAN multiplayer protocol message types for Sign99RTS.
  *
@@ -130,6 +132,8 @@ export interface MsgGameSnapshot {
 }
 
 export interface SerializedShip {
+  hull?: HullSnapshot;
+  design?: ProceduralShipDefinition | null;
   slotIndex: number;
   team: number;
   x: number; y: number;
@@ -140,6 +144,7 @@ export interface SerializedShip {
   battery: number;
   shield: number;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
 }
 
 export interface SerializedProjectile {
@@ -153,6 +158,10 @@ export interface SerializedProjectile {
 }
 
 export interface SerializedFighter {
+  design?: ProceduralShipDefinition;
+  hull?: HullSnapshot;
+  health?: number;
+  maxHealth?: number;
   id: number;
   /** EntityType enum value (Fighter or Bomber) */
   entityType: number;
@@ -161,6 +170,7 @@ export interface SerializedFighter {
   vx: number; vy: number;
   angle: number;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
   advancedTier?: boolean;
 }
 
@@ -189,6 +199,7 @@ export interface SerializedBuilding {
   buildProgress: number;
   powered: boolean;
   alive: boolean;
+  structure?: import('../buildingStructureDamage.js').BuildingStructureSnapshot;
   /** Upgrade housed by a physical research lab; absent for ordinary structures. */
   researchItem?: string;
   isResearching?: boolean;

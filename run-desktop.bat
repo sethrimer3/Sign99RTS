@@ -15,9 +15,9 @@ if exist "%BUNDLED_NODE%\node.exe" if exist "%BUNDLED_PNPM%" (
 
 if not defined PACKAGE_RUNNER (
   set "PACKAGE_MODE=npm"
-  where npm >nul 2>nul
-  if not errorlevel 1 npm --version >nul 2>nul
-  if not errorlevel 1 set "PACKAGE_RUNNER=npm"
+  for /f "delims=" %%N in ('where npm 2^>nul') do (
+    if not defined PACKAGE_RUNNER set "PACKAGE_RUNNER=%%N"
+  )
 )
 
 if not exist "package.json" (

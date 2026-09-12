@@ -41,7 +41,7 @@ export function fireTurretShots(state: GameState, localTeam: Team): void {
     if (angle !== null) b.turretAngle = angle;
     if (b.type === EntityType.RegenTurret) {
       b.consumeShot();
-      target.takeDamage(-10, b);
+      target.repair(10);
       state.particles.emitHealing(target.position);
       b.showBeam(target.position);
       Audio.playSoundAt('regenbullet', b.position);

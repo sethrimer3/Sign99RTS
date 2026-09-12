@@ -2,6 +2,8 @@
 
 import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
+import type { HullImpact, ShipHullDamage } from './shipHullDamage.js';
+import type { BuildingStructureDamage } from './buildingStructureDamage.js';
 
 export enum Team {
   Neutral = 0,
@@ -99,6 +101,8 @@ export abstract class Entity {
   radius: number;
   alive: boolean;
   lastDamageSource: Entity | null = null;
+  hullDamage: ShipHullDamage | null = null;
+  buildingDamage: BuildingStructureDamage | null = null;
   /** Assigned each tick while this entity is inside an allied defensive shield. */
   areaShield: AreaShield | null = null;
 
@@ -142,19 +146,58 @@ export abstract class Entity {
   abstract update(dt: number): void;
   abstract draw(ctx: CanvasRenderingContext2D, camera: Camera): void;
 
-  takeDamage(amount: number, _source?: Entity): void {
+  takeDamage(amount: number, _source?: Entity, impact?: HullImpact): void {
     if (!this.alive) return;
     const incomingDamage = amount > 0;
     if (incomingDamage && this.areaShield) amount = this.areaShield.absorbDamage(amount, _source);
     if (incomingDamage && amount <= 0) return;
     if (amount > 0 && _source) this.lastDamageSource = _source;
-    this.health -= amount;
-    if (this.health <= 0) {
-      this.health = 0;
-      this.destroy();
+    if (amount > 0 && this.hullDamage) {
+      const fallback: HullImpact | undefined = _source ? {
+        kind: _source.type === EntityType.Laser || _source.type === EntityType.ExciterBeam ? 'laser' : 'bullet',
+        x: _source.position.x, y: _source.position.y,
+        dx: _source.velocity.length() > 0.001 ? _source.velocity.x : this.position.x - _source.position.x,
+        dy: _source.velocity.length() > 0.001 ? _source.velocity.y : this.position.y - _source.position.y,
+      } : undefined;
+      this.hullDamage.hit(this, amount, impact ?? fallback);
+      if (this.health <= 0 || this.hullDamage.coreIntegrity <= 0) {
+        this.health = 0;
+        this.destroy();
+      }
+    } else if (amount > 0 && this.buildingDamage) {
+      const fallback: HullImpact | undefined = _source ? {
+        kind: _source.type === EntityType.Laser || _source.type === EntityType.ExciterBeam ? 'laser' : 'bullet',
+        x: _source.position.x, y: _source.position.y,
+        dx: _source.velocity.length() > 0.001 ? _source.velocity.x : this.position.x - _source.position.x,
+        dy: _source.velocity.length() > 0.001 ? _source.velocity.y : this.position.y - _source.position.y,
+      } : undefined;
+      // BuildingStructureBody has footprintCells, which is expected by buildingDamage.
+      // We will cast this as any here to avoid cyclic type dependencies if needed, or just let structural typing work.
+      this.buildingDamage.hit(this as any, amount, impact ?? fallback);
+      if (this.health <= 0 || this.buildingDamage.connectedMass <= 0) {
+        this.health = 0;
+        this.destroy();
+      }
+    } else {
+      this.health -= amount;
+      if (this.health <= 0) {
+        this.health = 0;
+        this.destroy();
+      }
     }
     if (this.health > this.maxHealth) {
       this.health = this.maxHealth;
+    }
+  }
+
+  repair(amount: number): void {
+    if (!this.alive || amount <= 0) return;
+    if (this.hullDamage) {
+      this.hullDamage.repair(this as any, amount);
+    } else if (this.buildingDamage) {
+      this.buildingDamage.repair(this as any, amount);
+    } else {
+      this.health = Math.min(this.maxHealth, this.health + amount);
     }
   }
 

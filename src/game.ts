@@ -1,3 +1,5 @@
+import { teamColor } from './teamutils.js';
+import { fleetDesign } from './shipFamilies.js';
 /** Main game coordinator for Sign99 */
 
 import { Vec2 } from './math.js';
@@ -167,6 +169,7 @@ export class Game {
   private fighterExhaustAccum: number = 0;
   private activeGuidedMissile: GuidedMissile | null = null;
   private spaceFluid: SpaceFluid;
+  private debrisFluidWired = false;
   private glowLayer: GlowLayer;
   private crystalNebula: CrystalNebula;
   private distantSuns: DistantSuns;
@@ -457,6 +460,21 @@ export class Game {
     renderBudget.update(this.lastFrameMs, this.lastFixedUpdateMs, this.lastRenderMs);
     // Wire adaptive scale into particle system
     this.state.particles.setAdaptiveScale(renderBudget.renderLoadScale);
+    this.state.shipDebris.setAdaptiveScale(renderBudget.renderLoadScale);
+    if (!this.debrisFluidWired) {
+      this.debrisFluidWired = true;
+      // Drifting wreckage stirs the space dust in its wake. One-directional on purpose:
+      // debris emits impulses, it never samples the field.
+      this.state.shipDebris.setFluidSink((x, y, vx, vy, color) => {
+        this.spaceFluid.addForce({
+          x, y, vx, vy,
+          r: Math.min(255, color.r * color.intensity),
+          g: Math.min(255, color.g * color.intensity),
+          b: Math.min(255, color.b * color.intensity),
+          strength: 0.5,
+        });
+      });
+    }
 
     requestAnimationFrame((t) => this.loop(t));
   }
@@ -2054,7 +2072,13 @@ export class Game {
             }
           }
           // Sync health/battery regardless of position correction.
+          const localDesign = sd.design === undefined ? fleetDesign(sd.team, 'hero') : sd.design;
+          if (localShip.design !== localDesign && (sd.design === undefined || JSON.stringify(localShip.design) !== JSON.stringify(localDesign))) localShip.setDesign(localDesign);
+          localShip.maxHealth = sd.maxHealth;
           localShip.health = sd.health;
+          localShip.alive = sd.alive;
+          localShip.hullDamage?.applySnapshot(sd.hull, localShip);
+          localShip.hullDamage?.flush(localShip, this.state.shipDebris, teamColor(localShip.team));
           localShip.battery = sd.battery;
           if (!sd.alive) localShip.destroy();
         }
@@ -2072,7 +2096,13 @@ export class Game {
       ship.velocity.x = sd.vx;
       ship.velocity.y = sd.vy;
       ship.angle = sd.angle;
+      const remoteDesign = sd.design === undefined ? fleetDesign(sd.team, 'hero') : sd.design;
+      if (ship.design !== remoteDesign && (sd.design === undefined || JSON.stringify(ship.design) !== JSON.stringify(remoteDesign))) ship.setDesign(remoteDesign);
+      ship.maxHealth = sd.maxHealth;
       ship.health = sd.health;
+      ship.alive = sd.alive;
+      ship.hullDamage?.applySnapshot(sd.hull, ship);
+      ship.hullDamage?.flush(ship, this.state.shipDebris, teamColor(ship.team));
       ship.battery = sd.battery;
       if (!sd.alive && ship.alive) ship.destroy();
     }
@@ -2086,7 +2116,10 @@ export class Game {
       const b = buildingById.get(sb.id);
       if (b) {
         // Update existing building.
-        b.health = sb.health;
+        if (b.buildingDamage) {
+            b.buildingDamage.applySnapshot(sb.structure, b as any);
+          }
+          b.health = sb.health;
         b.buildProgress = sb.buildProgress;
         b.powered = sb.powered;
         if (b instanceof ResearchLab) {
@@ -2108,7 +2141,10 @@ export class Game {
           const newBuilding = createBuildingFromDef(def, new Vec2(sb.x, sb.y), sb.team as Team);
           // Force id to match host's authoritative id so future snapshots find it.
           (newBuilding as unknown as { id: number }).id = sb.id;
-          newBuilding.health = sb.health;
+          if (newBuilding.buildingDamage) {
+              newBuilding.buildingDamage.applySnapshot(sb.structure, newBuilding as any);
+            }
+            newBuilding.health = sb.health;
           newBuilding.buildProgress = sb.buildProgress;
           newBuilding.powered = sb.powered;
           if (newBuilding instanceof ResearchLab) {
@@ -2155,6 +2191,12 @@ export class Game {
         f.velocity.x = sf.vx;
         f.velocity.y = sf.vy;
         f.angle = sf.angle;
+        const fighterDesign = sf.design ?? fleetDesign(sf.team, sf.entityType === EntityType.Bomber ? 'bomber' : 'fighter');
+        if (!sf.design || JSON.stringify(f.fleetDesignOverride) !== JSON.stringify(fighterDesign)) f.fleetDesignOverride = fighterDesign;
+        if (sf.maxHealth !== undefined) f.maxHealth = sf.maxHealth;
+        if (sf.health !== undefined) f.health = sf.health;
+        f.hullDamage?.applySnapshot(sf.hull, f);
+        f.hullDamage?.flush(f, this.state.shipDebris, teamColor(f.team));
         if (sf.advancedTier) f.upgradeToAdvanced();
         if (!sf.alive && f.alive) f.destroy();
       } else {
@@ -2177,6 +2219,10 @@ export class Game {
       newFighter.velocity.x = sf.vx;
       newFighter.velocity.y = sf.vy;
       newFighter.angle = sf.angle;
+      newFighter.fleetDesignOverride = sf.design ?? fleetDesign(sf.team, sf.entityType === EntityType.Bomber ? 'bomber' : 'fighter');
+      if (sf.maxHealth !== undefined) newFighter.maxHealth = sf.maxHealth;
+      if (sf.health !== undefined) newFighter.health = sf.health;
+      newFighter.hullDamage?.applySnapshot(sf.hull, newFighter, false);
       newFighter.docked = false;
       this.state.addEntity(newFighter);
     }
@@ -2255,6 +2301,8 @@ export class Game {
         angle: ship.angle,
         health: ship.health,
         maxHealth: ship.maxHealth,
+        hull: ship.hullDamage?.snapshot(),
+        design: ship.design === fleetDesign(ship.team, 'hero') ? undefined : ship.design,
         battery: ship.battery,
         shield: ship.shield,
         alive: ship.alive,
@@ -2281,6 +2329,7 @@ export class Game {
         buildProgress: b.buildProgress,
         powered: b.powered,
         alive: b.alive,
+          structure: b.buildingDamage?.snapshot(),
         researchItem: b instanceof ResearchLab ? b.researchItem ?? undefined : undefined,
         isResearching: b instanceof ResearchLab ? b.isResearching : undefined,
         shield: b instanceof ShieldGenerator ? b.shield : undefined,
@@ -2303,6 +2352,9 @@ export class Game {
         angle: f.angle,
         alive: f.alive,
         advancedTier: f.advancedTier,
+        health: f.health, maxHealth: f.maxHealth,
+        hull: f.hullDamage?.snapshot(),
+        design: f.design === fleetDesign(f.team, f.type === EntityType.Bomber ? 'bomber' : 'fighter') ? undefined : f.design,
       });
     }
 
