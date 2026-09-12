@@ -16,6 +16,7 @@ export interface HullBody {
 }
 export interface HullSnapshot { removed: number[]; coreIntegrityFrac?: number; }
 type Mesh = { buckets: ShipBucket[]; silhouette: Path2D | null };
+const ZERO_ENGINES = { intact: 0, total: 0 };
 
 /** Structural damage model. HP is derived from connected hull mass. Core hits kill the ship. */
 export class ShipHullDamage {
@@ -30,6 +31,7 @@ export class ShipHullDamage {
   private frontier: number[] = [];
   private inFrontier = new Set<number>();
   private frontierDirty = true;
+  private engineIntact = -1;
 
   /** False until a body has been attached; until then `coreIntegrity` carries no meaning. */
   coreInitialized = false;
@@ -41,6 +43,26 @@ export class ShipHullDamage {
 
   get coreIntegrityFrac(): number {
     return this.maxCoreIntegrity > 0 ? this.coreIntegrity / this.maxCoreIntegrity : 1;
+  }
+
+  /**
+   * Wing-mounted engine modules still attached, and how many the design carries.
+   * A module is lost once every polygon of its wing group has been shed. Derived
+   * purely from `gone`, which LAN already syncs, so it needs no protocol field.
+   */
+  get engineModules(): { intact: number; total: number } {
+    const geo = this.ensure();
+    if (!geo || geo.engineModules.length === 0) return ZERO_ENGINES;
+    if (this.engineIntact < 0) {
+      let intact = 0;
+      for (const members of geo.engineModules) {
+        for (let i = 0; i < members.length; i++) {
+          if (!this.gone.has(members[i])) { intact++; break; }
+        }
+      }
+      this.engineIntact = intact;
+    }
+    return { intact: this.engineIntact, total: geo.engineModules.length };
   }
 
   /** Only ever true once a body has been attached and the core has actually been breached. */
@@ -61,7 +83,7 @@ export class ShipHullDamage {
   reset(): void {
     this.gone.clear(); this.order.length = 0; this.pending.length = 0;
     this.mesh = null; this.dirty = false;
-    this.frontier.length = 0; this.inFrontier.clear(); this.frontierDirty = true;
+    this.frontier.length = 0; this.inFrontier.clear(); this.frontierDirty = true; this.engineIntact = -1;
     this.definition = null; this.geometry = null;
     this.coreInitialized = false;
     this.coreIntegrity = 0; this.maxCoreIntegrity = 0; this.connectedMass = 0;
@@ -155,7 +177,7 @@ export class ShipHullDamage {
          break; // Damage corridor hit the core, stop excavating
       } else {
          this.gone.add(index);
-         this.frontierDirty = true;
+         this.frontierDirty = true; this.engineIntact = -1;
          this.order.push(index);
          detached.push(index);
          massBudget -= poly.area;
@@ -179,7 +201,7 @@ export class ShipHullDamage {
       for (const poly of geo.polygons) {
         if (!this.gone.has(poly.index)) {
           this.gone.add(poly.index);
-          this.frontierDirty = true;
+          this.frontierDirty = true; this.engineIntact = -1;
           detached.push(poly.index);
         }
       }
@@ -209,7 +231,7 @@ export class ShipHullDamage {
     for (const poly of geo.polygons) {
       if (!this.gone.has(poly.index) && !reachable.has(poly.index) && !poly.isCore) {
         this.gone.add(poly.index);
-        this.frontierDirty = true;
+        this.frontierDirty = true; this.engineIntact = -1;
         disconnected.push(poly.index);
       }
     }
@@ -251,6 +273,7 @@ export class ShipHullDamage {
         if (bestCandidate === -1) break;
 
         this.gone.delete(bestCandidate);
+        this.engineIntact = -1;
         // Neighbours of a restored polygon are now adjacent to attached geometry.
         for (const n of geo.polygons[bestCandidate].neighbors) {
           if (this.gone.has(n)) this.pushFrontier(geo, n);
@@ -354,7 +377,7 @@ export class ShipHullDamage {
     this.order = next; 
     this.gone = new Set(next); 
     this.dirty = true;
-    this.frontierDirty = true;
+    this.frontierDirty = true; this.engineIntact = -1;
     
     if (snapshot?.coreIntegrityFrac !== undefined) {
       this.coreIntegrity = this.maxCoreIntegrity * snapshot.coreIntegrityFrac;

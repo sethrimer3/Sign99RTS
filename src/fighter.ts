@@ -6,7 +6,7 @@ import { Entity, EntityType, Team, ShipGroup } from './entities.js';
 import { TICK_RATE } from './constants.js';
 import { Shipyard } from './building.js';
 import { Colors, colorToCSS, Color } from './colors.js';
-import { ENTITY_RADIUS, HP_VALUES, PLAYER_SHIP_SCALE, SHIP_STATS, WEAPON_STATS } from './constants.js';
+import { ENTITY_RADIUS, HP_VALUES, PLAYER_SHIP_SCALE, SHIP_ENGINE_LOSS_FLOOR, SHIP_STATS, WEAPON_STATS } from './constants.js';
 import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
 import { gameplayFleetDesign } from './shipFamilies.js';
 import { drawProceduralShip, shipDesignRadius, type ProceduralShipDefinition } from './proceduralShips.js';
@@ -314,12 +314,27 @@ export class FighterShip extends Entity {
     this.velocity = this.velocity.add(thrust);
   }
 
+  /**
+   * Fraction of thrust still available after wing-mounted engine modules are shot off.
+   * Mirrors PlayerShip; fighters with no design (or no wings) are unaffected.
+   */
+  get engineThrustFraction(): number {
+    const modules = this.hullDamage?.engineModules;
+    if (!modules || modules.total === 0) return 1;
+    return SHIP_ENGINE_LOSS_FLOOR + (1 - SHIP_ENGINE_LOSS_FLOOR) * (modules.intact / modules.total);
+  }
+
+  /** Speed cap after wing/engine loss. */
+  get effectiveMaxSpeed(): number {
+    return this.maxSpeed * this.engineThrustFraction;
+  }
+
   protected applyPhysics(dt: number): void {
     this.velocity = this.velocity.add(this.avoidVelocity.scale(dt));
     this.avoidVelocity = this.avoidVelocity.scale(0.65);
     this.velocity = this.velocity.scale(1 / (1 + this.friction * dt));
     const speed = this.velocity.length();
-    const cap = this.maxSpeed * this.tetherSpeedMultiplier();
+    const cap = this.effectiveMaxSpeed * this.tetherSpeedMultiplier();
     if (speed > cap) {
       this.velocity = cap <= 0 ? new Vec2(0, 0) : this.velocity.normalize().scale(cap);
     }

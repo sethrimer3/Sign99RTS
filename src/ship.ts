@@ -5,7 +5,7 @@ import { Camera } from './camera.js';
 import { Input } from './input.js';
 import { Entity, EntityType, Team } from './entities.js';
 import { Colors, colorToCSS, type Color } from './colors.js';
-import { ENTITY_RADIUS, PLAYER_SHIP_SCALE, SHIP_STATS, PLAYER_SPAWN_INVINCIBILITY_SECS } from './constants.js';
+import { ENTITY_RADIUS, PLAYER_SHIP_SCALE, SHIP_ENGINE_LOSS_FLOOR, SHIP_STATS, PLAYER_SPAWN_INVINCIBILITY_SECS } from './constants.js';
 import { DEFAULT_SPECIAL_ID } from './special.js';
 import type { FactionType } from './confluence.js';
 import { SynonymousShipRenderer } from './synonymousShipRenderer.js';
@@ -39,6 +39,7 @@ export const SHIP_HP_MAX_LEVEL = 4;
 export const SHIP_SPEED_ENERGY_MAX_LEVEL = 4;
 export const SHIP_SHIELD_MAX_LEVEL = 2;
 export const SHIP_REPAIR_MAX_LEVEL = 3;
+
 /**
  * Component regrowth rate per repair level, as a multiple of the passive HP regen
  * rate: L1 0.5x, L2 1.0x, L3 1.5x. Level 0 restores no structure at all.
@@ -263,7 +264,8 @@ export class PlayerShip extends Entity {
 
     // Clamp speed — boost allows a higher cap.
     const speed = this.velocity.length();
-    const speedCap = (this.isBoosting ? this.maxSpeed * BOOST_SPEED_MULT : this.maxSpeed) * this.tetherSpeedMultiplier();
+    const eff = this.effectiveMaxSpeed;
+    const speedCap = (this.isBoosting ? eff * BOOST_SPEED_MULT : eff) * this.tetherSpeedMultiplier();
     if (speed > speedCap) {
       this.velocity = this.velocity.normalize().scale(speedCap);
     }
@@ -384,9 +386,12 @@ export class PlayerShip extends Entity {
       const shiftHeld = Input.isDown('Shift');
       const canBoost = shiftHeld && this.canUseBoost();
       const thrustMult = canBoost ? BOOST_SPEED_MULT : 1.0;
+      // Thrust is applied on the centreline whatever the wing damage, so a ship that
+      // lost wings on one side loses thrust but never gains torque.
+      const engineFrac = this.engineThrustFraction;
 
       this.velocity = this.velocity.add(
-        new Vec2(ux * this.thrustPower * thrustMult * dt, uy * this.thrustPower * thrustMult * dt),
+        new Vec2(ux * this.thrustPower * thrustMult * engineFrac * dt, uy * this.thrustPower * thrustMult * engineFrac * dt),
       );
       this.thrustDir = new Vec2(ux, uy);
       this.isThrusting = true;
@@ -582,6 +587,22 @@ export class PlayerShip extends Entity {
     this.maxHealth = Math.round(this.baseMaxHealth * (1 + this.hpLevel * SHIP_UPGRADE_STEP));
     this.health = Math.round(this.maxHealth * healthFraction);
     this.recomputeShieldStats();
+  }
+
+  /**
+   * Fraction of thrust still available: one engine module rides the back-middle of each
+   * wing group (two wings = tier 1, four = tier 2). Thrust is still applied on the
+   * ship's centreline, so uneven wing loss never induces spin.
+   */
+  get engineThrustFraction(): number {
+    const modules = this.hullDamage?.engineModules;
+    if (!modules || modules.total === 0) return 1;
+    return SHIP_ENGINE_LOSS_FLOOR + (1 - SHIP_ENGINE_LOSS_FLOOR) * (modules.intact / modules.total);
+  }
+
+  /** Max speed after wing/engine loss. Every speed cap in the ship uses this. */
+  get effectiveMaxSpeed(): number {
+    return this.maxSpeed * this.engineThrustFraction;
   }
 
   /** Speed/Energy/Fire-Speed upgrade: each level adds +25% of the base stat. */
@@ -806,7 +827,7 @@ export class PlayerShip extends Entity {
     if (this.trail.length < 1) return;
     if (isLegacyGraphics()) {
       if (this.trail.length < 2) return;
-      const speedCap = this.maxSpeed * (this.isBoosting ? BOOST_SPEED_MULT : 1);
+      const speedCap = this.effectiveMaxSpeed * (this.isBoosting ? BOOST_SPEED_MULT : 1);
       const speedFraction = Math.max(0, Math.min(1, this.velocity.length() / Math.max(1, speedCap)));
       const sizeScale = 0.2 + speedFraction * 0.8;
       const cinematicScale = getCinematicLevel() >= 2 ? 1.35 : 1;
@@ -832,7 +853,7 @@ export class PlayerShip extends Entity {
       return;
     }
 
-    const speedCap = this.maxSpeed * (this.isBoosting ? BOOST_SPEED_MULT : 1);
+    const speedCap = this.effectiveMaxSpeed * (this.isBoosting ? BOOST_SPEED_MULT : 1);
     const speedFraction = Math.max(0, Math.min(1, this.velocity.length() / Math.max(1, speedCap)));
     const sizeScale = 0.2 + speedFraction * 0.8;
     const boostMul = this.isBoosting ? 1.35 : 1.0;

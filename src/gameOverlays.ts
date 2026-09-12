@@ -485,7 +485,7 @@ export function drawGlowLayer(
       glow.circleWorld(camera, ship.position, r * 1.8, Colors.radar_allied_status, 0.10, false, 5);
     }
     if (visualPreset.engineGlow) {
-      const speedFactor = speedGlowFactor(Math.hypot(ship.velocity.x, ship.velocity.y), ship.maxSpeed * 1.8);
+      const speedFactor = speedGlowFactor(Math.hypot(ship.velocity.x, ship.velocity.y), ship.effectiveMaxSpeed * 1.8);
       // Use warm orange/yellow for engine glow to match the warm thrust particles.
       const exhaustAlpha = (ship.isBoosting ? 0.30 : 0.18) * speedFactor;
       glow.circleWorld(camera, ship.position, r * 2.6 * speedFactor, Colors.thrust_warm_orange, exhaustAlpha);

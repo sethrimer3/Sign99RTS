@@ -7,6 +7,7 @@ import { FighterShip } from './fighter.js';
 import { Vec2 } from './math.js';
 import { Team, ShipGroup } from './entities.js';
 import { ShipDebrisSystem } from './shipDebris.js';
+import { SHIP_ENGINE_LOSS_FLOOR } from './constants.js';
 import { Colors } from './colors.js';
 import { GameState } from './gamestate.js';
 import { damageLaserLine } from './combatUtils.js';
@@ -192,5 +193,88 @@ describe('core-outward structural repair', () => {
     expect(ship.repairLevel).toBe(2);
     ship.syncResearchUpgrades(new Set());
     expect(ship.repairLevel).toBe(0);
+  });
+});
+
+describe('wing-mounted engine modules and speed', () => {
+  it('gives wing designs one engine module per wing pair, at most two', () => {
+    for (let team = 1; team <= 8; team++) {
+      const geo = getShipGeometry(fleetDesign(team, 'hero'));
+      expect(geo.engineModules.length).toBeLessThanOrEqual(2);
+      for (const members of geo.engineModules) expect(members.length).toBeGreaterThan(0);
+    }
+    // Lance carries two wing surfaces (four wings) = two modules; Manta one surface
+    // (two wings) = one; Arrow is wingless and carries none.
+    expect(getShipGeometry(fleetDesign(1, 'hero')).engineModules.length).toBe(2);
+    expect(getShipGeometry(fleetDesign(2, 'hero')).engineModules.length).toBe(1);
+    expect(getShipGeometry(fleetDesign(4, 'hero')).engineModules.length).toBe(0);
+  });
+
+  it('sheds thrust as wings are lost and bottoms out at the floor', () => {
+    const ship = new PlayerShip(new Vec2(0, 0), 1 as Team);
+    const geo = getShipGeometry(ship.design!);
+    expect(geo.engineModules.length).toBe(2);
+    const full = ship.maxSpeed;
+    expect(ship.engineThrustFraction).toBe(1);
+    expect(ship.effectiveMaxSpeed).toBeCloseTo(full, 6);
+
+    // Shoot away every polygon of the first wing group: one module gone.
+    const hull = ship.hullDamage!;
+    hull.applySnapshot({ removed: [...geo.engineModules[0]] }, ship);
+    expect(hull.engineModules).toEqual({ intact: 1, total: 2 });
+    const oneWing = SHIP_ENGINE_LOSS_FLOOR + (1 - SHIP_ENGINE_LOSS_FLOOR) * 0.5;
+    expect(ship.engineThrustFraction).toBeCloseTo(oneWing, 6);
+    expect(ship.effectiveMaxSpeed).toBeCloseTo(full * oneWing, 6);
+    expect(ship.effectiveMaxSpeed).toBeLessThan(full);
+
+    hull.applySnapshot({ removed: [...geo.engineModules[0], ...geo.engineModules[1]] }, ship);
+    expect(hull.engineModules).toEqual({ intact: 0, total: 2 });
+    expect(ship.engineThrustFraction).toBeCloseTo(SHIP_ENGINE_LOSS_FLOOR, 6);
+    expect(ship.effectiveMaxSpeed).toBeCloseTo(full * SHIP_ENGINE_LOSS_FLOOR, 6);
+  });
+
+  it('restores thrust when the wing is repaired back on', () => {
+    const ship = new PlayerShip(new Vec2(0, 0), 1 as Team);
+    const geo = getShipGeometry(ship.design!);
+    const hull = ship.hullDamage!;
+    hull.applySnapshot({ removed: [...geo.engineModules[0]] }, ship);
+    expect(ship.engineThrustFraction).toBeLessThan(1);
+    hull.applySnapshot({ removed: [] }, ship);
+    expect(ship.engineThrustFraction).toBe(1);
+  });
+
+  it('leaves wingless and design-less ships at exactly their current speed', () => {
+    const wingless = new PlayerShip(new Vec2(0, 0), 4 as Team); // Arrow: wingPairs 0
+    expect(getShipGeometry(wingless.design!).engineModules.length).toBe(0);
+    wingless.hullDamage!.hit(wingless, 40, { kind: 'explosion', x: 0, y: 0, dx: 1, dy: 0 });
+    expect(wingless.engineThrustFraction).toBe(1);
+    expect(wingless.effectiveMaxSpeed).toBeCloseTo(wingless.maxSpeed, 6);
+
+    const plain = new PlayerShip(new Vec2(0, 0));
+    plain.setDesign(null);
+    expect(plain.design).toBe(null);
+    expect(plain.engineThrustFraction).toBe(1);
+    expect(plain.effectiveMaxSpeed).toBeCloseTo(plain.maxSpeed, 6);
+  });
+
+  it('composes with speed research instead of fighting it', () => {
+    const ship = new PlayerShip(new Vec2(0, 0), 1 as Team);
+    const base = ship.maxSpeed;
+    ship.syncResearchUpgrades(new Set(['shipSpeedEnergy1', 'shipSpeedEnergy2']));
+    expect(ship.maxSpeed).toBeCloseTo(base * 1.5, 6);
+    const geo = getShipGeometry(ship.design!);
+    ship.hullDamage!.applySnapshot({ removed: [...geo.engineModules[0], ...geo.engineModules[1]] }, ship);
+    // Research multiplier is untouched; wing loss scales the result.
+    expect(ship.maxSpeed).toBeCloseTo(base * 1.5, 6);
+    expect(ship.effectiveMaxSpeed).toBeCloseTo(base * 1.5 * SHIP_ENGINE_LOSS_FLOOR, 6);
+  });
+
+  it('fighters lose thrust the same way', () => {
+    const f = new FighterShip(new Vec2(0, 0), 1 as Team, ShipGroup.Red);
+    const geo = getShipGeometry(f.design!);
+    if (geo.engineModules.length === 0) return;
+    expect(f.engineThrustFraction).toBe(1);
+    f.hullDamage!.applySnapshot({ removed: geo.engineModules.flat() }, f);
+    expect(f.engineThrustFraction).toBeCloseTo(SHIP_ENGINE_LOSS_FLOOR, 6);
   });
 });

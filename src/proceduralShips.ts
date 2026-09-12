@@ -185,7 +185,17 @@ export interface ShipGeometry {
   totalMass: number;
   coreIndices: number[];
   corePath: Path2D | null;
+  /**
+   * Polygon indices of the engine module carried at the back-middle of each wing
+   * group, one entry per wing pair, aft-most pair first, at most
+   * {@link MAX_ENGINE_MODULES}. A pair whose polygons are all shed has lost its
+   * engine. Empty for wingless designs, which therefore never lose thrust.
+   */
+  engineModules: number[][];
 }
+
+/** Two wings = one module, four wings = two. Matches the two ship speed tiers. */
+export const MAX_ENGINE_MODULES = 2;
 
 type P = { x: number; y: number };
 
@@ -551,6 +561,10 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   em.setQuota(wingAlloc);
   let groupId = 0;
   let groupU = p.wingStation;
+  // One engine module per wing surface, seated at its back-middle. `emit` mirrors, so a
+  // single group id is one port+starboard wing pair: one surface = 2 wings = speed
+  // tier 1, two surfaces = 4 wings = tier 2.
+  const engineGroupIds: number[] = [];
   for (let grp = 0; grp < wingPairs; grp++) {
     if (em.full || groupU < 0.02) break;
     const gScale = Math.pow(0.66, grp);
@@ -573,6 +587,7 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
       const rootB0 = lerpP(r1, inside, 0.045);
       const rootB: P = { x: rootB0.x - sw * 0.22, y: rootB0.y };
       em.group = ++groupId;
+      if (engineGroupIds.length < MAX_ENGINE_MODULES) engineGroupIds.push(groupId);
       emitWing(em, rootA, rootB, tipF, bias, wingLevels, wingDepth, p, anchors, e === wingElements - 1);
       em.group = 0;
     }
@@ -724,6 +739,12 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     }
   }
 
+  const engineModules: number[][] = [];
+  for (const id of engineGroupIds) {
+    const members = groups.get(id);
+    if (members && members.length) engineModules.push(members.slice());
+  }
+
   return {
     polygons: em.polys,
     buckets,
@@ -744,6 +765,7 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
     totalMass,
     coreIndices,
     corePath,
+    engineModules,
   };
 }
 

@@ -377,6 +377,14 @@ export const RESOURCE_GAIN_RATE = 1.0;
 export const BASELINE_RESOURCE_GAIN = 5.0;
 
 // Build zone radii
+/**
+ * Speed retained when every wing-mounted engine module has been shot off. A ship at
+ * its full wing complement always flies at 1.0 — wings never grant a bonus over
+ * today's speed, they only cost speed when lost, so match-start balance is unchanged.
+ * Wingless designs (and `design === null`) carry no modules and never slow down.
+ */
+export const SHIP_ENGINE_LOSS_FLOOR = 0.65;
+
 export const COMMANDPOST_BUILD_RADIUS = 260;
 export const POWERGENERATOR_COVERAGE_RADIUS = 195;
 

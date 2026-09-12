@@ -1382,7 +1382,7 @@ class ShipMenu {
     const stats = [
       `HP ${Math.ceil(ship.health)}/${ship.maxHealth}`,
       `Shield ${shieldText}`,
-      `Speed ${Math.round(ship.maxSpeed)}`,
+      `Speed ${Math.round(ship.effectiveMaxSpeed)}`,
       `Energy ${Math.floor(ship.battery)}/${ship.maxBattery}`,
       `Energy Regen ${ship.baseBatteryRegenRate.toFixed(1)}/s`,
       `Fire Speed x${(1 / ship.fireCooldownMultiplier).toFixed(2)}`,

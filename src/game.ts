@@ -763,7 +763,7 @@ export class Game {
       const isBoosting = this.state.player.isBoosting;
       // emitExhaust already emits 3 particles when isBoosting — no extra loop needed.
       const speed = Math.hypot(this.state.player.velocity.x, this.state.player.velocity.y);
-      const maxSpeed = this.state.player.maxSpeed * (isBoosting ? 1.8 : 1);
+      const maxSpeed = this.state.player.effectiveMaxSpeed * (isBoosting ? 1.8 : 1);
       const speedFraction = maxSpeed > 0 ? Math.min(1, speed / maxSpeed) : 0;
       this.state.particles.emitExhaust(
         this.state.player.position,
@@ -2792,7 +2792,7 @@ export class Game {
 
   private playerSpeedFraction(): number {
     const speed = Math.hypot(this.state.player.velocity.x, this.state.player.velocity.y);
-    const maxSpeed = this.state.player.maxSpeed * (this.state.player.isBoosting ? 1.8 : 1);
+    const maxSpeed = this.state.player.effectiveMaxSpeed * (this.state.player.isBoosting ? 1.8 : 1);
     return maxSpeed > 0 ? Math.min(1, Math.max(0, speed / maxSpeed)) : 0;
   }
 

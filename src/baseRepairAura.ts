@@ -93,7 +93,6 @@ export function drawBaseRepairAura(
       const bearing = Math.atan2(dy, dx);
       if (!opened) {
         ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
         ctx.lineCap = 'butt';
         opened = true;
       }
@@ -111,53 +110,89 @@ function drawRevealArc(
 ): void {
   const halfWidth = 0.10 + 0.34 * proximity;
   const step = (halfWidth * 2) / SEGMENTS;
-  const band = Math.max(9, 22 * zoom);      // thickness of the field sheet
-  const hazeWidth = band * 3.2;
-  const rimWidth = Math.max(1, 1.5 * zoom);
+  const band = Math.max(9, 22 * zoom);
+  const body = rgba(colour, 1);
+  const seed = Math.round(bearing * 16);
 
+  // Pass 1 — additive haze, the volume the sheet sits inside.
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineWidth = band * 2.4;
   for (let s = 0; s < SEGMENTS; s++) {
+    const e = energyAt(s, proximity);
+    if (e < 0.01) continue;
     const a0 = bearing - halfWidth + step * s;
-    const a1 = a0 + step * 1.06; // slight overlap so segments read as one sheet
+    ctx.strokeStyle = rgba(colour, e * 0.03);
+    ctx.beginPath(); ctx.arc(cx, cy, rr, a0, a0 + step * 1.08); ctx.stroke();
+  }
+
+  // Pass 2 — the sheet body, blended normally so the team hue survives instead of
+  // summing to white the way stacked additive layers do.
+  ctx.globalCompositeOperation = 'source-over';
+  for (let s = 0; s < SEGMENTS; s++) {
+    const e = energyAt(s, proximity);
+    if (e < 0.01) continue;
+    const a0 = bearing - halfWidth + step * s;
     const mid = a0 + step * 0.5;
-    // cos^2 across the arc: the reveal dissolves angularly instead of stopping hard.
-    const t = ((s + 0.5) / SEGMENTS - 0.5) * Math.PI;
-    const falloff = Math.cos(t) * Math.cos(t);
-    // Two travelling waves beating against each other, so the sheet breathes.
-    const shimmer = 0.55 + 0.45 * Math.sin(time * 3.1 + mid * 19);
-    const beat = 0.5 + 0.5 * Math.sin(time * 1.7 - mid * 11);
-    const energy = proximity * falloff;
-    if (energy < 0.01) continue;
-
-    // Volume: a wide, very soft haze the sheet sits inside.
-    ctx.lineWidth = hazeWidth;
-    ctx.strokeStyle = rgba(colour, energy * 0.2 * (0.6 + 0.4 * shimmer));
-    ctx.beginPath(); ctx.arc(cx, cy, rr, a0, a1); ctx.stroke();
-
-    // The sheet itself — a filled band rather than a line, so it reads as surface.
-    ctx.lineWidth = band;
-    ctx.strokeStyle = rgba(colour, energy * 0.7 * (0.5 + 0.5 * beat));
-    ctx.beginPath(); ctx.arc(cx, cy, rr, a0, a1); ctx.stroke();
-
-    // Rims: the surface is brightest where it ends.
-    ctx.lineWidth = rimWidth;
-    ctx.strokeStyle = rgba(colour, energy * 0.36 * shimmer);
-    ctx.beginPath(); ctx.arc(cx, cy, rr + band * 0.5, a0, a1); ctx.stroke();
-    ctx.strokeStyle = rgba(colour, energy * 0.26 * (1 - shimmer * 0.7));
-    ctx.beginPath(); ctx.arc(cx, cy, rr - band * 0.5, a0, a1); ctx.stroke();
-
-    // Radial rungs close the lattice cells; alternate cells carry the travelling wave.
-    const rung = energy * (s % 3 === 0 ? 0.2 : 0.04) * (0.4 + 0.6 * shimmer);
-    ctx.strokeStyle = rgba(colour, rung);
+    const n1 = hash(seed + s), n2 = hash(seed + s + 97);
+    // Two incommensurate waves, so the banding never lines up into a ladder.
+    const w = 0.5 + 0.5 * Math.sin(time * 2.3 + mid * 23.7 + n1 * 6.283);
+    const v = 0.5 + 0.5 * Math.sin(time * 1.1 - mid * 9.1);
+    ctx.lineWidth = band * (0.5 + 0.95 * n2);
+    ctx.globalAlpha = Math.min(1, e * (0.66 + 0.30 * w * v));
+    ctx.strokeStyle = body;
     ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(a0) * (rr - band * 0.5), cy + Math.sin(a0) * (rr - band * 0.5));
-    ctx.lineTo(cx + Math.cos(a0) * (rr + band * 0.5), cy + Math.sin(a0) * (rr + band * 0.5));
+    ctx.arc(cx, cy, rr + (n1 - 0.5) * band * 0.55, a0, a0 + step * 1.08);
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
+
+  // Pass 3 — sparse additive rim and rung highlights. Only some segments carry one, so
+  // the interior reads as broken interference rather than an evenly segmented meter.
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineWidth = Math.max(1, 1.4 * zoom);
+  for (let s = 0; s < SEGMENTS; s++) {
+    const e = energyAt(s, proximity);
+    if (e < 0.01) continue;
+    const a0 = bearing - halfWidth + step * s;
+    const mid = a0 + step * 0.5;
+    const n1 = hash(seed + s), n2 = hash(seed + s + 97), n3 = hash(seed + s + 211);
+    const w = 0.5 + 0.5 * Math.sin(time * 2.3 + mid * 23.7 + n1 * 6.283);
+    const half = band * (0.25 + 0.475 * n2);
+    if (n3 > 0.34) {
+      ctx.strokeStyle = rgba(colour, e * 0.3 * w);
+      ctx.beginPath(); ctx.arc(cx, cy, rr + half, a0, a0 + step * (0.6 + n1)); ctx.stroke();
+    }
+    if (n1 > 0.62) {
+      const len = half * (0.5 + n3);
+      ctx.strokeStyle = rgba(colour, e * 0.4 * (0.3 + 0.7 * w));
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a0) * (rr - len), cy + Math.sin(a0) * (rr - len));
+      ctx.lineTo(cx + Math.cos(a0) * (rr + len), cy + Math.sin(a0) * (rr + len));
+      ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 /**
- * Team colour at face value. `colorToCSS` scales by `Color.intensity`, which clips
- * bright team colours to white once these layers are added together.
+ * Angular profile: a broad saturated middle that still dissolves to nothing at both
+ * ends. A plain cos^2 spent most of the arc at low alpha, which washed the team hue
+ * out against a bright nebula; the flatter exponent keeps the colour and the fade.
+ */
+function energyAt(s: number, proximity: number): number {
+  const t = ((s + 0.5) / SEGMENTS - 0.5) * Math.PI;
+  return proximity * Math.pow(Math.max(0, Math.cos(t)), 0.8);
+}
+
+/** Cheap deterministic hash in [0,1) — stable per segment, so the texture never flickers. */
+function hash(i: number): number {
+  const x = Math.sin(i * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/**
+ * Team colour at face value. `colorToCSS` scales by `Color.intensity`, which pushes
+ * bright team colours toward white once these layers are added together.
  */
 function rgba(colour: Color, alpha: number): string {
   return `rgba(${colour.r | 0},${colour.g | 0},${colour.b | 0},${alpha.toFixed(3)})`;
