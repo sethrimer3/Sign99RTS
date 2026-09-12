@@ -3,13 +3,16 @@ import type { HullImpact } from './shipHullDamage.js';
 import type { ShipDebrisSystem } from './shipDebris.js';
 import type { Color } from './colors.js';
 import { GRID_CELL_SIZE } from './grid.js';
+import { footprintForBuildingType } from './buildingfootprint.js';
+import type { EntityType } from './entities.js';
 
 export interface BuildingStructureBody {
   id: number;
+  type: EntityType;
   position: Vec2;
   /**
-   * Footprint in grid cells (e.g. 2 for a 2x2 building). `null` on buildings that
-   * never declare one; those keep an empty structural mesh, as before.
+   * Optional instance override used by compact research nodes. Ordinary
+   * buildings derive their footprint from their entity type.
    */
   footprintCells?: number | null;
   health: number;
@@ -197,7 +200,7 @@ export class BuildingStructureDamage {
   constructor(private seedFallback: number) {}
 
   public ensure(body: BuildingStructureBody): BSPGeometry {
-    const cells = body.footprintCells ?? 0;
+    const cells = body.footprintCells ?? footprintForBuildingType(body.type);
     if (this.geo && this.geo.footprintCells === cells) return this.geo;
       if (this.geo && this.geo.footprintCells !== cells) this.appliedSeed = undefined;
     const seed = this.appliedSeed ?? (this.seedFallback ^ (cells * 1234567));

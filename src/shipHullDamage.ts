@@ -1,4 +1,4 @@
-import { bakeBuckets, getShipGeometry, seededRandom, shipDesignRadius, type ProceduralShipDefinition, type ShipGeometry, type ShipBucket } from './proceduralShips.js';
+import { bakeBuckets, buildOuterSilhouette, getShipGeometry, seededRandom, shipDesignRadius, type ProceduralShipDefinition, type ShipGeometry, type ShipBucket } from './proceduralShips.js';
 import { Vec2 } from './math.js';
 import type { ShipDebrisSystem } from './shipDebris.js';
 import type { Color } from './colors.js';
@@ -410,8 +410,7 @@ export class ShipHullDamage {
     if (!geo || this.gone.size === 0) return null;
     if (this.dirty || !this.mesh) {
       const buckets = bakeBuckets(geo.polygons.filter(p => !this.gone.has(p.index)), geo.shadeBands);
-      const silhouette = typeof Path2D === 'undefined' ? null : new Path2D();
-      for (const b of buckets) if (b.path) silhouette?.addPath(b.path);
+      const silhouette = buildOuterSilhouette(geo.polygons.filter(p => !this.gone.has(p.index)));
       this.mesh = { buckets, silhouette };
       this.dirty = false;
     }

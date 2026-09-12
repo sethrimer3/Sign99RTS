@@ -328,6 +328,25 @@ function convexHull(pts: number[][]): number[][] {
   return lower.concat(upper);
 }
 
+/** Build one continuous path around the visible component cloud.
+ * Compound bucket paths are suitable for filling, but stroking them outlines every
+ * panel. A single outer boundary includes generated wings without drawing that mesh.
+ */
+export function buildOuterSilhouette(polys: readonly ShipPolygon[]): Path2D | null {
+  if (typeof Path2D === 'undefined') return null;
+  const path = new Path2D();
+  const points: number[][] = [];
+  for (const poly of polys) {
+    for (let i = 0; i < poly.pts.length; i += 2) points.push([poly.pts[i], poly.pts[i + 1]]);
+  }
+  const boundary = convexHull(points);
+  if (boundary.length === 0) return path;
+  path.moveTo(boundary[0][0], boundary[0][1]);
+  for (let i = 1; i < boundary.length; i++) path.lineTo(boundary[i][0], boundary[i][1]);
+  path.closePath();
+  return path;
+}
+
 function triPts(a: P, b: P, c: P): number[] {
   return [a.x, a.y, b.x, b.y, c.x, c.y];
 }
@@ -617,6 +636,10 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   em.group = ++groupId;
   budChain(em, W, N, inside, budCount, p.budScale, budDepthBase, bias, p, anchors);
   em.group = ++groupId;
+  // Wingless families mount their engine in the aft bulb chain. This keeps the
+  // same deterministic group-based damage model without giving those hulls a
+  // permanent exemption from propulsion loss.
+  if (engineGroupIds.length === 0) engineGroupIds.push(groupId);
   budChain(em, W, T, inside, budCount, p.budScale * 0.85, budDepthBase, bias, p, anchors);
   em.group = 0;
 
@@ -636,15 +659,8 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   if (!isFinite(minX)) { minX = minY = -1; maxX = maxY = 1; }
   const outline = convexHull(cloud).map((h) => new Vec2(h[0], h[1]));
 
-  // The strokable/fallback silhouette is the base planform, not the convex hull: the hull
-  // encloses too much empty space between wings to read as an outline.
-  const silhouette = typeof Path2D === 'undefined' ? null : new Path2D();
-  const ml = 1 - Math.min(0.4, p.asymmetry);
-  silhouette?.moveTo(N.x, N.y);
-  silhouette?.lineTo(W.x, W.y);
-  silhouette?.lineTo(T.x, T.y);
-  silhouette?.lineTo(W.x, -W.y * ml);
-  silhouette?.closePath();
+  // One continuous outside perimeter, including generated wings and fins.
+  const silhouette = buildOuterSilhouette(em.polys);
 
   const bands = Math.round(Math.max(2, Math.min(12, p.shadeBands)));
   const buckets = bakeBuckets(em.polys, bands);
@@ -928,8 +944,7 @@ export function getStageBuckets(geo: ShipGeometry, stage: number): ShipBucket[] 
   const gone = new Set(geo.shedOrder.slice(0, shedCountForStage(geo, s)));
   const kept = geo.polygons.filter((poly) => !gone.has(poly.index));
   const built = bakeBuckets(kept, geo.shadeBands);
-  const silhouette = typeof Path2D === 'undefined' ? null : new Path2D();
-  for (const bucket of built) bucket.path && silhouette?.addPath(bucket.path);
+  const silhouette = buildOuterSilhouette(kept);
   geo.stageSilhouettes[s] = silhouette;
   geo.stageBuckets[s] = built;
   return built;

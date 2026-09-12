@@ -204,10 +204,10 @@ describe('wing-mounted engine modules and speed', () => {
       for (const members of geo.engineModules) expect(members.length).toBeGreaterThan(0);
     }
     // Lance carries two wing surfaces (four wings) = two modules; Manta one surface
-    // (two wings) = one; Arrow is wingless and carries none.
+    // (two wings) = one; wingless Arrow carries one aft-mounted module.
     expect(getShipGeometry(fleetDesign(1, 'hero')).engineModules.length).toBe(2);
     expect(getShipGeometry(fleetDesign(2, 'hero')).engineModules.length).toBe(1);
-    expect(getShipGeometry(fleetDesign(4, 'hero')).engineModules.length).toBe(0);
+    expect(getShipGeometry(fleetDesign(4, 'hero')).engineModules.length).toBe(1);
   });
 
   it('sheds thrust as wings are lost and bottoms out at the floor', () => {
@@ -243,12 +243,13 @@ describe('wing-mounted engine modules and speed', () => {
     expect(ship.engineThrustFraction).toBe(1);
   });
 
-  it('leaves wingless and design-less ships at exactly their current speed', () => {
+  it('gives wingless ships an aft engine while leaving design-less ships unchanged', () => {
     const wingless = new PlayerShip(new Vec2(0, 0), 4 as Team); // Arrow: wingPairs 0
-    expect(getShipGeometry(wingless.design!).engineModules.length).toBe(0);
-    wingless.hullDamage!.hit(wingless, 40, { kind: 'explosion', x: 0, y: 0, dx: 1, dy: 0 });
-    expect(wingless.engineThrustFraction).toBe(1);
-    expect(wingless.effectiveMaxSpeed).toBeCloseTo(wingless.maxSpeed, 6);
+    const winglessGeometry = getShipGeometry(wingless.design!);
+    expect(winglessGeometry.engineModules.length).toBe(1);
+    wingless.hullDamage!.applySnapshot({ removed: [...winglessGeometry.engineModules[0]] }, wingless);
+    expect(wingless.engineThrustFraction).toBeCloseTo(SHIP_ENGINE_LOSS_FLOOR, 6);
+    expect(wingless.effectiveMaxSpeed).toBeCloseTo(wingless.maxSpeed * SHIP_ENGINE_LOSS_FLOOR, 6);
 
     const plain = new PlayerShip(new Vec2(0, 0));
     plain.setDesign(null);

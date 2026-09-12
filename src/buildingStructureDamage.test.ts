@@ -1,13 +1,26 @@
 import { describe, it, expect } from 'vitest';
 import { BuildingStructureDamage, type BuildingStructureBody } from './buildingStructureDamage.js';
 import { Vec2 } from './math.js';
+import { EntityType } from './entities.js';
 
 describe('BuildingStructureDamage', () => {
   const createMockBody = (cells: number, health: number): BuildingStructureBody => ({
+    id: 1,
+    type: EntityType.Factory,
     footprintCells: cells,
     health,
     maxHealth: health,
     position: new Vec2(0, 0),
+  });
+
+  it('derives the structural footprint for an ordinary building', () => {
+    const damage = new BuildingStructureDamage(12345);
+    const body = createMockBody(4, 100);
+    body.footprintCells = null;
+
+    const geometry = damage.ensure(body);
+    expect(geometry.footprintCells).toBe(4);
+    expect(geometry.totalMass).toBeGreaterThan(0);
   });
 
   it('generates deterministic BSP geometry based on seed and footprint', () => {

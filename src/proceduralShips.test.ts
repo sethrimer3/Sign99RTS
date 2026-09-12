@@ -9,7 +9,13 @@ import { Colors } from './colors.js';
 import { PlayerShip } from './ship.js';
 
 class TestPath {
-  moveTo() {} lineTo() {} closePath() {} addPath() {}
+  moveCount = 0;
+  lineCount = 0;
+  addCount = 0;
+  moveTo() { this.moveCount++; }
+  lineTo() { this.lineCount++; }
+  closePath() {}
+  addPath() { this.addCount++; }
 }
 
 beforeEach(() => {
@@ -77,6 +83,13 @@ describe('procedural component damage', () => {
       expect(call[0]).toBe(geo.stageSilhouettes[7]);
       expect(call[0]).not.toBe(geo.silhouette);
     }
+    const intact = geo.silhouette as unknown as TestPath;
+    const damaged = geo.stageSilhouettes[7] as unknown as TestPath;
+    expect(intact.moveCount).toBe(1);
+    expect(damaged.moveCount).toBe(1);
+    expect(intact.lineCount).toBe(geo.outline.length - 1);
+    expect(intact.addCount).toBe(0);
+    expect(damaged.addCount).toBe(0);
   });
 
   it('keeps flying fragments stable through lab edits, caps the pool and releases it', () => {
