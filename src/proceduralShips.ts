@@ -1151,6 +1151,8 @@ export interface ShipTransform {
   damageMesh?: { buckets: ShipBucket[]; silhouette: Path2D | null } | null;
   /** 0..1 fraction of core health. Determines fiery core intensity. */
   coreIntegrityFrac?: number;
+  /** Hull pieces recently repaired back in; frac 0 = just restored (full white) to 1 = settled to normal color. */
+  repairFlashes?: { index: number; frac: number }[];
 }
 
 export interface ShipDebugOverlay {
@@ -1243,6 +1245,23 @@ export function drawProceduralShip(
   }
   lastFillCalls = fills;
 
+  if (transform.repairFlashes && transform.repairFlashes.length > 0) {
+    ctx.fillStyle = '#ffffff';
+    for (const flash of transform.repairFlashes) {
+      const poly = geo.polygons[flash.index];
+      if (!poly) continue;
+      const alpha = 1 - flash.frac;
+      if (alpha <= 0) continue;
+      ctx.globalAlpha = alpha;
+      const path = new Path2D();
+      path.moveTo(poly.pts[0], poly.pts[1]);
+      for (let i = 2; i < poly.pts.length; i += 2) path.lineTo(poly.pts[i], poly.pts[i + 1]);
+      path.closePath();
+      ctx.fill(path);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   if (geo.corePath) {
     const intensity = transform.coreIntegrityFrac ?? 1;
     if (intensity > 0) {
@@ -1273,7 +1292,7 @@ export function drawProceduralShip(
 
   ctx.lineJoin = 'round';
   ctx.lineWidth = 1.7 / scale;
-  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
   ctx.stroke(silhouette);
 
   if (p.lineThickness > 0) {

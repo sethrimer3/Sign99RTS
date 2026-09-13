@@ -939,6 +939,7 @@ export class PlayerShip extends Entity {
       drawProceduralShip(ctx, camera, this.design, {
         position: this.position, rotation: this.angle, scale, color: coreColor,
         damageMesh: this.hullDamage?.renderMesh(),
+        repairFlashes: this.hullDamage?.repairFlashes(performance.now()),
       });
       return;
     }

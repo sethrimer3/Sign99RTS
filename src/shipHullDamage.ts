@@ -17,6 +17,8 @@ export interface HullBody {
 export interface HullSnapshot { removed: number[]; coreIntegrityFrac?: number; }
 type Mesh = { buckets: ShipBucket[]; silhouette: Path2D | null };
 const ZERO_ENGINES = { intact: 0, total: 0 };
+/** Duration of the bright-white flash-in when a shed hull piece is repaired back in. */
+const REPAIR_FLASH_MS = 550;
 
 /** Structural damage model. HP is derived from connected hull mass. Core hits kill the ship. */
 export class ShipHullDamage {
@@ -32,6 +34,8 @@ export class ShipHullDamage {
   private inFrontier = new Set<number>();
   private frontierDirty = true;
   private engineIntact = -1;
+  /** Polygon index -> performance.now() it was restored, for the repair flash-in effect. */
+  private repairedAt = new Map<number, number>();
 
   /** False until a body has been attached; until then `coreIntegrity` carries no meaning. */
   coreInitialized = false;
@@ -84,6 +88,7 @@ export class ShipHullDamage {
     this.gone.clear(); this.order.length = 0; this.pending.length = 0;
     this.mesh = null; this.dirty = false;
     this.frontier.length = 0; this.inFrontier.clear(); this.frontierDirty = true; this.engineIntact = -1;
+    this.repairedAt.clear();
     this.definition = null; this.geometry = null;
     this.coreInitialized = false;
     this.coreIntegrity = 0; this.maxCoreIntegrity = 0; this.connectedMass = 0;
@@ -274,6 +279,7 @@ export class ShipHullDamage {
 
         this.gone.delete(bestCandidate);
         this.engineIntact = -1;
+        this.repairedAt.set(bestCandidate, performance.now());
         // Neighbours of a restored polygon are now adjacent to attached geometry.
         for (const n of geo.polygons[bestCandidate].neighbors) {
           if (this.gone.has(n)) this.pushFrontier(geo, n);
@@ -403,6 +409,19 @@ export class ShipHullDamage {
       }
     }
     this.pending.length = 0;
+  }
+
+  /** Polygons still flashing in from a recent repair, as {index, frac} with frac 0 (just restored) to 1 (settled). */
+  repairFlashes(now: number): { index: number; frac: number }[] {
+    if (this.repairedAt.size === 0) return [];
+    const out: { index: number; frac: number }[] = [];
+    for (const [index, start] of this.repairedAt) {
+      const frac = (now - start) / REPAIR_FLASH_MS;
+      if (frac >= 1) { this.repairedAt.delete(index); continue; }
+      if (this.gone.has(index)) { this.repairedAt.delete(index); continue; }
+      out.push({ index, frac: Math.max(0, frac) });
+    }
+    return out;
   }
 
   renderMesh(): Mesh | null {
