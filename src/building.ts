@@ -2,7 +2,7 @@
 
 import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
-import { BuildingStructureDamage } from './buildingStructureDamage.js';
+import { BuildingStructureDamage, buildingCoreNodeSize } from './buildingStructureDamage.js';
 import { Entity, EntityType, ShipGroup, Team } from './entities.js';
 import { Colors, colorToCSS, type Color } from './colors.js';
 import {
@@ -132,9 +132,11 @@ export abstract class BuildingBase extends Entity {
     // Corner nodes. Legacy: small footprint-relative squares. New look: each node
     // is exactly one conduit cell regardless of building size, and doubles as the
     // mask for the fiery core effect below.
+    // Shared with BuildingStructureDamage's core hitboxes so the visible node
+    // and the gameplay weak-point region can never drift apart.
     const c = legacyCore
       ? v.side * 0.12
-      : Math.min(v.side * 0.45, GRID_CELL_SIZE * camera.zoom);
+      : buildingCoreNodeSize(v.side / camera.zoom) * camera.zoom;
     ctx.fillStyle = colorToCSS(Colors.menu_background_detail, 0.45);
     ctx.fillRect(x, y, c, c); ctx.fillRect(x + v.side - c, y, c, c); ctx.fillRect(x, y + v.side - c, c, c); ctx.fillRect(x + v.side - c, y + v.side - c, c, c);
     if (!legacyCore) {

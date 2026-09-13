@@ -106,7 +106,7 @@ const ADJACENCY_EDGE_EPS = 1e-3;
  * with overlapping horizontal extent). Corner-only contact — where the
  * shared extent collapses to a single point — is explicitly rejected.
  */
-function leavesAdjacent(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
+export function leavesAdjacent(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): boolean {
   const aL = a.x - a.w / 2, aR = a.x + a.w / 2, aT = a.y - a.h / 2, aB = a.y + a.h / 2;
   const bL = b.x - b.w / 2, bR = b.x + b.w / 2, bT = b.y - b.h / 2, bB = b.y + b.h / 2;
   const minOverlap = Math.min(a.w, a.h, b.w, b.h) * ADJACENCY_MIN_OVERLAP_FRAC;

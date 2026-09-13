@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { BuildingStructureDamage, type BuildingStructureBody } from './buildingStructureDamage.js';
+import {
+  BuildingStructureDamage, leavesAdjacent, BUILDING_STRUCTURAL_COLLAPSE_FRACTION,
+  BUILDING_CORE_INTEGRITY_FRACTION, type BuildingStructureBody,
+} from './buildingStructureDamage.js';
 import { Vec2 } from './math.js';
 import { EntityType } from './entities.js';
 
@@ -198,6 +201,351 @@ describe('BuildingStructureDamage', () => {
 
     expect(body.health).toBe(0);
     expect(damage.connectedMass).toBe(0);
+  });
+
+  // ===========================================================================
+  // ADJACENCY
+  // ===========================================================================
+  describe('BSP adjacency', () => {
+    it('treats a shared vertical edge with real overlap as adjacent', () => {
+      const a = { x: 0, y: 0, w: 10, h: 10 };   // spans x[-5,5] y[-5,5]
+      const b = { x: 10, y: 0, w: 10, h: 10 };  // spans x[5,15] y[-5,5] — shares x=5 edge fully
+      expect(leavesAdjacent(a, b)).toBe(true);
+    });
+
+    it('treats a shared horizontal edge with real overlap as adjacent', () => {
+      const a = { x: 0, y: 0, w: 10, h: 10 };
+      const b = { x: 0, y: 10, w: 10, h: 10 }; // shares y=5 edge fully
+      expect(leavesAdjacent(a, b)).toBe(true);
+    });
+
+    it('does NOT treat corner-only contact as adjacent', () => {
+      const a = { x: 0, y: 0, w: 10, h: 10 };   // spans x[-5,5] y[-5,5]
+      const b = { x: 10, y: 10, w: 10, h: 10 }; // spans x[5,15] y[5,15] — touches only at point (5,5)
+      expect(leavesAdjacent(a, b)).toBe(false);
+    });
+
+    it('does NOT treat separated rectangles as adjacent', () => {
+      const a = { x: 0, y: 0, w: 10, h: 10 };
+      const b = { x: 30, y: 0, w: 10, h: 10 }; // gap between x=5 and x=25
+      expect(leavesAdjacent(a, b)).toBe(false);
+    });
+
+    it('never marks generated corner-only contacts as structural neighbors', () => {
+      // Regression guard against the old margin-based rectsOverlap adjacency,
+      // which could treat diagonal/corner contact as a shared structural edge.
+      const damage = new BuildingStructureDamage(999);
+      const body = createMockBody(6, 100);
+      const geo = damage.ensure(body);
+      for (const a of geo.leaves) {
+        for (const nIdx of a.neighbors) {
+          const b = geo.leaves[nIdx];
+          const aL = a.x - a.w / 2, aR = a.x + a.w / 2, aT = a.y - a.h / 2, aB = a.y + a.h / 2;
+          const bL = b.x - b.w / 2, bR = b.x + b.w / 2, bT = b.y - b.h / 2, bB = b.y + b.h / 2;
+          const vertOverlap = Math.min(aB, bB) - Math.max(aT, bT);
+          const horizOverlap = Math.min(aR, bR) - Math.max(aL, bL);
+          const sharesVerticalEdge = Math.abs(aR - bL) < 1e-2 || Math.abs(bR - aL) < 1e-2;
+          const sharesHorizontalEdge = Math.abs(aB - bT) < 1e-2 || Math.abs(bB - aT) < 1e-2;
+          const realSharedEdge = (sharesVerticalEdge && vertOverlap > 1e-6) || (sharesHorizontalEdge && horizOverlap > 1e-6);
+          expect(realSharedEdge).toBe(true);
+        }
+      }
+    });
+
+    it('detaches an island once its last shared edge is actually severed', () => {
+      // Leaf 38 in this seeded geometry has exactly two neighbors: 15 and 39.
+      // Removing both — even though leaf 38 itself is never targeted — must
+      // sever its only real structural connections and detach it.
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      const geo = damage.ensure(body);
+      const leaf15 = geo.leaves[15], leaf38 = geo.leaves[38], leaf39 = geo.leaves[39];
+      expect(leaf38.neighbors.slice().sort()).toEqual([15, 39]);
+
+      const dmgFor = (area: number) => (area * 1.02 / geo.totalMass) * body.maxHealth;
+
+      damage.hit(body, dmgFor(leaf15.area), { kind: 'explosion', x: leaf15.x, y: leaf15.y, dx: 0, dy: 0 });
+      expect(damage.removedIndices).toContain(15);
+      expect(damage.removedIndices).not.toContain(38);
+
+      damage.hit(body, dmgFor(leaf39.area), { kind: 'explosion', x: leaf39.x, y: leaf39.y, dx: 0, dy: 0 });
+      expect(damage.removedIndices).toContain(39);
+      // Leaf 38 was never hit directly, but with both its neighbors gone it
+      // can no longer reach the root and must be detected as detached.
+      expect(damage.removedIndices).toContain(38);
+    });
+  });
+
+  // ===========================================================================
+  // LASERS
+  // ===========================================================================
+  describe('laser entry/exit damage', () => {
+    it('removes material from both the entry and exit side of a strong beam', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(6, 100);
+      damage.ensure(body);
+
+      damage.hit(body, 25, { kind: 'laser', x: 0, y: 0, dx: 1, dy: 0 });
+
+      const geo = damage.geometry!;
+      const removedX = damage.removedIndices.map(i => geo.leaves[i].x);
+      expect(removedX.some(x => x < -1)).toBe(true); // entry side (negative along)
+      expect(removedX.some(x => x > 1)).toBe(true);  // exit side (positive along)
+    });
+
+    it('a weak beam still removes at least one entry-side panel', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(6, 100);
+      damage.ensure(body);
+      damage.hit(body, 3, { kind: 'laser', x: 0, y: 0, dx: 1, dy: 0 });
+      expect(damage.removedIndices.length).toBeGreaterThan(0);
+    });
+
+    it('excavates progressively inward from both sides on repeated fire', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(6, 100);
+      damage.ensure(body);
+
+      // A fixed beam eventually bores a corridor along one line and saturates
+      // once nothing survives in that exact strip; real sustained fire spreads
+      // slightly, so vary the impact point like multiple incoming beams.
+      let prevMass = damage.geometry!.totalMass;
+      let sawDecrease = false;
+      for (let i = 0; i < 6; i++) {
+        const spread = ((i % 5) - 2) * 3;
+        damage.hit(body, 10, { kind: 'laser', x: 0, y: spread, dx: 1, dy: 0 });
+        if (damage.connectedMass < prevMass) sawDecrease = true;
+        expect(damage.connectedMass).toBeLessThanOrEqual(prevMass);
+        prevMass = damage.connectedMass;
+      }
+      expect(sawDecrease).toBe(true);
+    });
+
+    it('produces equivalent removal for a unit-length and a raw-magnitude beam vector', () => {
+      const damageUnit = new BuildingStructureDamage(12345);
+      const bodyUnit = createMockBody(6, 100);
+      damageUnit.ensure(bodyUnit);
+      damageUnit.hit(bodyUnit, 15, { kind: 'laser', x: 0, y: 0, dx: 1, dy: 0 });
+
+      const damageRaw = new BuildingStructureDamage(12345);
+      const bodyRaw = createMockBody(6, 100);
+      damageRaw.ensure(bodyRaw);
+      damageRaw.hit(bodyRaw, 15, { kind: 'laser', x: 0, y: 0, dx: 800, dy: 0 });
+
+      expect(damageRaw.removedIndices.slice().sort()).toEqual(damageUnit.removedIndices.slice().sort());
+      expect(damageRaw.connectedMass).toBe(damageUnit.connectedMass);
+    });
+
+    it('handles a diagonal laser beam', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(6, 100);
+      damage.ensure(body);
+      damage.hit(body, 15, { kind: 'laser', x: 0, y: 0, dx: 100, dy: 300 });
+      expect(damage.connectedMass).toBeLessThan(damage.geometry!.totalMass);
+    });
+  });
+
+  // ===========================================================================
+  // CORES
+  // ===========================================================================
+  describe('core integrity', () => {
+    it('scales with actual incoming damage rather than a fixed fraction per hit', () => {
+      const light = new BuildingStructureDamage(12345);
+      const lightBody = createMockBody(4, 100);
+      const geo = light.ensure(lightBody);
+      const region0 = geo.coreRegions[0];
+      light.hit(lightBody, 1, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
+
+      const heavy = new BuildingStructureDamage(12345);
+      const heavyBody = createMockBody(4, 100);
+      heavy.ensure(heavyBody);
+      heavy.hit(heavyBody, 40, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
+
+      expect(light.coreIntegrity[0]).toBeGreaterThan(0.85); // 1 dmg vs a 10 HP-equivalent core
+      expect(heavy.coreIntegrity[0]).toBe(0); // 40 dmg fully destroys a 10 HP-equivalent core
+      expect(light.coreIntegrity[0]).not.toBe(heavy.coreIntegrity[0]);
+    });
+
+    it('a direct hit on the TL core region damages only that core', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      const geo = damage.ensure(body);
+      const region0 = geo.coreRegions[0];
+      damage.hit(body, 5, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
+
+      expect(damage.coreIntegrity[0]).toBeLessThan(1);
+      expect(damage.coreIntegrity[1]).toBe(1);
+      expect(damage.coreIntegrity[2]).toBe(1);
+      expect(damage.coreIntegrity[3]).toBe(1);
+    });
+
+    it('a hit near but outside the TL core rectangle does not damage it', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      const geo = damage.ensure(body);
+      const region0 = geo.coreRegions[0];
+      // Just past the region's reach along y (region half-size ~4.33). Keep
+      // the damage small so this isn't also a large-radius blast that guts
+      // the corner's support through ordinary structural shedding.
+      const missPoint = { x: region0.x, y: region0.y + region0.h / 2 + 0.5 };
+      damage.hit(body, 2, { kind: 'explosion', x: missPoint.x, y: missPoint.y, dx: 0, dy: 0 });
+
+      expect(damage.coreIntegrity[0]).toBe(1);
+    });
+
+    it('destroying a core triggers its localized critical structural burst exactly once', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 1000); // large maxHealth so a 5-dmg hit is a small mass fraction
+      const geo = damage.ensure(body);
+      const region0 = geo.coreRegions[0];
+
+      let lastMass = damage.connectedMass;
+      let maxDrop = 0;
+      let dropOnKillingHit = 0;
+      for (let i = 0; i < 25 && damage.coreIntegrity[0] > 0; i++) {
+        damage.hit(body, 5, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
+        const drop = lastMass - damage.connectedMass;
+        if (damage.coreIntegrity[0] === 0 && dropOnKillingHit === 0) dropOnKillingHit = drop;
+        maxDrop = Math.max(maxDrop, drop);
+        lastMass = damage.connectedMass;
+      }
+      expect(dropOnKillingHit).toBeGreaterThan(0);
+
+      // One more hit after the core is already dead must NOT re-apply the
+      // critical burst — the ordinary per-hit mass loss should be far smaller.
+      const massBeforeExtra = damage.connectedMass;
+      damage.hit(body, 5, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
+      const extraDrop = massBeforeExtra - damage.connectedMass;
+      expect(extraDrop).toBeLessThan(dropOnKillingHit * 0.5);
+    });
+
+    it('extinguishes a core once its support is destroyed, without harming the other cores', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      damage.ensure(body);
+
+      // Hits leaf 1 (tagged core0, but whose own center lies outside the exact
+      // TL region) hard enough to shed the surrounding core0-tagged material —
+      // this never passes the core-region hit test directly.
+      damage.hit(body, 25, { kind: 'explosion', x: -13.836, y: -7.049, dx: 0, dy: 0 });
+
+      expect(damage.coreIntegrity[0]).toBe(0); // unsupported, not directly destroyed
+      expect(damage.coreIntegrity[1]).toBe(1);
+      expect(damage.coreIntegrity[2]).toBe(1);
+      expect(damage.coreIntegrity[3]).toBe(1);
+      expect(damage.connectedMass).toBeGreaterThan(0); // building itself is fine
+    });
+
+    it('core repair scales with the actual mass-equivalent restored, not a fixed increment', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      const geo = damage.ensure(body);
+      const leaf40 = geo.leaves[40];
+      expect(leaf40.isCore).toBe(true);
+
+      // Shed exactly leaf 40 (closest candidate to its own center) without
+      // touching any core region directly.
+      const massBudget = leaf40.area * 1.02;
+      damage.hit(body, (massBudget / geo.totalMass) * body.maxHealth, { kind: 'explosion', x: leaf40.x, y: leaf40.y, dx: 0, dy: 0 });
+      expect(damage.removedIndices).toContain(40);
+      expect(damage.coreIntegrity[0]).toBe(1); // untouched directly — only that one panel is gone
+
+      damage.repair(body, 100); // fully restore everything
+      const expectedFrac = Math.min(1, (leaf40.area / geo.totalMass) / BUILDING_CORE_INTEGRITY_FRACTION);
+      // Sanity: this is not the old fixed +0.25 increment.
+      expect(expectedFrac).not.toBeCloseTo(0.25, 1);
+      expect(damage.coreIntegrity[0]).toBeCloseTo(1, 5); // fully repaired -> fully restored (capped at 1)
+    });
+
+    it('cannot repair a core before its support structure has actually returned', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      damage.ensure(body);
+      damage.hit(body, 25, { kind: 'explosion', x: -13.836, y: -7.049, dx: 0, dy: 0 });
+      expect(damage.coreIntegrity[0]).toBe(0);
+
+      // A small repair restores structure nearest the root first; it should
+      // not yet reach all the way out to the unsupported corner.
+      damage.repair(body, 5);
+      expect(damage.coreIntegrity[0]).toBe(0);
+
+      // A full repair reconnects everything, including the corner.
+      damage.repair(body, 100);
+      expect(damage.coreIntegrity[0]).toBeGreaterThan(0);
+    });
+  });
+
+  // ===========================================================================
+  // CATASTROPHIC COLLAPSE
+  // ===========================================================================
+  describe('structural collapse threshold', () => {
+    it('reports collapsed once connected mass reaches the 10% threshold, without needing to hit zero', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(6, 200);
+      damage.ensure(body);
+
+      let collapsedAt = -1;
+      for (let i = 0; i < 200 && !damage.isCollapsed(); i++) {
+        const spread = ((i % 11) - 5) * 4;
+        damage.hit(body, 6, { kind: 'bullet', x: 0, y: spread, dx: 500, dy: 0 });
+        if (damage.isCollapsed()) collapsedAt = i;
+      }
+      expect(collapsedAt).toBeGreaterThanOrEqual(0);
+      expect(damage.connectedMass).toBeGreaterThan(0); // did NOT need to reach literally zero
+      expect(damage.connectedMass / damage.geometry!.totalMass).toBeLessThanOrEqual(BUILDING_STRUCTURAL_COLLAPSE_FRACTION);
+    });
+
+    it('collapseAll sheds all remaining structure exactly once and is idempotent on repeat', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      damage.ensure(body);
+      damage.hit(body, 20, { kind: 'bullet', x: 0, y: 0, dx: 500, dy: 0 });
+
+      damage.collapseAll(body);
+      expect(damage.connectedMass).toBe(0);
+      expect(body.health).toBe(0);
+      expect(damage.coreIntegrity).toEqual([0, 0, 0, 0]);
+      const eventsAfterFirstCollapse = damage.pendingDetached.length;
+      expect(eventsAfterFirstCollapse).toBeGreaterThan(0);
+
+      damage.pendingDetached = []; // simulate a flush() consuming the event
+      damage.collapseAll(body); // calling again must not re-emit already-gone structure
+      expect(damage.pendingDetached.length).toBe(0);
+    });
+  });
+
+  // ===========================================================================
+  // HP INVARIANT
+  // ===========================================================================
+  describe('HP derives from connected mass', () => {
+    it('body.health always equals maxHealth * connectedMass/totalMass after hits and repairs', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(6, 150);
+      const geo = damage.ensure(body);
+
+      const checkInvariant = () => {
+        const expected = body.maxHealth * (damage.connectedMass / geo.totalMass);
+        expect(body.health).toBeCloseTo(expected, 6);
+      };
+
+      damage.hit(body, 10, { kind: 'bullet', x: 0, y: 0, dx: 500, dy: 0 });
+      checkInvariant();
+      damage.hit(body, 10, { kind: 'laser', x: 0, y: 5, dx: 800, dy: 0 });
+      checkInvariant();
+      damage.repair(body, 8);
+      checkInvariant();
+    });
+
+    it('a core critical burst changes health only through the lost connected mass', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 1000);
+      const geo = damage.ensure(body);
+      const region0 = geo.coreRegions[0];
+      for (let i = 0; i < 25 && damage.coreIntegrity[0] > 0; i++) {
+        damage.hit(body, 5, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
+      }
+      expect(body.health).toBeCloseTo(body.maxHealth * (damage.connectedMass / geo.totalMass), 6);
+    });
   });
 
   it('restores state from network snapshot deterministically', () => {

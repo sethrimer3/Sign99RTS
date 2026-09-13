@@ -172,7 +172,7 @@ export abstract class Entity {
         dy: _source.velocity.length() > 0.001 ? _source.velocity.y : this.position.y - _source.position.y,
       } : undefined;
       this.buildingDamage.hit(this, amount, impact ?? fallback);
-      if (this.health <= 0 || this.buildingDamage.connectedMass <= 0) {
+      if (this.health <= 0 || this.buildingDamage.isCollapsed()) {
         this.health = 0;
         this.destroy();
       }
