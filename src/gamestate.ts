@@ -17,7 +17,8 @@ import { Camera } from './camera.js';
 import { Audio } from './audio.js';
 import { WorldGrid, GRID_CELL_SIZE, cellKey, footprintOrigin, footprintCenter } from './grid.js';
 import { PowerGraph } from './power.js';
-import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, CONDUIT_COST, DT } from './constants.js';
+import { BrightGraph } from './bright.js';
+import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, BRIGHT_GAIN_PER_PATH_CELL, CONDUIT_COST, DT } from './constants.js';
 import { findClosestEnemy, ringSplashDamage } from './combatUtils.js';
 import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS, RESEARCH_MODE, RESEARCH_TIME, TICK_RATE } from './constants.js';
 import { buildCostForBuildingType, type BuildDef } from './builddefs.js';
@@ -222,6 +223,8 @@ export class GameState {
   grid: WorldGrid = new WorldGrid();
   /** PR5: graph-based power network (lazy, dirty-flag cached). */
   power: PowerGraph = new PowerGraph();
+  /** Bright Matter network: Particle Accelerators linked directly to the Command Post by conduit. */
+  bright: BrightGraph = new BrightGraph();
   synonymous: SynonymousSwarmSystem = new SynonymousSwarmSystem();
   private synonymousBaseAccumulator: Map<Team, number> = new Map();
   private synonymousFactoryAccumulator: Map<number, number> = new Map();
@@ -276,6 +279,8 @@ export class GameState {
   private advancedRegenConduitRepairTimer: number = 0.5;
 
   resources: number = 500;
+  /** Bright Matter: secondary exotic-matter resource from Particle Accelerators. */
+  brightMatter: number = 0;
   researchProgress: ResearchProgress = { item: null, progress: 0, timeNeeded: 0 };
   researchQueue: string[] = [];
   completedResearchNotifications: string[] = [];
@@ -379,7 +384,7 @@ export class GameState {
       if (entity instanceof Wall && entity.team === Team.Player && this.researchedItems.has('poweredWalls')) {
         entity.enablePoweredWall();
       }
-      this.power.markDirty();
+      this.power.markDirty(); this.bright.markDirty();
     }
   }
 
@@ -561,7 +566,7 @@ export class GameState {
         b.completionEffectPending &&
         (b.type === EntityType.CommandPost || b.type === EntityType.PowerGenerator)
       ) {
-        this.power.markDirty();
+        this.power.markDirty(); this.bright.markDirty();
       }
     }
     this.updateAreaShields();
@@ -913,7 +918,7 @@ export class GameState {
       const conduitTeam = this.grid.conduitTeam(cx, cy);
       if (conduitTeam !== null && conduitTeam !== team && this.power.isCellEnergized(conduitTeam, cx, cy)) {
         if (this.grid.damageConduit(cx, cy, 1)) this.recordDestroyedConduit(cx, cy, conduitTeam);
-        this.power.markDirty();
+        this.power.markDirty(); this.bright.markDirty();
         this._bulletHitScratch.set(x, y);
         this.particles.emitSpark(this._bulletHitScratch);
         return true;
@@ -958,6 +963,7 @@ export class GameState {
 
   private updateBuildingPower(): void {
     this.power.recompute(this);
+    this.bright.recompute(this);
   }
 
   // -----------------------------------------------------------------------
@@ -983,6 +989,15 @@ export class GameState {
         b.buildProgress >= 1
       ) {
         this.resources += RESOURCE_GAIN_RATE * dt;
+      }
+    }
+
+    // Bright Matter: scales with total conduit path length from the Command
+    // Post to every directly-linked Particle Accelerator.
+    if (this.player.alive) {
+      const pathLength = this.bright.totalPathLength(Team.Player);
+      if (pathLength > 0) {
+        this.brightMatter += BRIGHT_GAIN_PER_PATH_CELL * pathLength * dt;
       }
     }
   }
@@ -1063,7 +1078,7 @@ export class GameState {
       if (this.grid.damageConduit(cx, cy, 1)) {
         this.recordDestroyedConduit(cx, cy, conduitTeam);
       }
-      this.power.markDirty();
+      this.power.markDirty(); this.bright.markDirty();
       if (proj instanceof MassDriverBullet) {
         proj.triggerBurst();
         continue;
@@ -1211,7 +1226,7 @@ export class GameState {
     }
     if (ready.length === 0) return;
     for (const { cx, cy } of ready) this.grid.promotePendingConduit(cx, cy);
-    this.power.markDirty();
+    this.power.markDirty(); this.bright.markDirty();
     if (ready.length > 0) {
       const first = ready[0];
       this.ringEffects.spawn('build_complete_wave', new Vec2((first.cx + 0.5) * GRID_CELL_SIZE, (first.cy + 0.5) * GRID_CELL_SIZE), 8, 70, 0.55, 0.55);
@@ -1260,7 +1275,7 @@ export class GameState {
     }
     if (repaired === 0) return;
     compactKeep(this.destroyedConduits, (c) => !c.erased);
-    this.power.markDirty();
+    this.power.markDirty(); this.bright.markDirty();
     Audio.playSoundAt('build', nearestRepairPos);
   }
 
@@ -1455,7 +1470,7 @@ export class GameState {
       }
     }
 
-    if (planned > 0) this.power.markDirty();
+    if (planned > 0) this.power.markDirty(); this.bright.markDirty();
   }
 
   private planAutomaticConduit(cx: number, cy: number, team: Team): number {
@@ -1655,7 +1670,7 @@ export class GameState {
     if (this.grid.conduitTeam(cx, cy) === team || this.grid.pendingConduitTeam(cx, cy) === team) {
       this.grid.removeConduit(cx, cy);
       if (team === Team.Player) this.resources += CONDUIT_COST;
-      this.power.markDirty();
+      this.power.markDirty(); this.bright.markDirty();
       return 'conduit';
     }
     return null;
@@ -1682,7 +1697,7 @@ export class GameState {
     const conduits = this.grid.cancelPendingConduits(team);
     refund += conduits * CONDUIT_COST;
     if (team === Team.Player && refund > 0) this.resources += refund;
-    if (buildings > 0 || conduits > 0) this.power.markDirty();
+    if (buildings > 0 || conduits > 0) this.power.markDirty(); this.bright.markDirty();
     return { buildings, conduits, refund };
   }
 
@@ -1726,7 +1741,7 @@ export class GameState {
         }
       }
       b.destroy();
-      this.power.markDirty();
+      this.power.markDirty(); this.bright.markDirty();
     }
   }
 
@@ -1901,7 +1916,7 @@ export class GameState {
     }
     compactAlive(this.buildings);
     if (this.buildings.length !== beforeBuildings) {
-      this.power.markDirty();
+      this.power.markDirty(); this.bright.markDirty();
       this.markBuildingCollisionDirty();
     }
     compactAlive(this.projectiles);
@@ -2497,7 +2512,7 @@ export class GameState {
         }
       }
     }
-    if (refunded > 0) this.power.markDirty();
+    if (refunded > 0) this.power.markDirty(); this.bright.markDirty();
     return refunded;
   }
 

@@ -1885,6 +1885,7 @@ class QuickBuildMenu {
       items.push({ type: 'conduit', label: 'Conduit', cost: CONDUIT_COST });
     }
     addBuilding('powergenerator');
+    addBuilding('particleaccelerator');
     addBuilding('wall');
     addBuilding('factory');
     addBuilding('researchlab');

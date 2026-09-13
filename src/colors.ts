@@ -40,6 +40,8 @@ export const Colors = {
   researchlab_detail:         c(40, 86, 47, 2.0),
   powergenerator_detail:      c(70, 81, 30, 3.1),
   powergenerator_coverage:    c(11, 80, 124, 1.0),
+  particleaccelerator_detail: c(120, 60, 140, 2.4),
+  bright_matter:              c(200, 140, 255, 1.0),
   timebomb_detail:            c(111, 65, 37, 2.0),
   missileturret_detail:       c(163, 193, 205, 1.2),
   gatlingturret_detail:       c(190, 210, 120, 1.4),

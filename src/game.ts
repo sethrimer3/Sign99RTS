@@ -61,6 +61,7 @@ import {
   drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, drawBaseLockwardEffect, type ShipCommandGroup, type WaypointMarker,
 } from './gameRender.js';
 import { renderBudget } from './renderBudget.js';
+import { drawBrightPaths } from './brightPathRender.js';
 import type { NetInputSnapshot, NetGameSnapshot } from './net/protocol.js';
 import type { MultiplayerTransport } from './net/transport.js';
 import { findClosestEnemy } from './combatUtils.js';
@@ -2586,6 +2587,7 @@ export class Game {
         (cx, cy, team) => this.state.power.getFlowDir(team, cx, cy),
       );
     }
+    drawBrightPaths(ctx, this.camera, this.state, this.state.gameTime);
     this.state.drawEntities(ctx, this.camera);
     drawBaseLockwardEffect(ctx, this.camera, this.state);
     drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn);
@@ -2638,6 +2640,9 @@ export class Game {
         ? { currencySymbol: SYNONYMOUS_CURRENCY_SYMBOL, symbolOnRight: true, symbolFont: 'menu' }
         : undefined,
     );
+    if (!synonymousPlayer) {
+      this.hud.drawBrightMatter(ctx, this.state.brightMatter, uiW, uiH);
+    }
     if (this.state.player.alive) {
       this.hud.drawPlayerEnergy(
         ctx,
