@@ -29,7 +29,7 @@ const DISSOLVE_TIME = 2.4;
 /** Alpha ease-in so fragments do not pop on. */
 const FADE_IN_TIME = 0.06;
 /** Head must travel this far (world units, scaled by ship radius / 22) between spine nodes. */
-const EMIT_SPACING_BASE = 20;
+const EMIT_SPACING_BASE = 42;
 /** Spacing grows past this rate so a Shift-boosting ghost does not flood the pool; clusters
  *  also lose recursion depth with speed so the spine stays continuous rather than sparse. */
 const MAX_NODES_PER_SECOND = 32;
@@ -118,7 +118,7 @@ export class GhostShipEffect {
     this.headX = x;
     this.headY = y;
     // Seed the structure immediately so death does not show an empty frame.
-    this.emitNode(x, y, facing, ghostRecursionLevels(this.densityScale));
+    this.emitNode(x, y, facing, ghostRecursionLevels(this.densityScale), EMIT_SPACING_BASE);
   }
 
   /** Drop all visual state. Used on respawn and runtime reset. */
@@ -174,7 +174,7 @@ export class GhostShipEffect {
       this.distanceSinceEmit -= spacing;
       // Place the node back along the step so multiple nodes per frame stay evenly spaced.
       const back = step > 1e-4 ? this.distanceSinceEmit / step : 0;
-      this.emitNode(this.headX - dx * back, this.headY - dy * back, this.headAngle, levels);
+      this.emitNode(this.headX - dx * back, this.headY - dy * back, this.headAngle, levels, spacing);
       emitted++;
     }
     if (emitted >= MAX_NODES_PER_UPDATE) this.distanceSinceEmit = 0;
@@ -190,37 +190,49 @@ export class GhostShipEffect {
     return n;
   }
 
-  /** Grow one fractal cluster at a spine node. Every parameter derives from the ship seed
-   *  and the monotonic node index, so a replay of the same path grows identical geometry. */
-  private emitNode(x: number, y: number, tangent: number, levels: number): void {
+  /** Grow one spiral arm at a spine node. Every parameter derives from the ship seed and the
+   *  monotonic node index, so a replay of the same path grows identical geometry. The arm's
+   *  reach is tied to `spacing` (the gap the head just travelled) so it always overlaps the
+   *  next node's arm — that overlap, not any single arm, is what reads as an unbroken chain. */
+  private emitNode(x: number, y: number, tangent: number, levels: number, spacing: number): void {
     const index = this.nodeIndex++;
     const rng = seededRandom((this.seed + Math.imul(index + 1, 0x9e3779b1)) >>> 0);
     // Pool pressure shortens the hold phase of new fragments so a fast ghost ages out
     // gracefully instead of slamming into the ring cap (same idea as ShipDebrisSystem).
     const fill = this.activeCount / GHOST_FRAGMENT_CAP;
     const hold = HOLD_MIN + (HOLD_MAX - HOLD_MIN) * (1 - 0.85 * fill * fill);
-    const rootSize = this.radius * (0.42 + rng() * 0.22);
+    // Big relative to the hull so the coil itself, not the ship, sets the trail's scale —
+    // that is what makes each arm read as a legible spiral rather than a fleck of confetti.
+    const rootSize = this.radius * (1.0 + rng() * 0.4);
     const rootAngle = tangent + (rng() - 0.5) * 0.9;
-    this.bud(x, y, rootAngle, rootSize, levels, hold, true, rng);
+    // Reach comfortably past the next node so arms always overlap instead of leaving gaps.
+    const reach = Math.max(rootSize * 1.3, spacing * 1.15);
+    this.spiral(x, y, rootAngle, rootSize, reach, levels, hold, rng);
   }
 
-  /** Recursive Julia-like budding: the root sprouts a child from each base vertex; deeper
-   *  generations bud from one side (occasionally both), twisting further each step so the
-   *  cluster curls like a bulb chain. Roughly 3 / 6 / 9 triangles at 1 / 2 / 3 levels. */
-  private bud(x: number, y: number, angle: number, size: number, levels: number, hold: number, root: boolean, rng: () => number): void {
-    this.spawnTriangle(x, y, angle, size, hold, rng);
-    if (levels <= 0) return;
-    const twist = 0.55 + rng() * 0.75;
-    const childSize = size * (0.5 + rng() * 0.16);
-    const preferred = rng() < 0.5 ? -1 : 1;
-    const both = root || rng() < 0.35;
-    for (let side = -1; side <= 1; side += 2) {
-      if (!both && side !== preferred) continue;
-      const va = angle + side * 2.25;
-      const vx = x + Math.cos(va) * size * 0.72;
-      const vy = y + Math.sin(va) * size * 0.72;
-      const ca = angle + side * twist + (rng() - 0.5) * 0.35;
-      this.bud(vx + Math.cos(ca) * childSize * 0.45, vy + Math.sin(ca) * childSize * 0.45, ca, childSize, levels - 1, hold, false, rng);
+  /** Lay down one logarithmic-spiral arm of triangles winding outward from (x, y): each step
+   *  turns by a wide angle and grows the radius geometrically until it spans `reach`, so the
+   *  triangles trace a big, clearly-coiled arm — no branching tree — that overlaps the next
+   *  spine node's arm at its outer end. Roughly 4 / 8 / 12 triangles at 1 / 2 / 3 levels
+   *  (fewer, larger triangles than the old fractal so individual coils stay legible). */
+  private spiral(x: number, y: number, angle: number, size: number, reach: number, levels: number, hold: number, rng: () => number): void {
+    const count = Math.max(1, levels) * 4;
+    // Roughly 1.3-1.8 full turns so the coil is unmistakable rather than a shallow curve.
+    const twist = (Math.PI * 2 * (1.3 + rng() * 0.5)) / count;
+    const spin = rng() < 0.5 ? -1 : 1;
+    const r0 = size * 0.22;
+    // Solve for the per-step growth ratio that carries the arm from r0 out to `reach`
+    // over `count` steps, so the last triangle always lands past the next node.
+    const growth = Math.pow(Math.max(reach, r0 * 1.1) / r0, 1 / count);
+    let theta = angle;
+    let r = r0;
+    for (let k = 0; k < count; k++) {
+      const px = x + Math.cos(theta) * r;
+      const py = y + Math.sin(theta) * r;
+      const triSize = size * Math.max(0.4, 0.95 - k * (0.55 / count));
+      this.spawnTriangle(px, py, theta + Math.PI / 2, triSize, hold, rng);
+      theta += twist * spin;
+      r *= growth;
     }
   }
 

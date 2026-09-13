@@ -18,6 +18,7 @@ import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
 import { Colors, colorToCSS } from './colors.js';
 import { Team } from './entities.js';
+import { isLegacyGraphics } from './graphicsmode.js';
 
 /** Side length of one grid cell in world units. */
 export const GRID_CELL_SIZE = 26 / 3;
@@ -313,6 +314,10 @@ export class WorldGrid {
    *                  the energized colour ramp. Falls back to "always
    *                  energized" so callers that don't know about the power
    *                  graph still get a usable visual.
+   * @param revealCenter World-space centre (typically the player) that the
+   *                  build-menu grid reveal expands out from / shrinks into.
+   * @param revealRadius World-space radius of the reveal circle. 0 = off.
+   *                  Ignored entirely in Legacy Graphics mode.
    */
   draw(
     ctx: CanvasRenderingContext2D,
@@ -322,6 +327,8 @@ export class WorldGrid {
     time: number = 0,
     isEnergized?: (cx: number, cy: number, team: Team) => boolean,
     conduitShimmer: boolean = true,
+    revealCenter?: Vec2,
+    revealRadius: number = 0,
   ): void {
     // Visible cell range (inclusive). Pad by one cell for line continuity.
     const tl = camera.screenToWorld(new Vec2(0, 0));
@@ -361,25 +368,137 @@ export class WorldGrid {
     ctx.setLineDash([]);
 
     // 2. Grid lines — only drawn when sufficiently zoomed in to avoid clutter.
-    if (camera.zoom >= 1.25) {
+    // In non-Legacy Graphics mode the grid is only ever shown via the
+    // build-menu reveal below (block 3), not unconditionally.
+    const gridLineWidth = isLegacyGraphics() ? 1 : 1.5;
+    if (isLegacyGraphics() && camera.zoom >= 1.25) {
       ctx.strokeStyle = colorToCSS(Colors.radar_gridlines, 0.08);
-      ctx.lineWidth = 1;
+      ctx.lineWidth = gridLineWidth;
       ctx.beginPath();
-      for (let cx = cxMin; cx <= cxMax + 1; cx++) {
-        const wx = cx * GRID_CELL_SIZE;
-        const a = camera.worldToScreen(new Vec2(wx, cyMin * GRID_CELL_SIZE));
-        const b = camera.worldToScreen(new Vec2(wx, (cyMax + 1) * GRID_CELL_SIZE));
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      }
-      for (let cy = cyMin; cy <= cyMax + 1; cy++) {
-        const wy = cy * GRID_CELL_SIZE;
-        const a = camera.worldToScreen(new Vec2(cxMin * GRID_CELL_SIZE, wy));
-        const b = camera.worldToScreen(new Vec2((cxMax + 1) * GRID_CELL_SIZE, wy));
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      }
+      this.traceGridLines(ctx, camera, cxMin, cxMax, cyMin, cyMax);
       ctx.stroke();
+    }
+
+    // 3. Build-menu grid reveal — an expanding/shrinking circle of grid
+    // lines centred on the player, independent of zoom level. Skipped in
+    // Legacy Graphics mode so the original zoom-gated look is preserved.
+    if (!isLegacyGraphics() && revealCenter && revealRadius > 0.5) {
+      const centerScreen = camera.worldToScreen(revealCenter);
+      const screenRadius = revealRadius * camera.zoom;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(centerScreen.x, centerScreen.y, screenRadius, 0, Math.PI * 2);
+      ctx.clip();
+      const gradient = ctx.createRadialGradient(
+        centerScreen.x, centerScreen.y, 0,
+        centerScreen.x, centerScreen.y, screenRadius,
+      );
+      gradient.addColorStop(0, colorToCSS(Colors.radar_gridlines, 0.34));
+      gradient.addColorStop(0.7, colorToCSS(Colors.radar_gridlines, 0.22));
+      gradient.addColorStop(1, colorToCSS(Colors.radar_gridlines, 0));
+      ctx.strokeStyle = gradient;
+      ctx.lineWidth = gridLineWidth;
+      ctx.beginPath();
+      this.traceGridLines(ctx, camera, cxMin, cxMax, cyMin, cyMax);
+      ctx.stroke();
+      this.drawGridSheen(ctx, camera, cxMin, cxMax, cyMin, cyMax, time);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Faint traveling glints that slide along grid lines and fade in/out —
+   * a much subtler cousin of the conduit panels' solar-glare reflections.
+   * Only called in non-Legacy Graphics mode.
+   */
+  private drawGridSheen(
+    ctx: CanvasRenderingContext2D,
+    camera: Camera,
+    cxMin: number,
+    cxMax: number,
+    cyMin: number,
+    cyMax: number,
+    time: number,
+  ): void {
+    const SHEEN_LEN_FRAC = 0.22;
+    const SHEEN_SPEED = 0.16;
+    const ACTIVE_FRAC = 0.5;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineWidth = 1.5;
+
+    for (let cx = cxMin; cx <= cxMax + 1; cx++) {
+      const seed = hash01(cx, 0, 0x3c6ef35f);
+      const phase = (time * SHEEN_SPEED + seed) % 1.0;
+      if (phase > ACTIVE_FRAC) continue;
+      const travel = phase / ACTIVE_FRAC;
+      const alpha = Math.sin(travel * Math.PI) * 0.16 * (0.4 + seed * 0.6);
+      if (alpha < 0.01) continue;
+      const wx = cx * GRID_CELL_SIZE;
+      const a = camera.worldToScreen(new Vec2(wx, cyMin * GRID_CELL_SIZE));
+      const b = camera.worldToScreen(new Vec2(wx, (cyMax + 1) * GRID_CELL_SIZE));
+      const segY = a.y + (b.y - a.y) * travel;
+      const halfLen = Math.abs(b.y - a.y) * SHEEN_LEN_FRAC * 0.5;
+      const grad = ctx.createLinearGradient(a.x, segY - halfLen, a.x, segY + halfLen);
+      grad.addColorStop(0, `rgba(220,245,255,0)`);
+      grad.addColorStop(0.5, `rgba(220,245,255,${alpha})`);
+      grad.addColorStop(1, `rgba(220,245,255,0)`);
+      ctx.strokeStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(a.x, segY - halfLen);
+      ctx.lineTo(a.x, segY + halfLen);
+      ctx.stroke();
+    }
+
+    for (let cy = cyMin; cy <= cyMax + 1; cy++) {
+      const seed = hash01(0, cy, 0x2545f491);
+      const phase = (time * SHEEN_SPEED + seed) % 1.0;
+      if (phase > ACTIVE_FRAC) continue;
+      const travel = phase / ACTIVE_FRAC;
+      const alpha = Math.sin(travel * Math.PI) * 0.16 * (0.4 + seed * 0.6);
+      if (alpha < 0.01) continue;
+      const wy = cy * GRID_CELL_SIZE;
+      const a = camera.worldToScreen(new Vec2(cxMin * GRID_CELL_SIZE, wy));
+      const b = camera.worldToScreen(new Vec2((cxMax + 1) * GRID_CELL_SIZE, wy));
+      const segX = a.x + (b.x - a.x) * travel;
+      const halfLen = Math.abs(b.x - a.x) * SHEEN_LEN_FRAC * 0.5;
+      const grad = ctx.createLinearGradient(segX - halfLen, a.y, segX + halfLen, a.y);
+      grad.addColorStop(0, `rgba(220,245,255,0)`);
+      grad.addColorStop(0.5, `rgba(220,245,255,${alpha})`);
+      grad.addColorStop(1, `rgba(220,245,255,0)`);
+      ctx.strokeStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(segX - halfLen, a.y);
+      ctx.lineTo(segX + halfLen, a.y);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  /** Appends vertical/horizontal grid-line segments for the visible cell range to the current path. */
+  private traceGridLines(
+    ctx: CanvasRenderingContext2D,
+    camera: Camera,
+    cxMin: number,
+    cxMax: number,
+    cyMin: number,
+    cyMax: number,
+  ): void {
+    for (let cx = cxMin; cx <= cxMax + 1; cx++) {
+      const wx = cx * GRID_CELL_SIZE;
+      const a = camera.worldToScreen(new Vec2(wx, cyMin * GRID_CELL_SIZE));
+      const b = camera.worldToScreen(new Vec2(wx, (cyMax + 1) * GRID_CELL_SIZE));
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    }
+    for (let cy = cyMin; cy <= cyMax + 1; cy++) {
+      const wy = cy * GRID_CELL_SIZE;
+      const a = camera.worldToScreen(new Vec2(cxMin * GRID_CELL_SIZE, wy));
+      const b = camera.worldToScreen(new Vec2((cxMax + 1) * GRID_CELL_SIZE, wy));
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
     }
   }
 

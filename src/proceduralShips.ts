@@ -6,6 +6,7 @@ import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
 import type { Color } from './colors.js';
 import { renderFieryCore } from './buildingCoreEffect.js';
+import { renderWarmGlow, warmGlowFrameStyle, isWarmGlowEnabled } from './warmGlow.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 
 // ---------------------------------------------------------------------------
@@ -328,18 +329,140 @@ function convexHull(pts: number[][]): number[][] {
   return lower.concat(upper);
 }
 
+/** 8-connected neighbour offsets in clockwise order starting at north. */
+const MOORE_DIRS: ReadonlyArray<[number, number]> = [
+  [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1],
+];
+
+/**
+ * Trace the outer boundary of a filled point cloud by rasterizing it to an offscreen
+ * mask and walking it with Moore-neighbour boundary tracing — robust and fast (a
+ * direct pixel walk has no segment-orientation bookkeeping to get wrong, unlike
+ * marching squares, and no self-intersection/non-termination cases to guard against
+ * like a geometric concave hull) and hugs real concavities since it follows the
+ * actual filled pixels rather than bridging between extreme points like a convex
+ * hull would.
+ */
+function rasterSilhouette(
+  polys: readonly ShipPolygon[],
+  minX: number, minY: number, maxX: number, maxY: number,
+): number[][] | null {
+  if (typeof document === 'undefined') return null;
+  const w = maxX - minX, h = maxY - minY;
+  if (!(w > 0) || !(h > 0)) return null;
+  const RES = 140; // px along the longer side; generated once per geometry, so this is cheap
+  const scale = RES / Math.max(w, h);
+  const pad = 2;
+  const cw = Math.max(1, Math.round(w * scale));
+  const ch = Math.max(1, Math.round(h * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = cw + pad * 2;
+  canvas.height = ch + pad * 2;
+  const cctx = canvas.getContext('2d');
+  if (!cctx) return null;
+  cctx.translate(pad, pad);
+  cctx.scale(scale, scale);
+  cctx.translate(-minX, -minY);
+  cctx.fillStyle = '#fff';
+  for (const poly of polys) {
+    if (poly.pts.length < 6) continue;
+    const p = new Path2D();
+    p.moveTo(poly.pts[0], poly.pts[1]);
+    for (let i = 2; i < poly.pts.length; i += 2) p.lineTo(poly.pts[i], poly.pts[i + 1]);
+    p.closePath();
+    cctx.fill(p);
+  }
+
+  const gw = cw + pad * 2, gh = ch + pad * 2;
+  const data = cctx.getImageData(0, 0, gw, gh).data;
+  const inside = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < gw && y < gh && data[(y * gw + x) * 4 + 3] > 40;
+
+  let startX = -1, startY = -1;
+  for (let y = 0; y < gh && startX < 0; y++) {
+    for (let x = 0; x < gw; x++) if (inside(x, y)) { startX = x; startY = y; break; }
+  }
+  if (startX < 0) return null;
+
+  const loop: number[][] = [];
+  let cx = startX, cy = startY;
+  let backDir = 6; // pretend we arrived from the west (guaranteed background: start is first-in-scan)
+  const maxIter = gw * gh * 4 + 64;
+  for (let iter = 0; iter < maxIter; iter++) {
+    loop.push([cx, cy]);
+    let foundDir = -1;
+    for (let k = 1; k <= 8; k++) {
+      const d = (backDir + k) % 8;
+      const [dx, dy] = MOORE_DIRS[d];
+      if (inside(cx + dx, cy + dy)) { foundDir = d; break; }
+    }
+    if (foundDir < 0) break; // isolated single pixel
+    cx += MOORE_DIRS[foundDir][0];
+    cy += MOORE_DIRS[foundDir][1];
+    backDir = (foundDir + 4) % 8;
+    if (cx === startX && cy === startY) break;
+  }
+  if (loop.length < 3) return null;
+
+  // Simplify (Douglas-Peucker) to collapse the pixel staircase, then map back to world space.
+  const simplified = simplifyPolyline(loop, 1.4);
+  return simplified.map(([x, y]) => [(x - pad) / scale + minX, (y - pad) / scale + minY]);
+}
+
+function simplifyPolyline(pts: number[][], epsilon: number): number[][] {
+  if (pts.length <= 3) return pts;
+  const sqEpsilon = epsilon * epsilon;
+  const distToSeg = (p: number[], a: number[], b: number[]): number => {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const len2 = dx * dx + dy * dy;
+    if (len2 === 0) return (p[0] - a[0]) ** 2 + (p[1] - a[1]) ** 2;
+    let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const px = a[0] + t * dx, py = a[1] + t * dy;
+    return (p[0] - px) ** 2 + (p[1] - py) ** 2;
+  };
+  const simplifyRange = (start: number, end: number, keep: boolean[]): void => {
+    if (end <= start + 1) return;
+    let maxDist = 0, idx = -1;
+    for (let i = start + 1; i < end; i++) {
+      const d = distToSeg(pts[i], pts[start], pts[end]);
+      if (d > maxDist) { maxDist = d; idx = i; }
+    }
+    if (maxDist > sqEpsilon && idx >= 0) {
+      keep[idx] = true;
+      simplifyRange(start, idx, keep);
+      simplifyRange(idx, end, keep);
+    }
+  };
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = true;
+  keep[pts.length - 1] = true;
+  simplifyRange(0, pts.length - 1, keep);
+  const out: number[][] = [];
+  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
+  return out;
+}
+
 /** Build one continuous path around the visible component cloud.
  * Compound bucket paths are suitable for filling, but stroking them outlines every
- * panel. A single outer boundary includes generated wings without drawing that mesh.
+ * panel. A single outer boundary includes generated wings without drawing that mesh,
+ * tightly hugging concave notches instead of bridging them like a convex hull would.
  */
 export function buildOuterSilhouette(polys: readonly ShipPolygon[]): Path2D | null {
   if (typeof Path2D === 'undefined') return null;
   const path = new Path2D();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const points: number[][] = [];
   for (const poly of polys) {
-    for (let i = 0; i < poly.pts.length; i += 2) points.push([poly.pts[i], poly.pts[i + 1]]);
+    for (let i = 0; i < poly.pts.length; i += 2) {
+      const x = poly.pts[i], y = poly.pts[i + 1];
+      points.push([x, y]);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
   }
-  const boundary = convexHull(points);
+  const boundary = rasterSilhouette(polys, minX, minY, maxX, maxY) ?? convexHull(points);
   if (boundary.length === 0) return path;
   path.moveTo(boundary[0][0], boundary[0][1]);
   for (let i = 1; i < boundary.length; i++) path.lineTo(boundary[i][0], boundary[i][1]);
@@ -1044,6 +1167,44 @@ const MIN_FEATURE_PX = 2.4;
 /** Number of buckets actually filled by the last drawProceduralShip call (diagnostics). */
 export let lastFillCalls = 0;
 
+// ---------------------------------------------------------------------------
+// Cached core-glow sprite — the fiery core's perimeter bloom is the same warm
+// glow buildings use (see warmGlow.ts), but re-stroking a blurred Path2D every
+// frame for every ship on screen is wasteful since the path never changes for
+// a given geometry. Bake it once per ShipGeometry into an offscreen canvas at
+// full intensity, then just drawImage + globalAlpha it at render time.
+// ---------------------------------------------------------------------------
+
+interface CoreGlowSprite { canvas: HTMLCanvasElement; x: number; y: number; w: number; h: number; }
+const coreGlowCache = new WeakMap<ShipGeometry, CoreGlowSprite | null>();
+/** Supersample resolution (px per ship-local unit) so the baked blur stays smooth at any zoom. */
+const CORE_GLOW_RES = 3;
+
+function getCoreGlowSprite(geo: ShipGeometry): CoreGlowSprite | null {
+  const cached = coreGlowCache.get(geo);
+  if (cached !== undefined) return cached;
+  let sprite: CoreGlowSprite | null = null;
+  if (geo.corePath && typeof document !== 'undefined') {
+    const bb = geo.boundingBox;
+    const side = Math.max(bb.maxX - bb.minX, bb.maxY - bb.minY);
+    const margin = side * 0.25;
+    const x = bb.minX - margin;
+    const y = bb.minY - margin;
+    const w = side + margin * 2;
+    const h = side + margin * 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(w * CORE_GLOW_RES));
+    canvas.height = Math.max(1, Math.round(h * CORE_GLOW_RES));
+    const cctx = canvas.getContext('2d')!;
+    cctx.scale(CORE_GLOW_RES, CORE_GLOW_RES);
+    cctx.translate(-x, -y);
+    renderWarmGlow(cctx, geo.corePath, { intensity: 1, ...warmGlowFrameStyle(side * 0.15) });
+    sprite = { canvas, x, y, w, h };
+  }
+  coreGlowCache.set(geo, sprite);
+  return sprite;
+}
+
 /** Draws a procedural ship. `camera` supplies zoom for line-width scaling, matching other renderers. */
 export function drawProceduralShip(
   ctx: CanvasRenderingContext2D,
@@ -1064,24 +1225,6 @@ export function drawProceduralShip(
   ctx.rotate(transform.rotation);
   ctx.scale(scale, scale);
 
-  if (geo.corePath) {
-    const intensity = transform.coreIntegrityFrac ?? 1;
-    if (intensity > 0) {
-      const side = Math.max(geo.boundingBox.maxX - geo.boundingBox.minX, geo.boundingBox.maxY - geo.boundingBox.minY);
-      renderFieryCore(ctx, {
-        path: geo.corePath,
-        x: geo.boundingBox.minX,
-        y: geo.boundingBox.minY,
-        side,
-        nodeSize: side * 0.15,
-        intensity,
-        timeSec: performance.now() * 0.001,
-        seed: def.seed,
-        glow: !isLegacyGraphics(),
-      });
-    }
-  }
-
   let fills = 0;
   const buckets = transform.damageMesh?.buckets ?? getStageBuckets(geo, transform.damageStage ?? 0);
   const stage = Math.min(DAMAGE_STAGES - 1, Math.max(0, Math.round(transform.damageStage ?? 0)));
@@ -1100,8 +1243,36 @@ export function drawProceduralShip(
   }
   lastFillCalls = fills;
 
+  if (geo.corePath) {
+    const intensity = transform.coreIntegrityFrac ?? 1;
+    if (intensity > 0) {
+      const side = Math.max(geo.boundingBox.maxX - geo.boundingBox.minX, geo.boundingBox.maxY - geo.boundingBox.minY);
+      renderFieryCore(ctx, {
+        path: geo.corePath,
+        x: geo.boundingBox.minX,
+        y: geo.boundingBox.minY,
+        side,
+        nodeSize: side * 0.15,
+        intensity,
+        timeSec: performance.now() * 0.001,
+        seed: def.seed,
+        glow: false,
+      });
+      if (!isLegacyGraphics() && isWarmGlowEnabled()) {
+        const sprite = getCoreGlowSprite(geo);
+        if (sprite) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = intensity;
+          ctx.drawImage(sprite.canvas, sprite.x, sprite.y, sprite.w, sprite.h);
+          ctx.restore();
+        }
+      }
+    }
+  }
+
   ctx.lineJoin = 'round';
-  ctx.lineWidth = 1.2 / scale;
+  ctx.lineWidth = 1.7 / scale;
   ctx.strokeStyle = 'rgba(0,0,0,0.75)';
   ctx.stroke(silhouette);
 
