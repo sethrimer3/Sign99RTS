@@ -1161,7 +1161,7 @@ export class SwarmShip extends FighterShip {
     this.health = HP_VALUES.swarm;
     this.maxHealth = HP_VALUES.swarm;
     this.maxShield = 0;
-    this.radius = 2.3 * (team === Team.Player ? PLAYER_SHIP_SCALE : 1);
+    this.radius = 4.6 * (team === Team.Player ? PLAYER_SHIP_SCALE : 1);
     this.turnRate = 5.5;
     this.thrustPower = 310;
     this.maxSpeed = 310;

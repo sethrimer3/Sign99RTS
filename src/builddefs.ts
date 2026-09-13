@@ -101,7 +101,7 @@ export const BUILD_DEFS: Record<string, BuildDef> = {
     cost: COMMANDPOST_REBUILD_COST,
     // Must match footprintForBuildingType(CommandPost); an odd footprint centres
     // the post on a cell centre so its auto-conduit ring frames it evenly.
-    footprintCells: 7,
+    footprintCells: 13,
     buildTime: COMMANDPOST_REBUILD_TIME,
     tier: 'structure',
     radialLabel: 'Command\nPost',

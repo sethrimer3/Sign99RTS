@@ -9,13 +9,13 @@ export const WORLD_HEIGHT = 6000;
 
 // Entity radii
 export const ENTITY_RADIUS = {
-  fighter: 3.5,
-  bomber: 8,
-  mainguy: 7,
+  fighter: 7,
+  bomber: 16,
+  mainguy: 14,
   bullet: 3,
   missile: 3,
   building: 13,
-  commandpost: 16,
+  commandpost: 30,
   jumpgate: 20,
   signalstation: 12,
   explosion: 26,
