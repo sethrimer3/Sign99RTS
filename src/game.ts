@@ -2079,7 +2079,7 @@ export class Game {
           }
           // Sync health/battery regardless of position correction.
           const localDesign = sd.design === undefined ? fleetDesign(sd.team, 'hero') : sd.design;
-          if (localShip.design !== localDesign && (sd.design === undefined || JSON.stringify(localShip.design) !== JSON.stringify(localDesign))) localShip.setDesign(localDesign);
+          if (localShip.design !== localDesign && (sd.design === undefined || JSON.stringify(localShip.design) !== JSON.stringify(localDesign))) localShip.setDesign(localDesign, false);
           localShip.maxHealth = sd.maxHealth;
           localShip.health = sd.health;
           localShip.alive = sd.alive;
@@ -2103,7 +2103,7 @@ export class Game {
       ship.velocity.y = sd.vy;
       ship.angle = sd.angle;
       const remoteDesign = sd.design === undefined ? fleetDesign(sd.team, 'hero') : sd.design;
-      if (ship.design !== remoteDesign) ship.setDesign(remoteDesign);
+      if (ship.design !== remoteDesign) ship.setDesign(remoteDesign, false);
       ship.maxHealth = sd.maxHealth;
       ship.health = sd.health;
       ship.alive = sd.alive;

@@ -124,6 +124,20 @@ export interface ProceduralShipDefinition {
   params: ProceduralShipParams;
 }
 
+/**
+ * Derive a design that shows only `tier` of the definition's wing pairs (0, 1, 2, ...),
+ * capped at however many the design actually carries. Ships and fighters start wingless
+ * and grow wings as their speed upgrades land; returns `def` unchanged once `tier` covers
+ * every pair it has, so fully-upgraded units keep sharing the cached base geometry/design
+ * reference (and its multiplayer-sync shorthand).
+ */
+export function withWingTier(def: ProceduralShipDefinition, tier: number): ProceduralShipDefinition {
+  const maxPairs = def.params.wingPairs ?? 0;
+  const wingPairs = Math.max(0, Math.min(tier, maxPairs));
+  if (wingPairs === maxPairs) return def;
+  return { seed: def.seed, params: { ...def.params, wingPairs } };
+}
+
 // ---------------------------------------------------------------------------
 // Geometry generation
 // ---------------------------------------------------------------------------
@@ -759,10 +773,6 @@ export function generateShipGeometry(def: ProceduralShipDefinition): ShipGeometr
   em.group = ++groupId;
   budChain(em, W, N, inside, budCount, p.budScale, budDepthBase, bias, p, anchors);
   em.group = ++groupId;
-  // Wingless families mount their engine in the aft bulb chain. This keeps the
-  // same deterministic group-based damage model without giving those hulls a
-  // permanent exemption from propulsion loss.
-  if (engineGroupIds.length === 0) engineGroupIds.push(groupId);
   budChain(em, W, T, inside, budCount, p.budScale * 0.85, budDepthBase, bias, p, anchors);
   em.group = 0;
 

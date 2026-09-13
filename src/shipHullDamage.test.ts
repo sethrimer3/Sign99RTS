@@ -41,11 +41,15 @@ describe('fixed player fleets', () => {
       expect(fighter.params.wingPairs).toBe(hero.params.wingPairs);
       expect(fighter.params.spanToLength).toBe(hero.params.spanToLength);
       expect(getShipGeometry(fighter).polyCount).toBeLessThan(getShipGeometry(hero).polyCount);
+      // Fresh ships and fighters start wingless (see withWingTier) — the family
+      // definition itself still carries the full, fully-upgraded wing count.
       const a = new PlayerShip(new Vec2(0, 0), team as Team);
       const b = new FighterShip(new Vec2(0, 0), team as Team, ShipGroup.Red);
-      expect(a.design).toBe(hero);
-      expect(b.design).toBe(fighter);
-      expect(new FighterShip(new Vec2(20, 0), team as Team, ShipGroup.Blue).design).toBe(b.design);
+      expect(a.design?.seed).toBe(hero.seed);
+      expect(a.design?.params.wingPairs).toBe(0);
+      expect(b.design?.seed).toBe(fighter.seed);
+      expect(b.design?.params.wingPairs).toBe(0);
+      expect(new FighterShip(new Vec2(20, 0), team as Team, ShipGroup.Blue).design).toEqual(b.design);
     }
     expect(seeds.size).toBe(8); expect(shapes.size).toBe(8);
   });
@@ -197,21 +201,27 @@ describe('core-outward structural repair', () => {
 });
 
 describe('wing-mounted engine modules and speed', () => {
-  it('gives wing designs one engine module per wing pair, at most two', () => {
+  it('gives every family two engine modules once fully wing-grown', () => {
     for (let team = 1; team <= 8; team++) {
       const geo = getShipGeometry(fleetDesign(team, 'hero'));
-      expect(geo.engineModules.length).toBeLessThanOrEqual(2);
+      expect(geo.engineModules.length).toBe(2);
       for (const members of geo.engineModules) expect(members.length).toBeGreaterThan(0);
     }
-    // Lance carries two wing surfaces (four wings) = two modules; Manta one surface
-    // (two wings) = one; wingless Arrow carries one aft-mounted module.
-    expect(getShipGeometry(fleetDesign(1, 'hero')).engineModules.length).toBe(2);
-    expect(getShipGeometry(fleetDesign(2, 'hero')).engineModules.length).toBe(1);
-    expect(getShipGeometry(fleetDesign(4, 'hero')).engineModules.length).toBe(1);
+  });
+
+  it('a freshly spawned, wingless ship has no engine modules to lose', () => {
+    const ship = new PlayerShip(new Vec2(0, 0), 1 as Team);
+    expect(ship.design?.params.wingPairs).toBe(0);
+    const geo = getShipGeometry(ship.design!);
+    expect(geo.engineModules.length).toBe(0);
+    expect(ship.engineThrustFraction).toBe(1);
+    expect(ship.effectiveMaxSpeed).toBeCloseTo(ship.maxSpeed, 6);
   });
 
   it('sheds thrust as wings are lost and bottoms out at the floor', () => {
     const ship = new PlayerShip(new Vec2(0, 0), 1 as Team);
+    // Grow both wing pairs first (see withWingTier) so there is something to shoot off.
+    ship.syncResearchUpgrades(new Set(['shipSpeedEnergy1', 'shipSpeedEnergy2']));
     const geo = getShipGeometry(ship.design!);
     expect(geo.engineModules.length).toBe(2);
     const full = ship.maxSpeed;
@@ -235,6 +245,7 @@ describe('wing-mounted engine modules and speed', () => {
 
   it('restores thrust when the wing is repaired back on', () => {
     const ship = new PlayerShip(new Vec2(0, 0), 1 as Team);
+    ship.syncResearchUpgrades(new Set(['shipSpeedEnergy1', 'shipSpeedEnergy2']));
     const geo = getShipGeometry(ship.design!);
     const hull = ship.hullDamage!;
     hull.applySnapshot({ removed: [...geo.engineModules[0]] }, ship);
@@ -243,14 +254,7 @@ describe('wing-mounted engine modules and speed', () => {
     expect(ship.engineThrustFraction).toBe(1);
   });
 
-  it('gives wingless ships an aft engine while leaving design-less ships unchanged', () => {
-    const wingless = new PlayerShip(new Vec2(0, 0), 4 as Team); // Arrow: wingPairs 0
-    const winglessGeometry = getShipGeometry(wingless.design!);
-    expect(winglessGeometry.engineModules.length).toBe(1);
-    wingless.hullDamage!.applySnapshot({ removed: [...winglessGeometry.engineModules[0]] }, wingless);
-    expect(wingless.engineThrustFraction).toBeCloseTo(SHIP_ENGINE_LOSS_FLOOR, 6);
-    expect(wingless.effectiveMaxSpeed).toBeCloseTo(wingless.maxSpeed * SHIP_ENGINE_LOSS_FLOOR, 6);
-
+  it('leaves design-less ships unaffected by the engine-loss mechanic', () => {
     const plain = new PlayerShip(new Vec2(0, 0));
     plain.setDesign(null);
     expect(plain.design).toBe(null);
@@ -270,10 +274,12 @@ describe('wing-mounted engine modules and speed', () => {
     expect(ship.effectiveMaxSpeed).toBeCloseTo(base * 1.5 * SHIP_ENGINE_LOSS_FLOOR, 6);
   });
 
-  it('fighters lose thrust the same way', () => {
+  it('fighters lose thrust the same way once their wings have grown in', () => {
     const f = new FighterShip(new Vec2(0, 0), 1 as Team, ShipGroup.Red);
+    f.upgradeSpeed();
+    f.upgradeDash();
     const geo = getShipGeometry(f.design!);
-    if (geo.engineModules.length === 0) return;
+    expect(geo.engineModules.length).toBeGreaterThan(0);
     expect(f.engineThrustFraction).toBe(1);
     f.hullDamage!.applySnapshot({ removed: geo.engineModules.flat() }, f);
     expect(f.engineThrustFraction).toBeCloseTo(SHIP_ENGINE_LOSS_FLOOR, 6);

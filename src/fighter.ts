@@ -9,7 +9,7 @@ import { Colors, colorToCSS, Color } from './colors.js';
 import { ENTITY_RADIUS, HP_VALUES, PLAYER_SHIP_SCALE, SHIP_ENGINE_LOSS_FLOOR, SHIP_STATS, WEAPON_STATS } from './constants.js';
 import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
 import { gameplayFleetDesign } from './shipFamilies.js';
-import { drawProceduralShip, shipDesignRadius, type ProceduralShipDefinition } from './proceduralShips.js';
+import { drawProceduralShip, shipDesignRadius, withWingTier, type ProceduralShipDefinition } from './proceduralShips.js';
 import { teamColor } from './teamutils.js';
 import { isLegacyGraphics } from './graphicsmode.js';
 import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTrail.js';
@@ -120,8 +120,26 @@ export function drawTerranFighterHull(
 // ---------------------------------------------------------------------------
 
 export class FighterShip extends Entity {
+  /** Set only by LAN mirroring: the host's already wing-tiered design for a remote fighter, rendered as-is. */
   fleetDesignOverride: ProceduralShipDefinition | null = null;
-  get design() { return this.fleetDesignOverride ?? gameplayFleetDesign(this.team, this.type === EntityType.Bomber ? 'bomber' : 'fighter'); }
+  private wingDesignCache: { base: ProceduralShipDefinition; tier: number; design: ProceduralShipDefinition } | null = null;
+  /**
+   * Fighters start wingless; the first speed upgrade grows one wing pair, the dash
+   * upgrade (the fighter's second speed tier) grows the second. Caches on
+   * (base design, tier) so this doesn't reallocate every frame. A LAN-mirrored
+   * fighter (`fleetDesignOverride` set) skips local tiering — it already reflects
+   * the host's current tier.
+   */
+  get design() {
+    if (this.fleetDesignOverride) return this.fleetDesignOverride;
+    const base = gameplayFleetDesign(this.team, this.type === EntityType.Bomber ? 'bomber' : 'fighter');
+    const tier = this.speedUpgraded ? (this.dashUnlocked ? 2 : 1) : 0;
+    const cached = this.wingDesignCache;
+    if (cached && cached.base === base && cached.tier === tier) return cached.design;
+    const design = withWingTier(base, tier);
+    this.wingDesignCache = { base, tier, design };
+    return design;
+  }
   group: ShipGroup;
   docked: boolean = true;
   order: FighterOrder = 'idle';

@@ -17,6 +17,7 @@ import { renderProjectileTrail, type ProjectileTrailStyle } from './projectileTr
 import {
   drawProceduralShip, shipDesignRadius,
   damageStageForHealth,
+  withWingTier,
   type ProceduralShipDefinition,
 } from './proceduralShips.js';
 import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
@@ -146,6 +147,8 @@ export class PlayerShip extends Entity {
    * The Ship Lab can override P1's family; all other colours retain their fixed fleet.
    */
   design: ProceduralShipDefinition | null = null;
+  /** Full-growth design behind `design`, before wing-tier gating (see applyWingTier). */
+  private baseDesign: ProceduralShipDefinition | null = null;
 
   /** HP stage for diagnostics. Actual missing pieces are tracked by hullDamage. */
   private damageStage = 0;
@@ -248,7 +251,8 @@ export class PlayerShip extends Entity {
     this.friction = 1.0;
     this.aimWorld = new Vec2(position.x + 100, position.y);
     // Dev override from the Ship Lab, if one has been set. No-op when the key is absent.
-    this.design = gameplayFleetDesign(team, 'hero');
+    this.baseDesign = gameplayFleetDesign(team, 'hero');
+    this.applyWingTier();
     this.hullDamage = new ShipHullDamage(() => this.design);
     this.hullDamage.attach(this);
   }
@@ -612,6 +616,15 @@ export class PlayerShip extends Entity {
     this.thrustPower = this.baseThrustPower * multiplier;
     this.baseBatteryRegenRate = this.baseEnergyRegenRate * multiplier;
     this.fireCooldownMultiplier = 1 / multiplier;
+    this.applyWingTier();
+  }
+
+  /**
+   * The hero ship starts wingless; the first speed-energy level grows one wing pair,
+   * the second grows the pair. Further levels keep the two pairs already grown.
+   */
+  private applyWingTier(): void {
+    this.design = this.baseDesign ? withWingTier(this.baseDesign, Math.min(2, this.speedEnergyLevel)) : null;
   }
 
   /** Shield upgrade: each level converts +25% of current max HP into shield capacity (max 50% at level 2). */
@@ -646,9 +659,18 @@ export class PlayerShip extends Entity {
     }
   }
 
-  /** Swap the hull renderer. Pass null to return to the stock triangle. */
-  setDesign(design: ProceduralShipDefinition | null): void {
-    this.design = design;
+  /**
+   * Swap the hull renderer. Pass null to return to the stock triangle.
+   *
+   * `gateByTier` reduces `design` to this ship's own wing tier (its normal use, from
+   * gameplay code). LAN mirroring instead passes `false` and hands over the remote
+   * ship's already wing-tiered design as-is — this client never tracks a remote
+   * ship's `speedEnergyLevel`, so it has no other way to know how many wings it's grown.
+   */
+  setDesign(design: ProceduralShipDefinition | null, gateByTier: boolean = true): void {
+    this.baseDesign = design;
+    if (gateByTier) this.applyWingTier();
+    else this.design = design;
     this.damageStage = 0;
     this.hullDamage?.reset();
   }
