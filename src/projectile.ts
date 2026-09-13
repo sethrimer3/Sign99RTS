@@ -910,35 +910,59 @@ export class SynonymousNovaBomb extends ProjectileBase {
   }
 }
 
+/** Info needed for a {@link Laser} to apply its own damage once its telegraph elapses. */
+export interface LaserTelegraphDamage {
+  state: GameState;
+  spaceFluid: SpaceFluid | null;
+  damage: number;
+}
+
 export class Laser extends ProjectileBase {
   /** Seconds the beam lingers and fades after firing. */
   static readonly BEAM_LIFETIME = 0.2;
+  /** Seconds a telegraphed beam sits dim and harmless before it fires for real. */
+  static readonly TELEGRAPH_DURATION = 0.5;
 
   targetPos: Vec2;
+  /** Seconds spent telegraphing before this beam becomes live (0 = fires instantly, legacy behavior). */
+  private readonly telegraphDuration: number;
+  private elapsed = 0;
+  private damageApplied = false;
+  private readonly telegraphDamage: LaserTelegraphDamage | null;
 
   constructor(
     team: Team,
     startPos: Vec2,
     targetPos: Vec2,
     source: Entity | null = null,
+    telegraphDamage: LaserTelegraphDamage | null = null,
   ) {
     const angle = startPos.angleTo(targetPos);
+    const telegraphDuration = telegraphDamage ? Laser.TELEGRAPH_DURATION : 0;
     super({
       type: EntityType.Laser,
       team,
       position: startPos,
       angle,
-      damage: WEAPON_STATS.laser.damage,
+      damage: telegraphDamage ? 0 : WEAPON_STATS.laser.damage,
       speed: 0,
-      lifetime: Laser.BEAM_LIFETIME,
+      lifetime: telegraphDuration + Laser.BEAM_LIFETIME,
       source,
     });
     this.targetPos = targetPos.clone();
     this.velocity.set(0, 0);
+    this.telegraphDuration = telegraphDuration;
+    this.telegraphDamage = telegraphDamage;
   }
 
   update(dt: number): void {
     if (!this.alive) return;
+    this.elapsed += dt;
+    if (this.telegraphDamage && !this.damageApplied && this.elapsed >= this.telegraphDuration) {
+      this.damageApplied = true;
+      const { state, spaceFluid, damage } = this.telegraphDamage;
+      damageLaserLine(state, spaceFluid, this.source ?? this, this.position, this.targetPos, damage);
+    }
     this.lifetime -= dt;
     if (this.lifetime <= 0) this.destroy();
   }
@@ -947,67 +971,95 @@ export class Laser extends ProjectileBase {
     if (!this.alive) return;
     const from = camera.worldToScreen(this.position);
     const to = camera.worldToScreen(this.targetPos);
-    const fade = Math.max(0, this.lifetime / Laser.BEAM_LIFETIME);
+    const activeElapsed = this.elapsed - this.telegraphDuration;
+    const isTelegraphing = activeElapsed < 0;
+    const fade = isTelegraphing
+      ? 1
+      : Math.max(0, (Laser.BEAM_LIFETIME - activeElapsed) / Laser.BEAM_LIFETIME);
+    // Telegraph phase: small, dim preview of the beam. Once live, it snaps
+    // to full brightness and a bright pulse sweeps from source to target.
+    const telegraphStrength = isTelegraphing
+      ? 0.22 + 0.1 * Math.sin(this.elapsed * 14)
+      : 1;
+    const brightness = telegraphStrength * fade;
     const fireColor =
       this.team === Team.Player
-        ? colorToCSS(Colors.friendlyfire, 0.85 * fade)
-        : colorToCSS(Colors.enemyfire, 0.85 * fade);
+        ? colorToCSS(Colors.friendlyfire, 0.85 * brightness)
+        : colorToCSS(Colors.enemyfire, 0.85 * brightness);
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
 
+    // Width scale: thin/small while telegraphing, full once the beam is live.
+    const widthScale = isTelegraphing ? 0.35 : 1;
+
     if (isLegacyGraphics()) {
       // --- Legacy beam: layered additive strokes + crawling dashes. ---
       ctx.strokeStyle = this.team === Team.Player
-        ? colorToCSS(Colors.friendlyfire, 0.16 * fade)
-        : colorToCSS(Colors.enemyfire, 0.16 * fade);
-      ctx.lineWidth = 8;
+        ? colorToCSS(Colors.friendlyfire, 0.16 * brightness)
+        : colorToCSS(Colors.enemyfire, 0.16 * brightness);
+      ctx.lineWidth = 8 * widthScale;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       ctx.lineTo(to.x, to.y);
       ctx.stroke();
 
       ctx.strokeStyle = fireColor;
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 3 * widthScale;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       ctx.lineTo(to.x, to.y);
       ctx.stroke();
 
-      const crawl = ((performance.now() * 0.12) % 12) - 12;
-      ctx.setLineDash([8, 10]);
-      ctx.lineDashOffset = crawl;
-      ctx.strokeStyle = fireColor;
-      ctx.lineWidth = 1.25;
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      if (!isTelegraphing) {
+        const crawl = ((performance.now() * 0.12) % 12) - 12;
+        ctx.setLineDash([8, 10]);
+        ctx.lineDashOffset = crawl;
+        ctx.strokeStyle = fireColor;
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
 
       // Bright core
-      ctx.strokeStyle = `rgba(255,255,255,${0.72 * fade})`;
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = `rgba(255,255,255,${0.72 * brightness})`;
+      ctx.lineWidth = 1 * widthScale;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       ctx.lineTo(to.x, to.y);
       ctx.stroke();
 
-      ctx.strokeStyle = `rgba(255,255,255,${0.35 * fade})`;
+      ctx.strokeStyle = `rgba(255,255,255,${0.35 * brightness})`;
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.arc(to.x, to.y, 5 * camera.zoom, 0, Math.PI * 2);
+      ctx.arc(to.x, to.y, 5 * camera.zoom * widthScale, 0, Math.PI * 2);
       ctx.stroke();
     } else {
       // The beam IS a building corner-node perimeter, stretched to a line:
       // a thin warm amber stroke wrapped in the shared two-pass warm bloom,
       // identical proportions to warmGlowFrameStyle().
-      const beamScale = Math.max(9, 11 * camera.zoom);
+      const beamScale = Math.max(9, 11 * camera.zoom) * widthScale;
       renderWarmGlowLine(ctx, from.x, from.y, to.x, to.y, {
-        intensity: fade,
+        intensity: brightness,
         ...warmGlowFrameStyle(beamScale),
       });
+    }
+
+    // Once live, a bright pulse sweeps once along the beam from the source
+    // (bottom) to the target (top), marking the moment damage lands.
+    if (!isTelegraphing) {
+      const pulseT = Math.max(0, Math.min(1, activeElapsed / Laser.BEAM_LIFETIME));
+      const pulseX = from.x + (to.x - from.x) * pulseT;
+      const pulseY = from.y + (to.y - from.y) * pulseT;
+      const pulseAlpha = fade * (1 - pulseT * 0.4);
+      ctx.fillStyle = `rgba(255,255,255,${0.9 * pulseAlpha})`;
+      ctx.beginPath();
+      ctx.arc(pulseX, pulseY, 6 * camera.zoom, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
   }
