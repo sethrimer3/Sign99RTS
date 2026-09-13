@@ -974,6 +974,11 @@ export function getShadeRamp(color: Color, bands: number, hueSpread: number, acc
   const b = Math.min(255, color.b * color.intensity);
   let [h, s] = rgbToHsl(r, g, b);
   if (s < 0.18) s = 0.18;
+  // Pastel/washed-out hull: keep the per-faction hue for variety, but cap
+  // saturation and lift the lightness floor well above the old dark-field
+  // start so components read as soft, chalky tints rather than saturated metal.
+  s = Math.min(0.5, s) * 0.55;
+  if (s < 0.10) s = 0.10;
   // The accent target is chosen from the hull hue rather than being a fixed rotation:
   // a warm hull gets an ice-cyan accent, a cool hull gets amber. A fixed +150 turned
   // green factions magenta. accentHueShift still slides the accent hue continuously.
@@ -983,12 +988,12 @@ export function getShadeRamp(color: Color, bands: number, hueSpread: number, acc
   const accents: string[] = [];
   for (let i = 0; i < bands; i++) {
     const u = bands === 1 ? 1 : i / (bands - 1);
-    const l = 0.12 + u * u * 0.25 + u * 0.55;                 // dark field -> bright highlight
+    const l = 0.42 + u * u * 0.16 + u * 0.32;                 // washed field -> soft highlight
     const sat = s * (1 - Math.pow(Math.max(0, u - 0.45) / 0.55, 2) * 0.82);
-    fills.push(hslToCss(h + hueSpread * (u - 0.25), Math.min(1, sat), Math.min(0.95, l)));
-    accents.push(hslToCss(accentH + hueSpread * 0.25 * u, 0.78, 0.46 + u * 0.32));
+    fills.push(hslToCss(h + hueSpread * (u - 0.25), Math.min(1, sat), Math.min(0.94, l)));
+    accents.push(hslToCss(accentH + hueSpread * 0.25 * u, 0.4, 0.62 + u * 0.24));
   }
-  ramp = { fills, accents, rim: hslToCss(h + hueSpread * 0.9, Math.min(1, s * 0.5), 0.88) };
+  ramp = { fills, accents, rim: hslToCss(h + hueSpread * 0.9, Math.min(1, s * 0.4), 0.9) };
   rampCache.set(key, ramp);
   return ramp;
 }
