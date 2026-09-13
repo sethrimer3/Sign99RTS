@@ -1,5 +1,9 @@
 /** Game constants for Sign99 */
 
+// Base hull "parts" budget, shared by every faction so no colour's ship of a given
+// role is harder or easier to destroy than another's — see shipParts.ts.
+import { HERO_BASE_PARTS, ESCORT_BASE_PARTS } from './shipParts.js';
+
 export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
 
@@ -178,11 +182,11 @@ export const PLAYER_SHIP_SCALE = 1.75;
 
 // Hit points
 export const HP_VALUES = {
-  playerShip: 40,
-  fighter: 5,
+  playerShip: HERO_BASE_PARTS,
+  fighter: ESCORT_BASE_PARTS,
   synonymousFighterDrone: 3,
-  bomber: 15,
-  swarm: 5,
+  bomber: ESCORT_BASE_PARTS,
+  swarm: ESCORT_BASE_PARTS,
   builderDrone: 10,
   commandPost: 200,
   powerGenerator: 40,

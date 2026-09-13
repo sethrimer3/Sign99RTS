@@ -21,7 +21,8 @@ import {
   type ProceduralShipDefinition,
 } from './proceduralShips.js';
 import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
-import { gameplayFleetDesign } from './shipFamilies.js';
+import { gameplayFleetDesign, fleetCoreShape } from './shipFamilies.js';
+import { WING_PAIR_PARTS } from './shipParts.js';
 import type { ShipDebrisSystem } from './shipDebris.js';
 
 const BATTERY_MAX = 100;
@@ -36,6 +37,9 @@ const SHIELD_REGEN_FRACTION_PER_SEC = 0.2;
 const SHIELD_REGEN_DELAY = 5;
 /** Each ship-upgrade level adds this fraction of the *base* stat (non-cumulative/non-compounding). */
 const SHIP_UPGRADE_STEP = 0.25;
+/** Seconds for a newly-unlocked wing pair to grow in from the core, like a hull self-repairing. */
+const WING_GROWTH_SECONDS = 1.1;
+function easeOutCubic(t: number): number { return 1 - Math.pow(1 - t, 3); }
 export const SHIP_HP_MAX_LEVEL = 4;
 export const SHIP_SPEED_ENERGY_MAX_LEVEL = 4;
 export const SHIP_SHIELD_MAX_LEVEL = 2;
@@ -149,6 +153,8 @@ export class PlayerShip extends Entity {
   design: ProceduralShipDefinition | null = null;
   /** Full-growth design behind `design`, before wing-tier gating (see applyWingTier). */
   private baseDesign: ProceduralShipDefinition | null = null;
+  /** Self-repair-style grow-in animation for the most recently unlocked wing pair. */
+  private wingGrowth = { t: 1, fromRadius: 0, toRadius: 0 };
 
   /** HP stage for diagnostics. Actual missing pieces are tracked by hullDamage. */
   private damageStage = 0;
@@ -259,6 +265,8 @@ export class PlayerShip extends Entity {
 
   update(dt: number): void {
     if (!this.alive) return;
+
+    if (this.wingGrowth.t < 1) this.wingGrowth.t = Math.min(1, this.wingGrowth.t + dt / WING_GROWTH_SECONDS);
 
     this.handleInput(dt);
 
@@ -585,10 +593,15 @@ export class PlayerShip extends Entity {
     this.health = Math.max(1, Math.min(this.maxHealth, this.maxHealth * healthFraction));
   }
 
-  /** HP upgrade: each level adds +25% of *base* max HP (non-cumulative — level 4 = +100%, not compounded). */
+  /**
+   * HP upgrade: each level adds +25% of *base* max HP (non-cumulative — level 4 = +100%,
+   * not compounded), plus a flat structural bonus for each wing pair grown in
+   * (see shipParts.ts — keeps every faction's hero at the same part budget).
+   */
   private recomputeHpStats(): void {
     const healthFraction = this.maxHealth > 0 ? this.health / this.maxHealth : 1;
-    this.maxHealth = Math.round(this.baseMaxHealth * (1 + this.hpLevel * SHIP_UPGRADE_STEP));
+    const wingTier = Math.min(2, this.speedEnergyLevel);
+    this.maxHealth = Math.round(this.baseMaxHealth * (1 + this.hpLevel * SHIP_UPGRADE_STEP)) + wingTier * WING_PAIR_PARTS;
     this.health = Math.round(this.maxHealth * healthFraction);
     this.recomputeShieldStats();
   }
@@ -617,6 +630,7 @@ export class PlayerShip extends Entity {
     this.baseBatteryRegenRate = this.baseEnergyRegenRate * multiplier;
     this.fireCooldownMultiplier = 1 / multiplier;
     this.applyWingTier();
+    this.recomputeHpStats();
   }
 
   /**
@@ -624,7 +638,11 @@ export class PlayerShip extends Entity {
    * the second grows the pair. Further levels keep the two pairs already grown.
    */
   private applyWingTier(): void {
+    const prevDesign = this.design;
     this.design = this.baseDesign ? withWingTier(this.baseDesign, Math.min(2, this.speedEnergyLevel)) : null;
+    if (prevDesign && this.design && prevDesign !== this.design) {
+      this.wingGrowth = { t: 0, fromRadius: shipDesignRadius(prevDesign), toRadius: shipDesignRadius(this.design) };
+    }
   }
 
   /** Shield upgrade: each level converts +25% of current max HP into shield capacity (max 50% at level 2). */
@@ -958,10 +976,13 @@ export class PlayerShip extends Entity {
       // Normalise the design's own world-space length against this unit's radius so the
       // ship occupies the same footprint as the stock hull whatever the design's scale.
       const scale = (this.radius * 1.4) / shipDesignRadius(this.design);
+      const growth = this.wingGrowth;
       drawProceduralShip(ctx, camera, this.design, {
         position: this.position, rotation: this.angle, scale, color: coreColor,
         damageMesh: this.hullDamage?.renderMesh(),
         repairFlashes: this.hullDamage?.repairFlashes(performance.now()),
+        growthRadius: growth.t < 1 ? growth.fromRadius + (growth.toRadius - growth.fromRadius) * easeOutCubic(growth.t) : undefined,
+        coreShape: fleetCoreShape(this.team),
       });
       return;
     }

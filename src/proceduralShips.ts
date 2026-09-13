@@ -1168,6 +1168,70 @@ export interface ShipTransform {
   coreIntegrityFrac?: number;
   /** Hull pieces recently repaired back in; frac 0 = just restored (full white) to 1 = settled to normal color. */
   repairFlashes?: { index: number; frac: number }[];
+  /**
+   * When finite, clips the whole draw to a circle of this radius (ship-local units,
+   * centred on the core). Used to grow a newly-unlocked wing pair in from the core
+   * outward — as if the hull were self-repairing — rather than popping in at full
+   * size. Undefined/Infinity draws the full silhouette, unclipped.
+   */
+  growthRadius?: number;
+  /** Faction-identifying core glyph, independent of hue, for colour-blind readability. */
+  coreShape?: CoreShapeKind;
+}
+
+/** One symbol per faction slot so ships stay distinguishable without relying on colour. */
+export type CoreShapeKind = 'circle' | 'ringCircle' | 'triangle' | 'diamond' | 'square' | 'pentagon' | 'hexagon' | 'cross';
+
+/** Draws a small faction glyph centred at (cx, cy) in the current (already scaled) transform. */
+export function drawCoreShapeMarker(ctx: CanvasRenderingContext2D, kind: CoreShapeKind, cx: number, cy: number, radius: number): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+  const sides = (n: number, rot = -Math.PI / 2) => {
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const a = rot + (i / n) * Math.PI * 2;
+      const x = Math.cos(a) * radius, y = Math.sin(a) * radius;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  };
+  switch (kind) {
+    case 'circle':
+      ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI * 2); ctx.fill();
+      break;
+    case 'ringCircle':
+      ctx.lineWidth = Math.max(0.6, radius * 0.32);
+      ctx.beginPath(); ctx.arc(0, 0, radius * 0.72, 0, Math.PI * 2); ctx.stroke();
+      break;
+    case 'triangle':
+      sides(3); ctx.fill();
+      break;
+    case 'diamond':
+      sides(4, -Math.PI / 2); ctx.fill();
+      break;
+    case 'square':
+      sides(4, -Math.PI / 4); ctx.fill();
+      break;
+    case 'pentagon':
+      sides(5); ctx.fill();
+      break;
+    case 'hexagon':
+      sides(6, 0); ctx.fill();
+      break;
+    case 'cross': {
+      const w = radius * 0.34;
+      ctx.beginPath();
+      ctx.rect(-w, -radius, w * 2, radius * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.rect(-radius, -w, radius * 2, w * 2);
+      ctx.fill();
+      break;
+    }
+  }
+  ctx.restore();
 }
 
 export interface ShipDebugOverlay {
@@ -1242,6 +1306,14 @@ export function drawProceduralShip(
   ctx.rotate(transform.rotation);
   ctx.scale(scale, scale);
 
+  const growthClipped = transform.growthRadius !== undefined && Number.isFinite(transform.growthRadius);
+  if (growthClipped) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, 0, Math.max(0, transform.growthRadius!), 0, Math.PI * 2);
+    ctx.clip();
+  }
+
   let fills = 0;
   const buckets = transform.damageMesh?.buckets ?? getStageBuckets(geo, transform.damageStage ?? 0);
   const stage = Math.min(DAMAGE_STAGES - 1, Math.max(0, Math.round(transform.damageStage ?? 0)));
@@ -1310,6 +1382,14 @@ export function drawProceduralShip(
   ctx.strokeStyle = 'rgba(255,255,255,0.75)';
   ctx.stroke(silhouette);
 
+  if (transform.coreShape) {
+    const bb = geo.boundingBox;
+    const cx = (bb.minX + bb.maxX) / 2;
+    const cy = (bb.minY + bb.maxY) / 2;
+    const side = Math.max(bb.maxX - bb.minX, bb.maxY - bb.minY);
+    drawCoreShapeMarker(ctx, transform.coreShape, cx, cy, Math.max(1.5, side * 0.07));
+  }
+
   if (p.lineThickness > 0) {
     ctx.lineJoin = 'round';
     ctx.lineWidth = Math.max(0.6, p.lineThickness) / scale;
@@ -1377,6 +1457,8 @@ export function drawProceduralShip(
       for (const b of geo.buckets) if (b.path) ctx.stroke(b.path);
     }
   }
+
+  if (growthClipped) ctx.restore();
 
   ctx.restore();
 }
