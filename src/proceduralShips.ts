@@ -1246,6 +1246,11 @@ export function drawProceduralShip(
   const buckets = transform.damageMesh?.buckets ?? getStageBuckets(geo, transform.damageStage ?? 0);
   const stage = Math.min(DAMAGE_STAGES - 1, Math.max(0, Math.round(transform.damageStage ?? 0)));
   const silhouette = transform.damageMesh?.silhouette ?? geo.stageSilhouettes[stage]!;
+  // Fill the full silhouette first so buckets culled below (small features at low
+  // zoom) leave solid hull behind them instead of a transparent hole punched through
+  // the ship.
+  ctx.fillStyle = ramp.fills[Math.min(ramp.fills.length - 1, 2)];
+  ctx.fill(silhouette);
   for (let i = 0; i < buckets.length; i++) {
     const b = buckets[i];
     if (b.minFeature * scale < MIN_FEATURE_PX) continue;
@@ -1253,12 +1258,7 @@ export function drawProceduralShip(
     if (b.path) ctx.fill(b.path);
     fills++;
   }
-  if (fills === 0) {
-    ctx.fillStyle = ramp.fills[Math.min(ramp.fills.length - 1, 2)];
-    ctx.fill(silhouette);
-    fills = 1;
-  }
-  lastFillCalls = fills;
+  lastFillCalls = Math.max(1, fills);
 
   if (transform.repairFlashes && transform.repairFlashes.length > 0) {
     ctx.fillStyle = '#ffffff';
