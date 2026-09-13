@@ -21,6 +21,7 @@ import { isLegacyGraphics } from './graphicsmode.js';
 import { researchCategory, researchIcon } from './research.js';
 import { renderProjectileTrail, type TrailSample, type ProjectileTrailStyle } from './projectileTrail.js';
 import { renderBuildingCoreEffect } from './buildingCoreEffect.js';
+import { renderBuildingPanelInteriors, renderBuildingSeamWaves } from './buildingPanelEffect.js';
 
 interface BaseVisual {
   side: number;
@@ -129,6 +130,16 @@ export abstract class BuildingBase extends Entity {
     if (damage > 0.02) this.drawDamageWear(ctx, x, y, v.side, damage);
     this.drawDimPanelLines(ctx, x, y, v.side);
     const legacyCore = isLegacyGraphics();
+    if (!legacyCore && this.buildingDamage && !v.simple) {
+      const leaves = this.buildingDamage.getSurvivingLeaves(this);
+      const seams = this.buildingDamage.getVisibleSeams(this);
+      const power = (this.buildProgress >= 1 && !this.deleting)
+        ? (this.powered ? 1 : 0.22)
+        : 0.12 + 0.2 * this.buildProgress;
+      const panelOpts = { screenX: screen.x, screenY: screen.y, zoom: camera.zoom, leaves, seams, timeSec: this.animationTime, seed: this.id, power };
+      renderBuildingPanelInteriors(ctx, panelOpts);
+      renderBuildingSeamWaves(ctx, panelOpts);
+    }
     // Corner nodes. Legacy: small footprint-relative squares. New look: each node
     // is exactly one conduit cell regardless of building size, and doubles as the
     // mask for the fiery core effect below.

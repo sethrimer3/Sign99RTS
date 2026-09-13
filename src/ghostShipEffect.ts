@@ -34,37 +34,44 @@ const HOLD_MIN = 0.35;
 const DISSOLVE_TIME = 2.4;
 /** Alpha ease-in so fragments do not pop on. */
 const FADE_IN_TIME = 0.06;
-/** Head must travel this far (world units, scaled by ship radius / 22) between spine nodes. */
-const EMIT_SPACING_BASE = 42;
+/** Head must travel this far (world units, scaled by ship radius / 22) between spine nodes.
+ *  Kept small and well under a cluster's own radius so consecutive clusters heavily overlap
+ *  and read as one continuous filament rather than a string of separate nodes. */
+const EMIT_SPACING_BASE = 16;
 /** Spacing grows past this rate so a fast ghost does not flood the pool; this affects emission
  *  density only — recursion depth is governed by quality/pool pressure, not speed. */
-const MAX_NODES_PER_SECOND = 32;
+const MAX_NODES_PER_SECOND = 46;
 /** Emission is bounded per update so a hitch cannot dump the whole ring in one frame. */
-const MAX_NODES_PER_UPDATE = 6;
+const MAX_NODES_PER_UPDATE = 9;
 /** Newest fragments still in their bright phase get a glow halo, capped for budget. */
 const MAX_GLOW_FRAGMENTS = 18;
 /** Curvature (rad per world-unit travelled) eases toward its target over this time constant. */
 const CURVATURE_SMOOTH_TAU = 2.5;
 /** The spine heading is gently drawn back toward the real anchor at this rate (1/s) so the
  *  organism can never permanently detach into an orbit — curvature still dominates locally. */
-const HEADING_CORRECTION_RATE = 0.35;
-/** Hard leash: the growth head is pulled back within this many ship-radii of the real anchor. */
-const LEASH_MAX_RADIUS_MULT = 5;
+const HEADING_CORRECTION_RATE = 1.6;
+/** Hard leash: the growth head is pulled back within this many ship-radii of the real anchor.
+ *  Kept tight (a small fraction of the hull) so the newest, brightest geometry always sits on
+ *  top of the player's actual position instead of drifting into a visible orbit around it. */
+const LEASH_MAX_RADIUS_MULT = 1.35;
 
 const WHITE: Color = { r: 255, g: 255, b: 255, intensity: 1 };
 
 /** Recursion depth of a spine node's fractal cluster for a given density scale. */
 export function ghostRecursionLevels(densityScale: number): number {
-  if (densityScale >= 0.85) return 3;
+  if (densityScale >= 0.85) return 4;
   if (densityScale >= 0.5) return 2;
   return 1;
 }
 
-/** Triangle budget for one spine node's recursive cluster at a given recursion depth. */
+/** Triangle budget for one spine node's recursive cluster at a given recursion depth. Spread
+ *  over more, smaller triangles than a flat split would give so the cluster reads as fine
+ *  filamentary texture rather than a few dominant shards. */
 function fractalBudget(levels: number): number {
-  if (levels >= 3) return 26;
-  if (levels === 2) return 14;
-  return 6;
+  if (levels >= 4) return 42;
+  if (levels === 3) return 30;
+  if (levels === 2) return 16;
+  return 7;
 }
 
 function smooth01(t: number): number {
@@ -105,6 +112,10 @@ export class GhostShipEffect {
   private headX = 0;
   private headY = 0;
   private headAngle = 0;
+  /** Authoritative ghost position as of the last update() — the camera target. The visual head
+   *  bloom locks onto this directly so the brightest material always sits on the real anchor. */
+  private anchorX = 0;
+  private anchorY = 0;
   private prevAnchorX = 0;
   private prevAnchorY = 0;
   private distanceSinceEmit = 0;
@@ -131,6 +142,7 @@ export class GhostShipEffect {
   private _particleScale = 1;
   private _performanceScale = 1;
   private readonly scratch = new Vec2(0, 0);
+  private readonly scratch2 = new Vec2(0, 0);
 
   /** True once reset() has been called and clear() has not. */
   active = false;
@@ -167,15 +179,19 @@ export class GhostShipEffect {
     // Borrow a few of the procedural ship's design tendencies (via the same seed) so the
     // spirit's branching reads as a transformed version of that hull rather than a generic FX.
     const flavorRng = seededRandom(this.seed ^ 0x2545f491);
-    this.branchAngleBase = 0.5 + flavorRng() * 0.55;
-    this.shrinkBase = 0.6 + flavorRng() * 0.15;
-    this.twoSidedChance = 0.22 + flavorRng() * 0.4;
+    // Narrower angle/shrink ranges than a generic fractal so the organism stays a thin filament
+    // with occasional accent branches, rather than a wide debris fan.
+    this.branchAngleBase = 0.3 + flavorRng() * 0.35;
+    this.shrinkBase = 0.62 + flavorRng() * 0.13;
+    this.twoSidedChance = 0.16 + flavorRng() * 0.3;
     this.twistBias = flavorRng();
 
     this.spineHeading = facing;
     this.headAngle = facing;
     this.headX = x;
     this.headY = y;
+    this.anchorX = x;
+    this.anchorY = y;
     this.prevAnchorX = x;
     this.prevAnchorY = y;
     // Seed the structure immediately so death does not show an empty frame.
@@ -203,6 +219,8 @@ export class GhostShipEffect {
     if (!this.active || dt <= 0) return;
     this.time += dt;
     const t = this.time;
+    this.anchorX = anchorX;
+    this.anchorY = anchorY;
 
     // Low-frequency curvature: three incommensurate sinusoids sum to near-zero (straight runs)
     // or to sustained same-sign curvature (broad or tight spirals), smoothed so changes of
@@ -301,9 +319,10 @@ export class GhostShipEffect {
     // gracefully instead of slamming into the ring cap (same idea as ShipDebrisSystem).
     const fill = this.activeCount / GHOST_FRAGMENT_CAP;
     const hold = HOLD_MIN + (HOLD_MAX - HOLD_MIN) * (1 - 0.85 * fill * fill);
-    // Small relative to the hull — many small triangles read as one fractal texture rather
-    // than a few large pinwheel blades — but wide enough that clusters overlap the next node.
-    const rootSize = Math.max(this.radius * 0.42, spacing * 0.6) * (0.85 + rng() * 0.3);
+    // Small relative to the hull — many small triangles read as one fine fractal filament
+    // rather than a few large shards — but wide enough that clusters overlap the next node,
+    // since it's that overlap (not any single cluster) that reads as one continuous organism.
+    const rootSize = Math.max(this.radius * 0.16, spacing * 0.95) * (0.85 + rng() * 0.3);
     const rootAngle = tangent + (rng() - 0.5) * 0.5;
     let budget = fractalBudget(levels);
     if (fill > 0.8) budget = Math.max(3, budget >> 1);
@@ -319,18 +338,21 @@ export class GhostShipEffect {
     if (this.budgetRemaining <= 0) return;
     this.spawnTriangle(x, y, angle, size, hold, rng);
     this.budgetRemaining--;
-    if (depth <= 0 || this.budgetRemaining <= 0 || size < this.radius * 0.1) return;
+    if (depth <= 0 || this.budgetRemaining <= 0 || size < this.radius * 0.045) return;
 
-    const branchAngle = this.branchAngleBase + (rng() - 0.5) * 0.3;
+    const branchAngle = this.branchAngleBase + (rng() - 0.5) * 0.22;
     const bothSides = rng() < this.twoSidedChance;
-    const shrink = this.shrinkBase + (rng() - 0.5) * 0.08;
+    const shrink = this.shrinkBase + (rng() - 0.5) * 0.1;
     const first = rng() < this.twistBias ? 1 : -1;
     const dirs: number[] = bothSides ? [1, -1] : [first];
+    // A small deterministic curl per depth level gives each tendril a subtle spiral twist
+    // instead of every branch bending by exactly the same angle.
+    const twist = (rng() - 0.5) * 0.16 * depth;
     for (const sign of dirs) {
-      const childAngle = angle + sign * branchAngle + (rng() - 0.5) * 0.12;
-      const originDist = size * 0.78;
-      const childX = x + Math.cos(angle) * originDist + Math.cos(childAngle) * size * 0.12;
-      const childY = y + Math.sin(angle) * originDist + Math.sin(childAngle) * size * 0.12;
+      const childAngle = angle + sign * branchAngle + twist + (rng() - 0.5) * 0.1;
+      const originDist = size * 0.72;
+      const childX = x + Math.cos(angle) * originDist + Math.cos(childAngle) * size * 0.1;
+      const childY = y + Math.sin(angle) * originDist + Math.sin(childAngle) * size * 0.1;
       this.growFractal(childX, childY, childAngle, size * shrink, depth - 1, hold, rng);
     }
   }
@@ -415,10 +437,13 @@ export class GhostShipEffect {
       p.x = (this.ax[i] + this.bx[i] + this.cx[i]) / 3;
       p.y = (this.ay[i] + this.by[i] + this.cy[i]) / 3;
       if (n === 0) {
-        // Head bloom sits on the newest cluster rather than the raw anchor so it never
-        // floats ahead of the geometry at speed.
-        glow.circleWorld(camera, p, this.radius * 0.9, WHITE, 0.14);
-        glow.circleWorld(camera, p, this.radius * 1.8, this.color, 0.05);
+        // Head bloom sits directly on the authoritative anchor (the camera target), not the
+        // newest triangle's centroid, so the brightest point always reads as "you are here"
+        // even though the leash keeps that triangle only a hair away from it in practice.
+        this.scratch2.x = this.anchorX;
+        this.scratch2.y = this.anchorY;
+        glow.circleWorld(camera, this.scratch2, this.radius * 0.65, WHITE, 0.18);
+        glow.circleWorld(camera, this.scratch2, this.radius * 1.3, this.color, 0.06);
       }
       if (!camera.isOnScreen(p, this.size[i] * 3)) continue;
       glow.circleWorld(camera, p, this.size[i] * 1.25, WHITE, 0.12 * heat * smooth01(age / FADE_IN_TIME));
@@ -447,4 +472,7 @@ export class GhostShipEffect {
     return alpha;
   }
   get writtenCount(): number { return this.written; }
+  /** Test/debug accessor: distance from the growth head to the authoritative anchor, i.e. how
+   *  far the newest geometry can visually stray from runtime.ghostPos / the camera target. */
+  get headAnchorDistance(): number { return Math.hypot(this.headX - this.anchorX, this.headY - this.anchorY); }
 }

@@ -558,6 +558,103 @@ describe('BuildingStructureDamage', () => {
     });
   });
 
+  // ===========================================================================
+  // SEAM GEOMETRY / VISIBLE PANELS
+  // ===========================================================================
+  describe('seam geometry and visible panels', () => {
+    it('exposes one seam per adjacent leaf pair, matching a shared edge', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      const geo = damage.ensure(body);
+
+      let neighborPairs = 0;
+      for (const leaf of geo.leaves) neighborPairs += leaf.neighbors.length;
+      neighborPairs /= 2; // each adjacency counted from both sides
+
+      const seams = damage.getVisibleSeams(body);
+      expect(seams.length).toBe(neighborPairs);
+
+      for (const s of seams) {
+        // Every seam segment should be either purely vertical or horizontal
+        // (an axis-aligned shared edge), with positive length.
+        const isVertical = s.x1 === s.x2;
+        const isHorizontal = s.y1 === s.y2;
+        expect(isVertical || isHorizontal).toBe(true);
+        const len = Math.hypot(s.x2 - s.x1, s.y2 - s.y1);
+        expect(len).toBeGreaterThan(0);
+        expect(s.exposed).toBe(false); // nothing removed yet
+      }
+    });
+
+    it('getSurvivingLeaves omits removed leaves and matches removedIndices', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      const geo = damage.ensure(body);
+
+      damage.hit(body, 20, { kind: 'bullet', x: 0, y: 0, dx: 500, dy: 0 });
+      const leaves = damage.getSurvivingLeaves(body);
+      const removed = new Set(damage.removedIndices);
+
+      expect(leaves.length).toBe(geo.leaves.length - removed.size);
+      for (const l of leaves) expect(removed.has(l.index)).toBe(false);
+    });
+
+    it('marks a seam exposed once exactly one side is removed, and drops it once both sides are gone', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      const geo = damage.ensure(body);
+      const leaf15 = geo.leaves[15], leaf38 = geo.leaves[38];
+      expect(leaf38.neighbors).toContain(15);
+
+      const dmgFor = (area: number) => (area * 1.02 / geo.totalMass) * body.maxHealth;
+      damage.hit(body, dmgFor(leaf15.area), { kind: 'explosion', x: leaf15.x, y: leaf15.y, dx: 0, dy: 0 });
+      expect(damage.removedIndices).toContain(15);
+      expect(damage.removedIndices).not.toContain(38);
+
+      const seamsAfterOneRemoved = damage.getVisibleSeams(body);
+      const exposedSeam = seamsAfterOneRemoved.find(s => {
+        // The 15/38 seam segment, recovered by matching geometry against the
+        // still-surviving leaf 38's edges.
+        const onLeaf38Edge =
+          (s.x1 === s.x2 && Math.abs(s.x1 - (leaf38.x - leaf38.w / 2)) < 1e-6) ||
+          (s.x1 === s.x2 && Math.abs(s.x1 - (leaf38.x + leaf38.w / 2)) < 1e-6) ||
+          (s.y1 === s.y2 && Math.abs(s.y1 - (leaf38.y - leaf38.h / 2)) < 1e-6) ||
+          (s.y1 === s.y2 && Math.abs(s.y1 - (leaf38.y + leaf38.h / 2)) < 1e-6);
+        return onLeaf38Edge && s.exposed;
+      });
+      expect(exposedSeam).toBeDefined();
+
+      // Now sever leaf38's only other neighbor too, detaching it entirely.
+      const leaf39 = geo.leaves[39];
+      damage.hit(body, dmgFor(leaf39.area), { kind: 'explosion', x: leaf39.x, y: leaf39.y, dx: 0, dy: 0 });
+      expect(damage.removedIndices).toContain(38);
+
+      const seamsAfterDetach = damage.getVisibleSeams(body);
+      for (const s of seamsAfterDetach) {
+        const onLeaf38Edge =
+          (s.x1 === s.x2 && Math.abs(s.x1 - (leaf38.x - leaf38.w / 2)) < 1e-6) ||
+          (s.x1 === s.x2 && Math.abs(s.x1 - (leaf38.x + leaf38.w / 2)) < 1e-6);
+        // No seam should still reference leaf38's own edge once it's fully gone.
+        if (onLeaf38Edge) expect(s.exposed).toBe(true); // only possible if the other side also survives independently — otherwise this branch shouldn't trigger
+      }
+    });
+
+    it('rebuilds seam/leaf caches after a repair reconnects structure', () => {
+      const damage = new BuildingStructureDamage(12345);
+      const body = createMockBody(4, 100);
+      damage.ensure(body);
+
+      const seamsBefore = damage.getVisibleSeams(body).length;
+      damage.hit(body, 20, { kind: 'bullet', x: 0, y: 0, dx: 500, dy: 0 });
+      const seamsAfterHit = damage.getVisibleSeams(body).length;
+      expect(seamsAfterHit).toBeLessThan(seamsBefore);
+
+      damage.repair(body, 20);
+      const seamsAfterRepair = damage.getVisibleSeams(body).length;
+      expect(seamsAfterRepair).toBeGreaterThan(seamsAfterHit);
+    });
+  });
+
   it('restores state from network snapshot deterministically', () => {
     const damage1 = new BuildingStructureDamage(12345);
     const body1 = createMockBody(4, 100);

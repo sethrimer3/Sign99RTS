@@ -125,7 +125,7 @@ describe('GhostShipEffect', () => {
     drive(full, 3);
     drive(low, 3);
     expect(low.writtenCount).toBeLessThan(full.writtenCount * 0.6);
-    expect(ghostRecursionLevels(1)).toBe(3);
+    expect(ghostRecursionLevels(1)).toBe(4);
     expect(ghostRecursionLevels(0.6)).toBe(2);
     expect(ghostRecursionLevels(0.2)).toBe(1);
   });
@@ -183,6 +183,40 @@ describe('GhostShipEffect', () => {
     const headingMidLate = Math.atan2(late[1] - mid[1], late[0] - mid[0]);
     const turn = Math.abs(wrapAngleForTest(headingMidLate - headingEarlyMid));
     expect(turn).toBeGreaterThan(0.05);
+  });
+
+  it('keeps the growth head tightly leashed to the authoritative anchor (no visible orbit)', () => {
+    const effect = new GhostShipEffect();
+    effect.reset(1000, 1000, 0, 42, 22, TEAM);
+    let x = 1000, y = 1000;
+    let maxDist = 0;
+    for (let t = 0; t < 20; t += DT) {
+      x += 180 * DT;
+      y += Math.sin(t * 0.9) * 180 * 0.5 * DT;
+      effect.update(DT, x, y, 0);
+      maxDist = Math.max(maxDist, effect.headAnchorDistance);
+    }
+    // Radius is 22; the head must stay within a small fraction of the hull of the real anchor.
+    expect(maxDist).toBeLessThan(22 * 1.6);
+  });
+
+  it('keeps typical triangle sizes within the small, fine-grained range', () => {
+    const effect = make(2024);
+    drive(effect, 3);
+    let total = 0;
+    let count = 0;
+    let oversized = 0;
+    for (let i = 0; i < effect.writtenCount; i++) {
+      const [ax, ay, bx, by] = effect.fragmentVertices(i);
+      const size = Math.hypot(ax - bx, ay - by);
+      total += size;
+      count++;
+      if (size > 22 * 1.2) oversized++;
+    }
+    const avg = total / count;
+    expect(avg).toBeLessThan(22 * 0.7);
+    // Only a small tail of larger root triangles should exceed the hull radius.
+    expect(oversized / count).toBeLessThan(0.15);
   });
 
   it('clears all visual state on reset/respawn', () => {

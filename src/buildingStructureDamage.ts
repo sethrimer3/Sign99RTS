@@ -34,6 +34,24 @@ export interface BSPLeaf {
 /** A corner weak-point hitbox in building-local coordinates (center-relative), matching the visible fiery node. */
 export interface CoreRegion { x: number; y: number; w: number; h: number; }
 
+/** A shared structural edge between two adjacent BSP leaves, in building-local coordinates. */
+export interface BSPSeam {
+  a: number;
+  b: number;
+  x1: number; y1: number;
+  x2: number; y2: number;
+}
+
+/** A seam segment prepared for rendering: filtered to leaves that still survive, with wave-phase and exposed-edge info attached. */
+export interface VisibleSeam {
+  x1: number; y1: number;
+  x2: number; y2: number;
+  /** True when only one side of this seam still has structure — the other leaf is gone, so this reads as a torn/exposed edge rather than an interior joint. */
+  exposed: boolean;
+  /** BFS hop-distance from the nearest root leaf, used to phase the traveling light wave so it appears to propagate outward from the core. */
+  rootDistance: number;
+}
+
 export interface BSPGeometry {
   leaves: BSPLeaf[];
   totalMass: number;
@@ -41,6 +59,8 @@ export interface BSPGeometry {
   footprintCells: number;
   seed: number;
   coreRegions: [CoreRegion, CoreRegion, CoreRegion, CoreRegion];
+  /** Every structural adjacency's shared-edge segment, computed once at generation time regardless of later damage. */
+  seams: BSPSeam[];
 }
 
 export const BUILDING_STRUCTURAL_COLLAPSE_FRACTION = 0.10;
@@ -124,6 +144,34 @@ export function leavesAdjacent(a: { x: number; y: number; w: number; h: number }
   return false;
 }
 
+/**
+ * The exact shared-edge segment between two adjacent leaves (building-local
+ * coordinates). Returns null when the leaves don't actually share a real
+ * edge — callers should already know they're adjacent via `leavesAdjacent`,
+ * this just recovers the geometry for rendering.
+ */
+function computeSeamSegment(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }): { x1: number; y1: number; x2: number; y2: number } | null {
+  const aL = a.x - a.w / 2, aR = a.x + a.w / 2, aT = a.y - a.h / 2, aB = a.y + a.h / 2;
+  const bL = b.x - b.w / 2, bR = b.x + b.w / 2, bT = b.y - b.h / 2, bB = b.y + b.h / 2;
+  const minOverlap = Math.min(a.w, a.h, b.w, b.h) * ADJACENCY_MIN_OVERLAP_FRAC;
+
+  if (Math.abs(aR - bL) < ADJACENCY_EDGE_EPS || Math.abs(bR - aL) < ADJACENCY_EDGE_EPS) {
+    const lo = Math.max(aT, bT), hi = Math.min(aB, bB);
+    if (hi - lo > minOverlap) {
+      const x = Math.abs(aR - bL) < ADJACENCY_EDGE_EPS ? aR : aL;
+      return { x1: x, y1: lo, x2: x, y2: hi };
+    }
+  }
+  if (Math.abs(aB - bT) < ADJACENCY_EDGE_EPS || Math.abs(bB - aT) < ADJACENCY_EDGE_EPS) {
+    const lo = Math.max(aL, bL), hi = Math.min(aR, bR);
+    if (hi - lo > minOverlap) {
+      const y = Math.abs(aB - bT) < ADJACENCY_EDGE_EPS ? aB : aT;
+      return { x1: lo, y1: y, x2: hi, y2: y };
+    }
+  }
+  return null;
+}
+
 function generateBSPGeometry(footprintCells: number, seed: number): BSPGeometry {
   const worldSide = footprintCells * GRID_CELL_SIZE;
   const half = worldSide * 0.5;
@@ -201,12 +249,15 @@ function generateBSPGeometry(footprintCells: number, seed: number): BSPGeometry 
     totalMass += r.w * r.h;
   }
 
+  const seams: BSPSeam[] = [];
   for (let i = 0; i < leaves.length; i++) {
     for (let j = i + 1; j < leaves.length; j++) {
       const a = leaves[i], b = leaves[j];
       if (leavesAdjacent(a, b)) {
         a.neighbors.push(j);
         b.neighbors.push(i);
+        const seg = computeSeamSegment(a, b);
+        if (seg) seams.push({ a: i, b: j, ...seg });
       }
     }
   }
@@ -245,7 +296,7 @@ function generateBSPGeometry(footprintCells: number, seed: number): BSPGeometry 
     }
   }
 
-  return { leaves, totalMass, rootIndices, footprintCells, seed, coreRegions };
+  return { leaves, totalMass, rootIndices, footprintCells, seed, coreRegions, seams };
 }
 
 interface DirectionalCandidate {
@@ -272,6 +323,8 @@ export class BuildingStructureDamage {
 
   private dirtyRender: boolean = true;
   private cachedPath: Path2D | null = null;
+  private cachedLeaves: BSPLeaf[] = [];
+  private cachedSeams: VisibleSeam[] = [];
   private appliedSeed?: number;
 
   constructor(private seedFallback: number) {}
@@ -313,22 +366,55 @@ export class BuildingStructureDamage {
     return this.geo;
   }
 
-  public renderMesh(body: BuildingStructureBody): Path2D | null {
-    const geo = this.ensure(body);
-    if (!this.dirtyRender && this.cachedPath) return this.cachedPath;
-
-    if (typeof Path2D === 'undefined') return null;
-
-    this.cachedPath = new Path2D();
+  /**
+   * Rebuilds the surviving-leaf list, the visible-seam list, and (where
+   * Path2D is available) the clip path in one pass over the structural
+   * state. Cheap and only runs when `dirtyRender` is set by a hit/repair/
+   * snapshot — never per frame.
+   */
+  private rebuildRenderCaches(geo: BSPGeometry): void {
     const gone = new Set(this.removedIndices);
+
+    this.cachedLeaves = [];
+    this.cachedPath = typeof Path2D !== 'undefined' ? new Path2D() : null;
     for (let i = 0; i < geo.leaves.length; i++) {
       if (gone.has(i)) continue;
       const r = geo.leaves[i];
-      this.cachedPath.rect(r.x - r.w/2 - 0.5, r.y - r.h/2 - 0.5, r.w + 1.0, r.h + 1.0);
+      this.cachedLeaves.push(r);
+      if (this.cachedPath) this.cachedPath.rect(r.x - r.w/2 - 0.5, r.y - r.h/2 - 0.5, r.w + 1.0, r.h + 1.0);
     }
 
+    const seams: VisibleSeam[] = [];
+    for (const s of geo.seams) {
+      const aGone = gone.has(s.a), bGone = gone.has(s.b);
+      if (aGone && bGone) continue;
+      const exposed = aGone !== bGone;
+      const survivor = geo.leaves[aGone ? s.b : s.a];
+      seams.push({ x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, exposed, rootDistance: survivor.rootDistance });
+    }
+    this.cachedSeams = seams;
+
     this.dirtyRender = false;
+  }
+
+  public renderMesh(body: BuildingStructureBody): Path2D | null {
+    const geo = this.ensure(body);
+    if (this.dirtyRender) this.rebuildRenderCaches(geo);
     return this.cachedPath;
+  }
+
+  /** Surviving BSP leaves — the exact visible interior panels. Cached; rebuilt only when structural state changes. */
+  public getSurvivingLeaves(body: BuildingStructureBody): BSPLeaf[] {
+    const geo = this.ensure(body);
+    if (this.dirtyRender) this.rebuildRenderCaches(geo);
+    return this.cachedLeaves;
+  }
+
+  /** Seam segments between surviving neighbors (plus exposed edges where a neighbor is gone), ready for glow/wave rendering. Cached; rebuilt only when structural state changes. */
+  public getVisibleSeams(body: BuildingStructureBody): VisibleSeam[] {
+    const geo = this.ensure(body);
+    if (this.dirtyRender) this.rebuildRenderCaches(geo);
+    return this.cachedSeams;
   }
 
   public syncHP(body: BuildingStructureBody) {
