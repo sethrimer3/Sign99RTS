@@ -22,6 +22,7 @@ import {
   BuildingBase,
   CommandPost,
   PowerGenerator,
+  ParticleAccelerator,
   Wall,
   ShieldGenerator,
   Shipyard,
@@ -118,6 +119,17 @@ export const BUILD_DEFS: Record<string, BuildDef> = {
     tier: 'structure',
     radialLabel: 'Power\nGenerator',
     factory: (pos, team) => new PowerGenerator(pos, team),
+  },
+  particleaccelerator: {
+    key: 'particleaccelerator',
+    label: 'Particle Accelerator',
+    description: 'Generates Bright Matter, an exotic secondary resource. Must connect directly to the Command Post by conduit — a Power Generator link alone will not do. Longer conduit runs yield more Bright.',
+    cost: BUILDING_COST.particleaccelerator,
+    footprintCells: 3,
+    buildTime: BUILD_TIME.particleaccelerator,
+    tier: 'structure',
+    radialLabel: 'Particle\nAccelerator',
+    factory: (pos, team) => new ParticleAccelerator(pos, team),
   },
   wall: {
     key: 'wall',
@@ -287,6 +299,8 @@ export function buildCostForBuildingType(type: EntityType): number {
       return COMMANDPOST_REBUILD_COST;
     case EntityType.PowerGenerator:
       return BUILDING_COST.powergenerator;
+    case EntityType.ParticleAccelerator:
+      return BUILDING_COST.particleaccelerator;
     case EntityType.Wall:
       return BUILDING_COST.wall;
     case EntityType.ShieldGenerator:
@@ -326,6 +340,8 @@ export function buildDefForEntityType(type: EntityType): BuildDef | undefined {
       return BUILD_DEFS.commandpost;
     case EntityType.PowerGenerator:
       return BUILD_DEFS.powergenerator;
+    case EntityType.ParticleAccelerator:
+      return BUILD_DEFS.particleaccelerator;
     case EntityType.Wall:
       return BUILD_DEFS.wall;
     case EntityType.ShieldGenerator:

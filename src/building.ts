@@ -3,7 +3,7 @@
 import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
 import { BuildingStructureDamage, buildingCoreNodeSize } from './buildingStructureDamage.js';
-import { Entity, EntityType, ShipGroup, Team } from './entities.js';
+import { Entity, EntityType, ShipGroup, Team, type BrightLinkState } from './entities.js';
 import { Colors, colorToCSS, type Color } from './colors.js';
 import {
   ENTITY_RADIUS,
@@ -55,6 +55,8 @@ export abstract class BuildingBase extends Entity {
    * so the effect fires exactly once per construction event.
    */
   completionEffectPending = false;
+  /** Bright Matter network status; only meaningful for ParticleAccelerator. */
+  brightLink: BrightLinkState = { connected: false, pathLength: 0 };
 
   constructor(type: EntityType, team: Team, position: Vec2, health: number, radius: number = ENTITY_RADIUS.building) {
     super(type, team, position, health, radius);
@@ -670,6 +672,46 @@ export class PowerGenerator extends BuildingBase {
     ctx.strokeStyle = colorToCSS(Colors.powergenerator_coverage, 0.15);
     ctx.lineWidth = 1;
     ctx.strokeRect(screen.x - v.half - 2, screen.y - v.half - 2, v.side + 4, v.side + 4);
+  }
+}
+
+/**
+ * Generates Bright Matter (exotic matter) whenever it is directly linked to
+ * the Command Post by an unbroken conduit run — see src/bright.ts for the
+ * connectivity/path-length graph. A Power Generator link does not count.
+ */
+export class ParticleAccelerator extends BuildingBase {
+  private spinPhase = 0;
+  constructor(position: Vec2, team: Team) {
+    super(EntityType.ParticleAccelerator, team, position, HP_VALUES.particleAccelerator);
+  }
+  update(dt: number): void { super.update(dt); this.spinPhase += dt * 2.2; }
+  protected drawStructure(ctx: CanvasRenderingContext2D, camera: Camera): void {
+    const screen = camera.worldToScreen(this.position);
+    const v = this.drawBuildingBase(ctx, screen, colorToCSS(Colors.particleaccelerator_detail), camera);
+    if (v.simple) return;
+    const active = this.brightLink.connected;
+    const glowColor = Colors.bright_matter;
+    const pulseA = 0.85 + 0.15 * Math.sin(this.spinPhase * 1.6);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // Two counter-rotating accelerator rings.
+    const ringR1 = v.side * 0.30;
+    const ringR2 = v.side * 0.20;
+    ctx.strokeStyle = colorToCSS(glowColor, active ? 0.5 * v.powerAlpha * pulseA : 0.14);
+    ctx.lineWidth = Math.max(1, v.side * 0.02);
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y, ringR1, ringR1 * 0.42, this.spinPhase, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y, ringR2 * 0.42, ringR2, -this.spinPhase * 1.3, 0, Math.PI * 2);
+    ctx.stroke();
+    // Bright core.
+    ctx.fillStyle = colorToCSS(glowColor, active ? 0.6 * v.powerAlpha * pulseA : 0.12);
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y, v.side * 0.1 * pulseA, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 }
 

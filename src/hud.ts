@@ -210,6 +210,31 @@ export class HUD {
     ctx.shadowBlur = 0;
   }
 
+  /** Draw the Bright Matter count above the resource panel, when the player has any. */
+  drawBrightMatter(
+    ctx: CanvasRenderingContext2D,
+    brightMatter: number,
+    screenW: number,
+    screenH: number,
+  ): void {
+    if (brightMatter < 0.5) return;
+    const panelW = 220;
+    const panelH = 34;
+    const panelX = screenW - panelW - 8;
+    const panelY = screenH - 70 - 8 - panelH - 6;
+    this.drawGlassPanel(ctx, panelX, panelY, panelW, panelH, 0.66);
+
+    ctx.font = gameFont(HUD_FONT_SIZE);
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    const glow = 0.75 + 0.25 * Math.sin(this.animTime * 2.4);
+    ctx.shadowColor = colorToCSS(Colors.bright_matter, 0.6 * glow);
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = colorToCSS(Colors.bright_matter, 0.92);
+    ctx.fillText(`${Math.floor(brightMatter)} Bright`, screenW - 10, panelY + panelH - 8);
+    ctx.shadowBlur = 0;
+  }
+
   /** Draw the player energy/battery indicator at the bottom-left. */
   drawPlayerEnergy(
     ctx: CanvasRenderingContext2D,

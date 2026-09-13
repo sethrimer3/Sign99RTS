@@ -54,6 +54,7 @@ export enum EntityType {
   // Buildings
   CommandPost,
   PowerGenerator,
+  ParticleAccelerator,
   Wall,
   FighterYard,
   BomberYard,
@@ -80,6 +81,17 @@ export enum EntityType {
   SwarmYard,
   TetherTurret,
   ShieldGenerator,
+}
+
+/**
+ * Per-building state for the Bright Matter network (see src/bright.ts).
+ * Populated by `BrightGraph.recompute()`; `null` on buildings that aren't
+ * Particle Accelerators or haven't been evaluated yet.
+ */
+export interface BrightLinkState {
+  connected: boolean;
+  /** Conduit-cell path length from the Command Post, when connected. */
+  pathLength: number;
 }
 
 export interface AreaShield {

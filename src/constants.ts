@@ -40,6 +40,7 @@ export const BUILDING_COST = {
   fighteryard: 200,
   bomberyard: 250,
   swarmyard: 300,
+  particleaccelerator: 180,
 } as const;
 
 // Build times (in ticks at 60fps)
@@ -61,6 +62,7 @@ export const BUILD_TIME = {
   fighteryard: 420,
   bomberyard: 480,
   swarmyard: 540,
+  particleaccelerator: 360,
 } as const;
 
 // Research mode switch:
@@ -192,6 +194,7 @@ export const HP_VALUES = {
   bomberYard: 80,
   swarmYard: 70,
   turret: 30,
+  particleAccelerator: 50,
   destructibleProjectile: 10,
   mine: 10,
   synonymousDriftMine: 10,
@@ -375,6 +378,14 @@ export const RESOURCE_GAIN_RATE = 1.0;
 
 // Baseline resource gain per second (player auto-gains resources over time)
 export const BASELINE_RESOURCE_GAIN = 5.0;
+
+/**
+ * Bright Matter gain rate: per second, per conduit cell of path length
+ * between the Command Post and a connected Particle Accelerator. Longer
+ * conduit runs to accelerators yield more Bright; disconnected or
+ * generator-only-linked accelerators produce none.
+ */
+export const BRIGHT_GAIN_PER_PATH_CELL = 0.06;
 
 // Build zone radii
 /**
