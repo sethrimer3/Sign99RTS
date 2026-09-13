@@ -98,6 +98,108 @@ describe('BuildingStructureDamage', () => {
     expect(body.health).toBeGreaterThan(0);
   });
 
+  it('accepts a raw (non-normalized) bullet trajectory vector without breaking corridor scoring', () => {
+    const damage = new BuildingStructureDamage(12345);
+    const body = createMockBody(4, 100);
+    damage.ensure(body);
+
+    // Real bullets pass raw velocity, e.g. dx=500, dy=0 — not a unit vector.
+    damage.hit(body, 10, { kind: 'bullet', x: 0, y: 0, dx: 500, dy: 0 });
+    expect(damage.connectedMass).toBeLessThan(damage.geometry!.totalMass);
+    expect(body.health).toBeLessThan(body.maxHealth);
+  });
+
+  it('accepts a raw diagonal bullet trajectory vector', () => {
+    const damage = new BuildingStructureDamage(12345);
+    const body = createMockBody(4, 100);
+    damage.ensure(body);
+
+    damage.hit(body, 10, { kind: 'bullet', x: 0, y: 0, dx: 100, dy: 300 });
+    expect(damage.connectedMass).toBeLessThan(damage.geometry!.totalMass);
+    expect(body.health).toBeLessThan(body.maxHealth);
+  });
+
+  it('produces equivalent structural selection for a unit-length and a raw-magnitude trajectory', () => {
+    const damageUnit = new BuildingStructureDamage(12345);
+    const bodyUnit = createMockBody(4, 100);
+    damageUnit.ensure(bodyUnit);
+    damageUnit.hit(bodyUnit, 15, { kind: 'bullet', x: 0, y: 0, dx: 1, dy: 0 });
+
+    const damageRaw = new BuildingStructureDamage(12345);
+    const bodyRaw = createMockBody(4, 100);
+    damageRaw.ensure(bodyRaw);
+    damageRaw.hit(bodyRaw, 15, { kind: 'bullet', x: 0, y: 0, dx: 500, dy: 0 });
+
+    expect(damageRaw.removedIndices.slice().sort()).toEqual(damageUnit.removedIndices.slice().sort());
+    expect(damageRaw.connectedMass).toBe(damageUnit.connectedMass);
+  });
+
+  it('progressively excavates inward on repeated bullets at the same impact point', () => {
+    const damage = new BuildingStructureDamage(12345);
+    const body = createMockBody(4, 100);
+    damage.ensure(body);
+    const totalMass = damage.geometry!.totalMass;
+
+    const massAfter: number[] = [];
+    const healthAfter: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      damage.hit(body, 10, { kind: 'bullet', x: 0, y: 0, dx: 500, dy: 0 });
+      massAfter.push(damage.connectedMass);
+      healthAfter.push(body.health);
+    }
+
+    // Mass/health must never plateau while damage keeps being applied and
+    // there is still connected structure left to remove.
+    for (let i = 1; i < massAfter.length; i++) {
+      if (massAfter[i - 1] > 0) {
+        expect(massAfter[i]).toBeLessThan(massAfter[i - 1]);
+        expect(healthAfter[i]).toBeLessThan(healthAfter[i - 1]);
+      }
+    }
+    expect(massAfter[massAfter.length - 1]).toBeLessThan(totalMass * 0.5);
+  });
+
+  it('damages structure with a long laser beam vector', () => {
+    const damage = new BuildingStructureDamage(12345);
+    const body = createMockBody(4, 100);
+    damage.ensure(body);
+
+    damage.hit(body, 8, { kind: 'laser', x: 0, y: 0, dx: 800, dy: 0 });
+    expect(damage.connectedMass).toBeLessThan(damage.geometry!.totalMass);
+
+    const massAfterFirst = damage.connectedMass;
+    damage.hit(body, 8, { kind: 'laser', x: 0, y: 0, dx: 800, dy: 0 });
+    expect(damage.connectedMass).toBeLessThan(massAfterFirst);
+  });
+
+  it('sustained fire on a ~200 HP building continuously reduces it to structural collapse', () => {
+    const damage = new BuildingStructureDamage(12345);
+    const body = createMockBody(6, 200);
+    damage.ensure(body);
+
+    let previousHealth = body.health;
+    let stuckHits = 0;
+    for (let i = 0; i < 200 && body.health > 0; i++) {
+      // Real sustained fire lands across the whole face, not the exact same
+      // ray forever — spread the impact point like multiple incoming shots.
+      const spread = ((i % 11) - 5) * 4;
+      damage.hit(body, 6, { kind: 'bullet', x: 0, y: spread, dx: 500, dy: 0 });
+      if (body.health === previousHealth) {
+        stuckHits++;
+      } else {
+        stuckHits = 0;
+      }
+      previousHealth = body.health;
+      // The old bug caused damage to plateau forever after the first panel;
+      // a handful of consecutive no-op hits is fine (corridor momentarily
+      // exhausted), but it must never fail to ever recover and reach zero.
+      expect(stuckHits).toBeLessThan(10);
+    }
+
+    expect(body.health).toBe(0);
+    expect(damage.connectedMass).toBe(0);
+  });
+
   it('restores state from network snapshot deterministically', () => {
     const damage1 = new BuildingStructureDamage(12345);
     const body1 = createMockBody(4, 100);

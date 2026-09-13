@@ -1,10 +1,16 @@
 /** Dead-player "spirit ship": a crystalline fractal organism made of triangular fragments.
  *
- *  The ghost never translates a built mesh. A propagating head (the spectator anchor plus
- *  a slowly varying procedural curl) leaves a world-space spine behind it; every spine node
- *  buds a small deterministic cluster of triangles that stay exactly where they were born
- *  and age through white -> faction colour -> black -> transparent. Apparent motion is
- *  creation at the front and dissolution at the rear.
+ *  Two independent scales:
+ *   - the SPINE: a single continuously-advancing growth point that follows the ghost's real
+ *     movement while a slowly drifting curvature bends its heading, so the macro path glides
+ *     between near-straight runs, gentle arcs and broad or tight spirals over time.
+ *   - the FRACTAL: at every spine node a small recursive cluster of triangles buds outward
+ *     from a root triangle into shrinking, rotated children (Sierpinski/Julia-tendril style),
+ *     giving the organism its crystalline texture without ever drawing an isolated spiral arm.
+ *
+ *  The ghost never translates a built mesh: every fragment stores immutable world-space
+ *  vertices at birth and only its colour/alpha changes afterward (white -> faction colour ->
+ *  black -> transparent). Apparent motion is creation at the front and dissolution at the rear.
  *
  *  Mirrors ShipDebrisSystem's conventions: a fixed pool, a hard active cap, quality/adaptive
  *  scaling, no allocation in the inner draw loop, and no gameplay side effects. Purely visual —
@@ -30,29 +36,47 @@ const DISSOLVE_TIME = 2.4;
 const FADE_IN_TIME = 0.06;
 /** Head must travel this far (world units, scaled by ship radius / 22) between spine nodes. */
 const EMIT_SPACING_BASE = 42;
-/** Spacing grows past this rate so a Shift-boosting ghost does not flood the pool; clusters
- *  also lose recursion depth with speed so the spine stays continuous rather than sparse. */
+/** Spacing grows past this rate so a fast ghost does not flood the pool; this affects emission
+ *  density only — recursion depth is governed by quality/pool pressure, not speed. */
 const MAX_NODES_PER_SECOND = 32;
-/** Head speed (world units/s) at which clusters drop to their shallowest recursion. */
-const SPEED_FOR_MIN_DEPTH = 500;
 /** Emission is bounded per update so a hitch cannot dump the whole ring in one frame. */
 const MAX_NODES_PER_UPDATE = 6;
 /** Newest fragments still in their bright phase get a glow halo, capped for budget. */
 const MAX_GLOW_FRAGMENTS = 18;
+/** Curvature (rad per world-unit travelled) eases toward its target over this time constant. */
+const CURVATURE_SMOOTH_TAU = 2.5;
+/** The spine heading is gently drawn back toward the real anchor at this rate (1/s) so the
+ *  organism can never permanently detach into an orbit — curvature still dominates locally. */
+const HEADING_CORRECTION_RATE = 0.35;
+/** Hard leash: the growth head is pulled back within this many ship-radii of the real anchor. */
+const LEASH_MAX_RADIUS_MULT = 5;
 
 const WHITE: Color = { r: 255, g: 255, b: 255, intensity: 1 };
 
-/** Number of recursion levels below the root triangle for a given density scale. */
+/** Recursion depth of a spine node's fractal cluster for a given density scale. */
 export function ghostRecursionLevels(densityScale: number): number {
   if (densityScale >= 0.85) return 3;
   if (densityScale >= 0.5) return 2;
   return 1;
 }
 
+/** Triangle budget for one spine node's recursive cluster at a given recursion depth. */
+function fractalBudget(levels: number): number {
+  if (levels >= 3) return 26;
+  if (levels === 2) return 14;
+  return 6;
+}
+
 function smooth01(t: number): number {
   if (t <= 0) return 0;
   if (t >= 1) return 1;
   return t * t * (3 - 2 * t);
+}
+
+function wrapAngle(a: number): number {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
 }
 
 export class GhostShipEffect {
@@ -81,12 +105,28 @@ export class GhostShipEffect {
   private headX = 0;
   private headY = 0;
   private headAngle = 0;
-  private curlPhase = 0;
+  private prevAnchorX = 0;
+  private prevAnchorY = 0;
   private distanceSinceEmit = 0;
   private nodeIndex = 0;
-  private phaseA = 0;
-  private phaseB = 0;
-  private phaseC = 0;
+
+  // Growth-path curvature: a slowly drifting turn-rate (rad per world-unit) built from three
+  // incommensurate sinusoids, so the spine glides between straight runs and tight spirals.
+  private spineHeading = 0;
+  private curvature = 0;
+  private curveScale = 1;
+  private curvA = 0; private curvB = 0; private curvC = 0;
+  private curvF1 = 0; private curvF2 = 0; private curvF3 = 0;
+  private curvP1 = 0; private curvP2 = 0; private curvP3 = 0;
+
+  // Ship-flavoured fractal parameters, deterministic per seed, so the organism reads as a
+  // transformed version of that ship's own proportions rather than a generic effect.
+  private branchAngleBase = 0.7;
+  private shrinkBase = 0.66;
+  private twoSidedChance = 0.35;
+  private twistBias = 0.5;
+  /** Remaining triangle budget for the fractal cluster currently being grown. */
+  private budgetRemaining = 0;
 
   private _particleScale = 1;
   private _performanceScale = 1;
@@ -109,14 +149,35 @@ export class GhostShipEffect {
     this.seed = seed >>> 0;
     this.radius = Math.max(6, radius);
     this.color = color;
-    const rng = seededRandom(this.seed ^ 0x5bd1e995);
-    this.phaseA = rng() * Math.PI * 2;
-    this.phaseB = rng() * Math.PI * 2;
-    this.phaseC = rng() * Math.PI * 2;
-    this.curlPhase = rng() * Math.PI * 2;
+
+    const curveRng = seededRandom(this.seed ^ 0x27d4eb2f);
+    this.curvA = 0.5 + curveRng() * 0.5;
+    this.curvB = 0.3 + curveRng() * 0.4;
+    this.curvC = 0.15 + curveRng() * 0.3;
+    this.curvF1 = 0.05 + curveRng() * 0.05;
+    this.curvF2 = 0.083 + curveRng() * 0.05;
+    this.curvF3 = 0.131 + curveRng() * 0.05;
+    this.curvP1 = curveRng() * Math.PI * 2;
+    this.curvP2 = curveRng() * Math.PI * 2;
+    this.curvP3 = curveRng() * Math.PI * 2;
+    // Amplitude tuned so the tightest sustained spiral has a radius of a few ship-lengths.
+    this.curveScale = 1 / (this.radius * 16);
+    this.curvature = 0;
+
+    // Borrow a few of the procedural ship's design tendencies (via the same seed) so the
+    // spirit's branching reads as a transformed version of that hull rather than a generic FX.
+    const flavorRng = seededRandom(this.seed ^ 0x2545f491);
+    this.branchAngleBase = 0.5 + flavorRng() * 0.55;
+    this.shrinkBase = 0.6 + flavorRng() * 0.15;
+    this.twoSidedChance = 0.22 + flavorRng() * 0.4;
+    this.twistBias = flavorRng();
+
+    this.spineHeading = facing;
     this.headAngle = facing;
     this.headX = x;
     this.headY = y;
+    this.prevAnchorX = x;
+    this.prevAnchorY = y;
     // Seed the structure immediately so death does not show an empty frame.
     this.emitNode(x, y, facing, ghostRecursionLevels(this.densityScale), EMIT_SPACING_BASE);
   }
@@ -134,47 +195,85 @@ export class GhostShipEffect {
     this.life.fill(0);
   }
 
-  /** Advance the organism. The anchor is the authoritative spectator position; the head
-   *  curls around it with smoothly waxing/waning amplitude so the emitted spine alternates
-   *  between straight runs, gentle arcs and tight spirals. Deterministic in (seed, dt). */
+  /** Advance the organism. The anchor is the authoritative ghost position; the spine's heading
+   *  curves away from it under a slowly drifting curvature and is gently leashed back so the
+   *  head follows the ghost's real movement without ever settling into a fixed orbit around it.
+   *  Deterministic in (seed, dt-sequence, anchor path). */
   update(dt: number, anchorX: number, anchorY: number, anchorFacing: number): void {
     if (!this.active || dt <= 0) return;
     this.time += dt;
     const t = this.time;
 
-    // Low-frequency modulation: amplitude and angular rate each drift with a pair of
-    // incommensurate sinusoids, so curvature wanes toward straight runs and waxes into loops.
-    const ampWave = 0.5 + 0.5 * Math.sin(t * 0.37 + this.phaseA) * Math.cos(t * 0.19 + this.phaseB);
-    const amplitude = this.radius * (0.12 + 2.8 * ampWave * ampWave);
-    const rate = 1.4 + 4.2 * (0.5 + 0.5 * Math.sin(t * 0.29 + this.phaseC));
-    this.curlPhase += rate * dt;
+    // Low-frequency curvature: three incommensurate sinusoids sum to near-zero (straight runs)
+    // or to sustained same-sign curvature (broad or tight spirals), smoothed so changes of
+    // shape are gradual rather than a jump-cut.
+    const curvatureTarget = this.curveScale * (
+      this.curvA * Math.sin(t * this.curvF1 + this.curvP1) +
+      this.curvB * Math.sin(t * this.curvF2 + this.curvP2) +
+      this.curvC * Math.sin(t * this.curvF3 + this.curvP3)
+    );
+    this.curvature += (curvatureTarget - this.curvature) * Math.min(1, dt / CURVATURE_SMOOTH_TAU);
 
-    const prevX = this.headX;
-    const prevY = this.headY;
-    this.headX = anchorX + Math.cos(this.curlPhase) * amplitude;
-    this.headY = anchorY + Math.sin(this.curlPhase) * amplitude;
+    const anchorDX = anchorX - this.prevAnchorX;
+    const anchorDY = anchorY - this.prevAnchorY;
+    this.prevAnchorX = anchorX;
+    this.prevAnchorY = anchorY;
+    const stepDist = Math.hypot(anchorDX, anchorDY);
 
-    const dx = this.headX - prevX;
-    const dy = this.headY - prevY;
-    const step = Math.hypot(dx, dy);
-    if (step > 1e-4) this.headAngle = Math.atan2(dy, dx);
+    // heading += curvature * distanceTravelled: shape density stays stable across frame rate
+    // and ghost speed because it is driven by distance, not elapsed time.
+    this.spineHeading += this.curvature * stepDist;
+
+    // Gently bend the heading back toward the real anchor so the organism stays attached to
+    // the player's actual ghost rather than drifting into a permanent independent orbit.
+    const toAX = anchorX - this.headX;
+    const toAY = anchorY - this.headY;
+    if (Math.hypot(toAX, toAY) > 1e-3) {
+      const bearing = Math.atan2(toAY, toAX);
+      this.spineHeading += wrapAngle(bearing - this.spineHeading) * Math.min(1, dt * HEADING_CORRECTION_RATE);
+    }
+
+    const prevHeadX = this.headX;
+    const prevHeadY = this.headY;
+    this.headX += Math.cos(this.spineHeading) * stepDist;
+    this.headY += Math.sin(this.spineHeading) * stepDist;
+
+    // Hard leash so a burst of curvature can never carry the head far from the true ghost.
+    const leashMax = this.radius * LEASH_MAX_RADIUS_MULT;
+    const nowDX = anchorX - this.headX;
+    const nowDY = anchorY - this.headY;
+    const nowDist = Math.hypot(nowDX, nowDY);
+    if (nowDist > leashMax) {
+      const pull = (nowDist - leashMax) / nowDist;
+      this.headX += nowDX * pull;
+      this.headY += nowDY * pull;
+    }
+
+    const hdx = this.headX - prevHeadX;
+    const hdy = this.headY - prevHeadY;
+    const headStep = Math.hypot(hdx, hdy);
+    if (headStep > 1e-4) this.headAngle = Math.atan2(hdy, hdx);
     else this.headAngle = anchorFacing;
 
-    // Spatial emission: fixed spacing along the head path, widened at speed so the pool is
-    // not flooded, and widened again under lower quality so density degrades gracefully.
-    const speed = step / dt;
+    // Spatial emission: fixed spacing along the head path, widened at speed so the pool is not
+    // flooded, and widened again under lower quality so density degrades gracefully. Recursion
+    // depth is driven by quality/pool pressure only — normal (and Shift) ghost speeds must not
+    // flatten the fractal texture.
+    const speed = stepDist / dt;
     const density = this.densityScale;
     let spacing = EMIT_SPACING_BASE * (this.radius / 22) / Math.max(0.35, density);
     spacing = Math.max(spacing, speed / MAX_NODES_PER_SECOND);
-    const levels = ghostRecursionLevels(density * (1 - 0.75 * Math.min(1, speed / SPEED_FOR_MIN_DEPTH)));
+    const fillNow = this.activeCount / GHOST_FRAGMENT_CAP;
+    const levels = fillNow > 0.85 ? Math.max(1, ghostRecursionLevels(density) - 1) : ghostRecursionLevels(density);
 
-    this.distanceSinceEmit += step;
+    this.distanceSinceEmit += headStep;
     let emitted = 0;
     while (this.distanceSinceEmit >= spacing && emitted < MAX_NODES_PER_UPDATE) {
       this.distanceSinceEmit -= spacing;
-      // Place the node back along the step so multiple nodes per frame stay evenly spaced.
-      const back = step > 1e-4 ? this.distanceSinceEmit / step : 0;
-      this.emitNode(this.headX - dx * back, this.headY - dy * back, this.headAngle, levels, spacing);
+      // Place the node back along the step so multiple nodes per frame stay evenly spaced,
+      // interpolating emission positions when the head travels far in a single update.
+      const back = headStep > 1e-4 ? this.distanceSinceEmit / headStep : 0;
+      this.emitNode(this.headX - hdx * back, this.headY - hdy * back, this.spineHeading, levels, spacing);
       emitted++;
     }
     if (emitted >= MAX_NODES_PER_UPDATE) this.distanceSinceEmit = 0;
@@ -190,10 +289,11 @@ export class GhostShipEffect {
     return n;
   }
 
-  /** Grow one spiral arm at a spine node. Every parameter derives from the ship seed and the
-   *  monotonic node index, so a replay of the same path grows identical geometry. The arm's
-   *  reach is tied to `spacing` (the gap the head just travelled) so it always overlaps the
-   *  next node's arm — that overlap, not any single arm, is what reads as an unbroken chain. */
+  /** Grow one recursive fractal cluster rooted at a spine node. Every parameter derives from
+   *  the ship seed and the monotonic node index, so a replay of the same path grows identical
+   *  geometry. The root size is tied to `spacing` (the gap the head just travelled) so
+   *  neighbouring clusters always overlap — that overlap, not any single cluster, is what
+   *  reads as one unbroken organism rather than a chain of separate ornaments. */
   private emitNode(x: number, y: number, tangent: number, levels: number, spacing: number): void {
     const index = this.nodeIndex++;
     const rng = seededRandom((this.seed + Math.imul(index + 1, 0x9e3779b1)) >>> 0);
@@ -201,38 +301,37 @@ export class GhostShipEffect {
     // gracefully instead of slamming into the ring cap (same idea as ShipDebrisSystem).
     const fill = this.activeCount / GHOST_FRAGMENT_CAP;
     const hold = HOLD_MIN + (HOLD_MAX - HOLD_MIN) * (1 - 0.85 * fill * fill);
-    // Big relative to the hull so the coil itself, not the ship, sets the trail's scale —
-    // that is what makes each arm read as a legible spiral rather than a fleck of confetti.
-    const rootSize = this.radius * (1.0 + rng() * 0.4);
-    const rootAngle = tangent + (rng() - 0.5) * 0.9;
-    // Reach comfortably past the next node so arms always overlap instead of leaving gaps.
-    const reach = Math.max(rootSize * 1.3, spacing * 1.15);
-    this.spiral(x, y, rootAngle, rootSize, reach, levels, hold, rng);
+    // Small relative to the hull — many small triangles read as one fractal texture rather
+    // than a few large pinwheel blades — but wide enough that clusters overlap the next node.
+    const rootSize = Math.max(this.radius * 0.42, spacing * 0.6) * (0.85 + rng() * 0.3);
+    const rootAngle = tangent + (rng() - 0.5) * 0.5;
+    let budget = fractalBudget(levels);
+    if (fill > 0.8) budget = Math.max(3, budget >> 1);
+    this.budgetRemaining = budget;
+    this.growFractal(x, y, rootAngle, rootSize, levels, hold, rng);
   }
 
-  /** Lay down one logarithmic-spiral arm of triangles winding outward from (x, y): each step
-   *  turns by a wide angle and grows the radius geometrically until it spans `reach`, so the
-   *  triangles trace a big, clearly-coiled arm — no branching tree — that overlaps the next
-   *  spine node's arm at its outer end. Roughly 4 / 8 / 12 triangles at 1 / 2 / 3 levels
-   *  (fewer, larger triangles than the old fractal so individual coils stay legible). */
-  private spiral(x: number, y: number, angle: number, size: number, reach: number, levels: number, hold: number, rng: () => number): void {
-    const count = Math.max(1, levels) * 4;
-    // Roughly 1.3-1.8 full turns so the coil is unmistakable rather than a shallow curve.
-    const twist = (Math.PI * 2 * (1.3 + rng() * 0.5)) / count;
-    const spin = rng() < 0.5 ? -1 : 1;
-    const r0 = size * 0.22;
-    // Solve for the per-step growth ratio that carries the arm from r0 out to `reach`
-    // over `count` steps, so the last triangle always lands past the next node.
-    const growth = Math.pow(Math.max(reach, r0 * 1.1) / r0, 1 / count);
-    let theta = angle;
-    let r = r0;
-    for (let k = 0; k < count; k++) {
-      const px = x + Math.cos(theta) * r;
-      const py = y + Math.sin(theta) * r;
-      const triSize = size * Math.max(0.4, 0.95 - k * (0.55 / count));
-      this.spawnTriangle(px, py, theta + Math.PI / 2, triSize, hold, rng);
-      theta += twist * spin;
-      r *= growth;
+  /** Recursively bud a shrinking, rotated child cluster from a parent triangle (Sierpinski /
+   *  Julia-tendril style): children originate near the parent's leading edge so the cluster
+   *  stays visually interlocked, sometimes branching one-sided and sometimes both ways. Bounded
+   *  by a per-node triangle budget and a minimum size so recursion always terminates. */
+  private growFractal(x: number, y: number, angle: number, size: number, depth: number, hold: number, rng: () => number): void {
+    if (this.budgetRemaining <= 0) return;
+    this.spawnTriangle(x, y, angle, size, hold, rng);
+    this.budgetRemaining--;
+    if (depth <= 0 || this.budgetRemaining <= 0 || size < this.radius * 0.1) return;
+
+    const branchAngle = this.branchAngleBase + (rng() - 0.5) * 0.3;
+    const bothSides = rng() < this.twoSidedChance;
+    const shrink = this.shrinkBase + (rng() - 0.5) * 0.08;
+    const first = rng() < this.twistBias ? 1 : -1;
+    const dirs: number[] = bothSides ? [1, -1] : [first];
+    for (const sign of dirs) {
+      const childAngle = angle + sign * branchAngle + (rng() - 0.5) * 0.12;
+      const originDist = size * 0.78;
+      const childX = x + Math.cos(angle) * originDist + Math.cos(childAngle) * size * 0.12;
+      const childY = y + Math.sin(angle) * originDist + Math.sin(childAngle) * size * 0.12;
+      this.growFractal(childX, childY, childAngle, size * shrink, depth - 1, hold, rng);
     }
   }
 

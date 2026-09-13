@@ -321,45 +321,67 @@ export class BuildingStructureDamage {
     
     const lx = hit.x - body.position.x;
     const ly = hit.y - body.position.y;
-    
+
+    // hit.dx/dy are a raw world-space trajectory vector (bullet velocity, laser
+    // beam displacement, etc.) and must not be assumed to already be a unit
+    // vector — normalize before any dot-product/projection/corridor math.
+    let dirX = hit.dx;
+    let dirY = hit.dy;
+    const dirLen = Math.hypot(dirX, dirY);
+    if (dirLen > 1e-6) {
+      dirX /= dirLen;
+      dirY /= dirLen;
+    } else {
+      // No usable direction (e.g. a stationary source): fall back to the
+      // vector from the impact point toward the building center so the
+      // corridor test still behaves deterministically.
+      const fallbackLen = Math.hypot(lx, ly);
+      if (fallbackLen > 1e-6) {
+        dirX = -lx / fallbackLen;
+        dirY = -ly / fallbackLen;
+      } else {
+        dirX = 1;
+        dirY = 0;
+      }
+    }
+
     const gone = new Set(this.removedIndices);
-    
+
     const candidates = [];
     for (let i = 0; i < geo.leaves.length; i++) {
       if (gone.has(i)) continue;
       const r = geo.leaves[i];
-      let score = 0;
-      
+
       if (hit.kind === 'explosion') {
         const dx = r.x - lx;
         const dy = r.y - ly;
         const distSq = dx*dx + dy*dy;
-        score = -distSq;
-      } else {
-        const dx = r.x - lx;
-        const dy = r.y - ly;
-        const dot = dx * hit.dx + dy * hit.dy;
-        const projX = hit.dx * dot;
-        const projY = hit.dy * dot;
-        const perpX = dx - projX;
-        const perpY = dy - projY;
-        const perpDist = Math.sqrt(perpX*perpX + perpY*perpY);
-        if (perpDist > Math.max(r.w, r.h) + (hit.radius || 0)) {
-           score = -999999;
-        } else {
-           score = hit.kind === 'bullet' ? -dot : -perpDist;
-        }
+        candidates.push({ index: i, score: -distSq, leaf: r });
+        continue;
       }
+
+      const dx = r.x - lx;
+      const dy = r.y - ly;
+      const along = dx * dirX + dy * dirY;
+      const perpX = dx - dirX * along;
+      const perpY = dy - dirY * along;
+      const perpDist = Math.sqrt(perpX*perpX + perpY*perpY);
+      const corridorWidth = Math.max(r.w, r.h) * 0.5 + (hit.radius || 0) + GRID_CELL_SIZE * 0.5;
+      if (perpDist > corridorWidth) {
+        continue; // outside the shot corridor — not a candidate at all
+      }
+      // Prefer panels nearest the incoming surface (smallest along-axis
+      // distance from the impact point), then the tightest perpendicular fit.
+      const score = -along * 1000 - perpDist;
       candidates.push({ index: i, score, leaf: r });
     }
-    
+
     candidates.sort((a, b) => b.score - a.score);
-    
+
     const shed = [];
     for (const c of candidates) {
       if (massBudget <= 0) break;
-      if (c.score === -999999) break;
-      
+
       massBudget -= c.leaf.area;
       shed.push(c.index);
       gone.add(c.index);

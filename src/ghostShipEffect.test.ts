@@ -20,6 +20,12 @@ function drive(effect: GhostShipEffect, seconds: number, speed = 300): void {
   }
 }
 
+function wrapAngleForTest(a: number): number {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
 function make(seed: number): GhostShipEffect {
   const effect = new GhostShipEffect();
   effect.reset(1000, 1000, 0, seed, 22, TEAM);
@@ -122,6 +128,61 @@ describe('GhostShipEffect', () => {
     expect(ghostRecursionLevels(1)).toBe(3);
     expect(ghostRecursionLevels(0.6)).toBe(2);
     expect(ghostRecursionLevels(0.2)).toBe(1);
+  });
+
+  it('keeps meaningful recursive depth at normal and Shift movement speeds', () => {
+    const normal = make(21);
+    drive(normal, 2, 260);
+    const boosted = make(21);
+    drive(boosted, 2, 520);
+    // A handful of triangles per node would indicate a flattened, non-fractal trail.
+    expect(normal.writtenCount).toBeGreaterThan(80);
+    expect(boosted.writtenCount).toBeGreaterThan(80);
+  });
+
+  it('keeps emission density roughly stable across different dt values', () => {
+    const coarse = new GhostShipEffect();
+    coarse.reset(1000, 1000, 0, 55, 22, TEAM);
+    const fine = new GhostShipEffect();
+    fine.reset(1000, 1000, 0, 55, 22, TEAM);
+    const distance = 4000;
+    const speed = 300;
+    const duration = distance / speed;
+    for (let t = 0, x = 1000; t < duration; t += 1 / 20, x += speed / 20) {
+      coarse.update(1 / 20, x, 1000, 0);
+    }
+    for (let t = 0, x = 1000; t < duration; t += 1 / 240, x += speed / 240) {
+      fine.update(1 / 240, x, 1000, 0);
+    }
+    const ratio = fine.writtenCount / coarse.writtenCount;
+    expect(ratio).toBeGreaterThan(0.7);
+    expect(ratio).toBeLessThan(1.4);
+  });
+
+  it('bends the growth spine into a genuine large-scale curved path, not independent stamps', () => {
+    const effect = new GhostShipEffect();
+    effect.reset(1000, 1000, 0, 909, 22, TEAM);
+    // Drive far enough for the slow curvature sinusoids to sustain a strong same-sign phase.
+    let x = 1000, y = 1000;
+    const positions: number[] = [];
+    for (let t = 0; t < 40; t += DT) {
+      x += 120 * DT;
+      effect.update(DT, x, y, 0);
+      if (effect.writtenCount > 0) {
+        const [ax, ay] = effect.fragmentVertices(Math.min(effect.writtenCount - 1, 500));
+        positions.push(ax, ay);
+      }
+    }
+    // Sample the spine (fragment origins) across the run and check headings actually vary,
+    // i.e. the path is not a single straight ray (which would mean curvature never engages).
+    const n = effect.writtenCount;
+    const early = effect.fragmentVertices(Math.min(5, n - 1));
+    const mid = effect.fragmentVertices(Math.floor(n / 2));
+    const late = effect.fragmentVertices(n - 1);
+    const headingEarlyMid = Math.atan2(mid[1] - early[1], mid[0] - early[0]);
+    const headingMidLate = Math.atan2(late[1] - mid[1], late[0] - mid[0]);
+    const turn = Math.abs(wrapAngleForTest(headingMidLate - headingEarlyMid));
+    expect(turn).toBeGreaterThan(0.05);
   });
 
   it('clears all visual state on reset/respawn', () => {
