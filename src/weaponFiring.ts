@@ -51,7 +51,7 @@ import {
   GUIDED_MISSILE_INITIAL_BATTERY_COST,
 } from './ship.js';
 import type { PlayerShip } from './ship.js';
-import { findClosestEnemy, damageLaserLine, damageLaserLineLimited } from './combatUtils.js';
+import { findClosestEnemy, damageLaserLineLimited } from './combatUtils.js';
 import { isSynonymousFaction } from './confluence.js';
 import type { SpaceFluid } from './spacefluid.js';
 import type { ActionMenu } from './actionmenu.js';
@@ -233,8 +233,11 @@ function fireSelectedPrimary(
       start.x + Math.cos(state.player.angle) * WEAPON_STATS.laser.range,
       start.y + Math.sin(state.player.angle) * WEAPON_STATS.laser.range,
     );
-    state.addEntity(new Laser(Team.Player, start, end, state.player));
-    damageLaserLine(state, spaceFluid, state.player, start, end, WEAPON_STATS.laser.damage);
+    state.addEntity(new Laser(Team.Player, start, end, state.player, {
+      state,
+      spaceFluid,
+      damage: WEAPON_STATS.laser.damage,
+    }));
     Audio.playSound('laser');
     return activeGuidedMissile;
   }
