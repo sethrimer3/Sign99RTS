@@ -320,6 +320,8 @@ export class BuildingStructureDamage {
   private lastMaxHealth = 0;
 
   public pendingDetached: { indices: number[], hit: HullImpact | null }[] = [];
+  /** Leaves just restored by repair(), queued for the reverse-shatter "flying in" visual flushed each frame alongside pendingDetached. */
+  public pendingRepaired: number[][] = [];
 
   private dirtyRender: boolean = true;
   private cachedPath: Path2D | null = null;
@@ -724,11 +726,13 @@ export class BuildingStructureDamage {
     candidates.sort((a, b) => a.leaf.rootDistance - b.leaf.rootDistance);
 
     let repairedAny = false;
+    const repaired: number[] = [];
     for (const c of candidates) {
       if (restoreMass <= 0) break;
       restoreMass -= c.leaf.area;
       gone.delete(c.index);
       repairedAny = true;
+      repaired.push(c.index);
 
       if (c.leaf.isCore && c.leaf.coreIndex !== -1) {
         const ci = c.leaf.coreIndex;
@@ -743,18 +747,23 @@ export class BuildingStructureDamage {
 
     if (repairedAny) {
       this.removedIndices = Array.from(gone);
+      this.pendingRepaired.push(repaired);
       this.updateConnectivity(body, null);
     }
   }
 
   public flush(body: BuildingStructureBody, debris: ShipDebrisSystem, color: Color) {
-    if (this.pendingDetached.length === 0) return;
+    if (this.pendingDetached.length === 0 && this.pendingRepaired.length === 0) return;
     const geo = this.ensure(body);
     for (const event of this.pendingDetached) {
       const source = event.hit && event.hit.kind === 'explosion' ? new Vec2(event.hit.x, event.hit.y) : null;
       debris.emitBuildingDebris(geo, event.indices, body.position, color, source, (() => { let s = geo.seed ^ (event.indices[0] + 1) * 2654435761; return () => seededRandom(s++); })());
     }
     this.pendingDetached = [];
+    for (const indices of this.pendingRepaired) {
+      debris.emitBuildingRepair(geo, indices, body.position, color, (() => { let s = geo.seed ^ (indices[0] + 1) * 3462175867; return () => seededRandom(s++); })());
+    }
+    this.pendingRepaired = [];
   }
 
   public collapseAll(body: BuildingStructureBody) {

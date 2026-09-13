@@ -101,6 +101,24 @@ describe('BuildingStructureDamage', () => {
     expect(body.health).toBeGreaterThan(0);
   });
 
+  it('queues repaired leaf indices for the reverse-shatter flush, separately from detach events', () => {
+    const damage = new BuildingStructureDamage(12345);
+    const body = createMockBody(4, 100);
+    damage.ensure(body);
+
+    damage.hit(body, 20, { kind: 'bullet', x: 0, y: 0, dx: 0, dy: 0 });
+    damage.pendingDetached = []; // simulate a flush() already having consumed the break-off event
+
+    damage.repair(body, 20);
+
+    expect(damage.pendingRepaired.length).toBeGreaterThan(0);
+    const allRepaired = damage.pendingRepaired.flat();
+    expect(allRepaired.length).toBeGreaterThan(0);
+    // Every repaired index must actually be surviving now (not still removed).
+    const stillGone = new Set(damage.removedIndices);
+    for (const idx of allRepaired) expect(stillGone.has(idx)).toBe(false);
+  });
+
   it('accepts a raw (non-normalized) bullet trajectory vector without breaking corridor scoring', () => {
     const damage = new BuildingStructureDamage(12345);
     const body = createMockBody(4, 100);

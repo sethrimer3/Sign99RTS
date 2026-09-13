@@ -8,6 +8,7 @@ import { Camera } from './camera.js';
 import type { Color } from './colors.js';
 import { getShadeRamp, getComponentPath, getShipGeometry } from './proceduralShips.js';
 import type { ProceduralShipDefinition, ShipGeometry } from './proceduralShips.js';
+import { GRID_CELL_SIZE } from './grid.js';
 
 /** Hard global cap; oldest is evicted first so a large battle cannot explode. */
 const POOL_SIZE = 320;
@@ -20,6 +21,15 @@ const FADE_TIME = 2.5;
 const DRIFT_DAMPING = 0.06;
 /** Collision work is staggered across this many frames. */
 const COLLIDE_PHASES = 4;
+/** Target edge length for shattered building-panel debris — a conduit cell or a bit smaller. */
+const BUILDING_SHARD_SIZE = GRID_CELL_SIZE * 0.85;
+/** Cap on shard-grid subdivisions per broken panel, so a huge leaf can't flood the pool. */
+const MAX_SHARD_GRID = 4;
+/** How long a repair shard takes to fly in and slot back into place. */
+const REPAIR_FLIGHT_TIME = 0.45;
+/** How far outside its final position a repair shard starts from. */
+const REPAIR_START_RADIUS_MIN = 30;
+const REPAIR_START_RADIUS_MAX = 70;
 
 /** Minimal shape a debris collider must expose — deliberately structural so this module
  *  does not depend on Entity and cannot be tempted to mutate gameplay state. */
@@ -53,13 +63,17 @@ interface DebrisPiece {
   color: Color | null;
   /** Monotonic stamp so the oldest piece is recycled when the pool is full. */
   stamp: number;
+  /** True while this piece is a repair shard flying inward to slot back into place, rather than ordinary outward-flying wreckage. */
+  isRepair?: boolean;
+  targetX?: number;
+  targetY?: number;
 }
 
 function createPiece(): DebrisPiece {
   return {
     active: false, geometry: null, isRect: false, w: 0, h: 0, index: 0, x: 0, y: 0, vx: 0, vy: 0,
     angle: 0, spin: 0, scale: 1, life: 0, maxLife: 1, radius: 1, phase: 0, shade: 0.5,
-    accent: false, color: null, stamp: 0,
+    accent: false, color: null, stamp: 0, isRepair: false, targetX: 0, targetY: 0,
   };
 }
 
@@ -181,6 +195,14 @@ export class ShipDebrisSystem {
     }
   }
 
+  /** How many rows/cols to chop a leaf into so shards read as conduit-sized squares, not one big slab. */
+  private static shardGrid(w: number, h: number, perfScale: number): { cols: number; rows: number } {
+    const cap = perfScale < 0.6 ? Math.max(1, Math.floor(MAX_SHARD_GRID / 2)) : MAX_SHARD_GRID;
+    const cols = Math.max(1, Math.min(cap, Math.round(w / BUILDING_SHARD_SIZE)));
+    const rows = Math.max(1, Math.min(cap, Math.round(h / BUILDING_SHARD_SIZE)));
+    return { cols, rows };
+  }
+
   emitBuildingDebris(
     geo: any, indices: number[],
     center: Vec2, color: Color, hit: Vec2 | null,
@@ -197,31 +219,92 @@ export class ShipDebrisSystem {
     for (let i = 0; i < budget; i++) {
       const leaf = geo.leaves[indices[i]];
       if (!leaf) continue;
-      const wx = center.x + leaf.x;
-      const wy = center.y + leaf.y;
-      let ox = wx - center.x, oy = wy - center.y;
-      const ol = Math.hypot(ox, oy) || 1;
-      ox /= ol; oy /= ol;
-      const speed = 26 + rng() * 52;
-      const fill = this.activeIndices.length / POOL_SIZE;
-      const lifeScale = 1 - 0.72 * fill * fill;
-      const piece = this.acquire();
-      piece.geometry = null;
-      piece.isRect = true;
-      piece.w = leaf.w; piece.h = leaf.h;
-      piece.x = wx; piece.y = wy;
-      piece.vx = (ox * 0.75 + hx * 0.55) * speed;
-      piece.vy = (oy * 0.75 + hy * 0.55) * speed;
-      piece.angle = 0;
-      piece.spin = (rng() - 0.5) * 5.5;
-      piece.scale = 1;
-      piece.maxLife = (LIFE_MIN + rng() * (LIFE_MAX - LIFE_MIN)) * lifeScale;
-      piece.life = piece.maxLife;
-      piece.radius = Math.hypot(leaf.w, leaf.h) * 0.5;
-      piece.phase = rng() * Math.PI * 2;
-      piece.shade = rng();
-      piece.accent = rng() > 0.85;
-      piece.color = color;
+      const { cols, rows } = ShipDebrisSystem.shardGrid(leaf.w, leaf.h, this._effectiveScale);
+      const cw = leaf.w / cols, ch = leaf.h / rows;
+      for (let ry = 0; ry < rows; ry++) {
+        for (let rx = 0; rx < cols; rx++) {
+          const lx = leaf.x - leaf.w / 2 + cw * (rx + 0.5);
+          const ly = leaf.y - leaf.h / 2 + ch * (ry + 0.5);
+          const wx = center.x + lx;
+          const wy = center.y + ly;
+          let ox = lx, oy = ly;
+          const ol = Math.hypot(ox, oy) || 1;
+          ox /= ol; oy /= ol;
+          const speed = 26 + rng() * 52;
+          const fill = this.activeIndices.length / POOL_SIZE;
+          const lifeScale = 1 - 0.72 * fill * fill;
+          const piece = this.acquire();
+          piece.geometry = null;
+          piece.isRect = true;
+          piece.isRepair = false;
+          piece.w = cw; piece.h = ch;
+          piece.x = wx; piece.y = wy;
+          piece.vx = (ox * 0.75 + hx * 0.55) * speed;
+          piece.vy = (oy * 0.75 + hy * 0.55) * speed;
+          piece.angle = 0;
+          piece.spin = (rng() - 0.5) * 5.5;
+          piece.scale = 1;
+          piece.maxLife = (LIFE_MIN + rng() * (LIFE_MAX - LIFE_MIN)) * lifeScale;
+          piece.life = piece.maxLife;
+          piece.radius = Math.hypot(cw, ch) * 0.5;
+          piece.phase = rng() * Math.PI * 2;
+          piece.shade = rng();
+          piece.accent = rng() > 0.85;
+          piece.color = color;
+        }
+      }
+    }
+  }
+
+  /**
+   * Spawn small conduit-sized shards that fly inward and slot back into a
+   * just-repaired panel — the reverse-shatter counterpart to
+   * `emitBuildingDebris`. The underlying panel is already solid the instant
+   * `repair()` runs; these shards are a purely decorative flourish landing
+   * on top of it.
+   */
+  emitBuildingRepair(
+    geo: any, indices: number[],
+    center: Vec2, color: Color,
+    rng: () => number
+  ): void {
+    const budget = Math.max(1, Math.round(indices.length * this._effectiveScale));
+    if (budget < 1) return;
+    for (let i = 0; i < budget; i++) {
+      const leaf = geo.leaves[indices[i]];
+      if (!leaf) continue;
+      const { cols, rows } = ShipDebrisSystem.shardGrid(leaf.w, leaf.h, this._effectiveScale);
+      const cw = leaf.w / cols, ch = leaf.h / rows;
+      for (let ry = 0; ry < rows; ry++) {
+        for (let rx = 0; rx < cols; rx++) {
+          const lx = leaf.x - leaf.w / 2 + cw * (rx + 0.5);
+          const ly = leaf.y - leaf.h / 2 + ch * (ry + 0.5);
+          const targetX = center.x + lx;
+          const targetY = center.y + ly;
+          const dirA = rng() * Math.PI * 2;
+          const dist = REPAIR_START_RADIUS_MIN + rng() * (REPAIR_START_RADIUS_MAX - REPAIR_START_RADIUS_MIN);
+          const piece = this.acquire();
+          piece.geometry = null;
+          piece.isRect = true;
+          piece.isRepair = true;
+          piece.w = cw; piece.h = ch;
+          piece.targetX = targetX;
+          piece.targetY = targetY;
+          piece.x = targetX + Math.cos(dirA) * dist;
+          piece.y = targetY + Math.sin(dirA) * dist;
+          piece.vx = 0; piece.vy = 0;
+          piece.angle = (rng() - 0.5) * 1.4;
+          piece.spin = -piece.angle / Math.max(0.05, REPAIR_FLIGHT_TIME);
+          piece.scale = 1;
+          piece.maxLife = REPAIR_FLIGHT_TIME * (0.9 + rng() * 0.3);
+          piece.life = piece.maxLife;
+          piece.radius = Math.hypot(cw, ch) * 0.5;
+          piece.phase = rng() * Math.PI * 2;
+          piece.shade = rng();
+          piece.accent = true;
+          piece.color = color;
+        }
+      }
     }
   }
 
@@ -239,6 +322,17 @@ export class ShipDebrisSystem {
         this.freeStack.push(poolIndex);
         continue;
       }
+      if (piece.isRepair) {
+        // Ease toward the panel slot instead of drifting outward — no physics,
+        // no collision, no fluid stir: this is a purely decorative flourish
+        // landing on a panel that is already structurally solid.
+        const t = Math.min(1, dt * (1 / Math.max(0.05, REPAIR_FLIGHT_TIME)) * 3.2);
+        piece.x += (piece.targetX! - piece.x) * t;
+        piece.y += (piece.targetY! - piece.y) * t;
+        piece.angle += piece.spin * dt;
+        continue;
+      }
+
       piece.x += piece.vx * dt;
       piece.y += piece.vy * dt;
       const damp = 1 - DRIFT_DAMPING * dt;
@@ -298,7 +392,15 @@ export class ShipDebrisSystem {
       
       const drawScale = camera.zoom * piece.scale;
       ctx.save();
-      ctx.globalAlpha = Math.min(1, piece.life / Math.min(FADE_TIME, piece.maxLife));
+      if (piece.isRepair) {
+        // Stay fully bright while flying in; only fade in the last stretch,
+        // right as it settles into the panel — the opposite envelope of
+        // ordinary wreckage, which fades out as it dies.
+        const elapsed = 1 - piece.life / piece.maxLife;
+        ctx.globalAlpha = elapsed < 0.7 ? 1 : Math.max(0, (1 - elapsed) / 0.3);
+      } else {
+        ctx.globalAlpha = Math.min(1, piece.life / Math.min(FADE_TIME, piece.maxLife));
+      }
       ctx.translate(screen.x, screen.y);
       ctx.rotate(piece.angle);
       ctx.scale(drawScale, drawScale);
