@@ -18,7 +18,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     throw new Error('Canvas element #game not found');
   }
   const game = new Game(canvas);
-  (window as any).__game = game;
   game.start();
 });
 

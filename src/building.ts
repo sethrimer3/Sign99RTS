@@ -133,9 +133,10 @@ export abstract class BuildingBase extends Entity {
     if (!legacyCore && this.buildingDamage && !v.simple) {
       const leaves = this.buildingDamage.getSurvivingLeaves(this);
       const seams = this.buildingDamage.getVisibleSeams(this);
-      const power = (this.buildProgress >= 1 && !this.deleting)
+      const healthScale = 0.35 + 0.65 * Math.max(0, Math.min(1, this.healthFraction));
+      const power = ((this.buildProgress >= 1 && !this.deleting)
         ? (this.powered ? 1 : 0.22)
-        : 0.12 + 0.2 * this.buildProgress;
+        : 0.12 + 0.2 * this.buildProgress) * healthScale;
       const panelOpts = { screenX: screen.x, screenY: screen.y, zoom: camera.zoom, leaves, seams, timeSec: this.animationTime, seed: this.id, power };
       renderBuildingPanelInteriors(ctx, panelOpts);
       renderBuildingSeamWaves(ctx, panelOpts);
