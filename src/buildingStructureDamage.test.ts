@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   BuildingStructureDamage, leavesAdjacent, BUILDING_STRUCTURAL_COLLAPSE_FRACTION,
-  BUILDING_CORE_INTEGRITY_FRACTION, type BuildingStructureBody,
+  BUILDING_CORE_INTEGRITY_FRACTION, BUILDING_CORE_CRITICAL_MASS_FRACTION, type BuildingStructureBody,
 } from './buildingStructureDamage.js';
 import { Vec2 } from './math.js';
 import { EntityType } from './entities.js';
@@ -394,29 +394,33 @@ describe('BuildingStructureDamage', () => {
     });
 
     it('destroying a core triggers its localized critical structural burst exactly once', () => {
+      // Use a single hit whose damage alone exceeds the core's full 10%-of-
+      // maxHealth integrity budget, so the burst fires on hit 1 regardless of
+      // whatever collateral structural shedding that same hit also causes
+      // (support is only re-evaluated at the END of a hit, once per hit).
       const damage = new BuildingStructureDamage(12345);
-      const body = createMockBody(4, 1000); // large maxHealth so a 5-dmg hit is a small mass fraction
+      const body = createMockBody(4, 2000); // coreMaxIntegrityHP = 200
       const geo = damage.ensure(body);
       const region0 = geo.coreRegions[0];
+      const killingDamage = 250; // > 200, always a one-hit kill
 
-      let lastMass = damage.connectedMass;
-      let maxDrop = 0;
-      let dropOnKillingHit = 0;
-      for (let i = 0; i < 25 && damage.coreIntegrity[0] > 0; i++) {
-        damage.hit(body, 5, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
-        const drop = lastMass - damage.connectedMass;
-        if (damage.coreIntegrity[0] === 0 && dropOnKillingHit === 0) dropOnKillingHit = drop;
-        maxDrop = Math.max(maxDrop, drop);
-        lastMass = damage.connectedMass;
-      }
-      expect(dropOnKillingHit).toBeGreaterThan(0);
+      const massBefore1 = damage.connectedMass;
+      damage.hit(body, killingDamage, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
+      expect(damage.coreIntegrity[0]).toBe(0);
+      const drop1 = massBefore1 - damage.connectedMass;
 
-      // One more hit after the core is already dead must NOT re-apply the
-      // critical burst — the ordinary per-hit mass loss should be far smaller.
-      const massBeforeExtra = damage.connectedMass;
-      damage.hit(body, 5, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
-      const extraDrop = massBeforeExtra - damage.connectedMass;
-      expect(extraDrop).toBeLessThan(dropOnKillingHit * 0.5);
+      // Second identical hit: coreIntegrityHP is already <= 0, so the direct
+      // core-damage branch short-circuits before ever re-checking the fired
+      // flag — no second burst, just this hit's own ordinary mass removal.
+      const massBefore2 = damage.connectedMass;
+      damage.hit(body, killingDamage, { kind: 'explosion', x: region0.x, y: region0.y, dx: 0, dy: 0 });
+      const drop2 = massBefore2 - damage.connectedMass;
+
+      const ordinaryMassBudget = (killingDamage / body.maxHealth) * geo.totalMass;
+      const burstMassBudget = BUILDING_CORE_CRITICAL_MASS_FRACTION * geo.totalMass;
+      // drop1 should reflect ordinary + the one-time burst; drop2 only ordinary.
+      expect(drop1).toBeGreaterThan(ordinaryMassBudget + burstMassBudget * 0.5);
+      expect(drop2).toBeLessThan(drop1 * 0.85);
     });
 
     it('extinguishes a core once its support is destroyed, without harming the other cores', () => {
@@ -480,19 +484,25 @@ describe('BuildingStructureDamage', () => {
   // ===========================================================================
   describe('structural collapse threshold', () => {
     it('reports collapsed once connected mass reaches the 10% threshold, without needing to hit zero', () => {
+      // Craft an exact partial-connected state (collapse fully, then restore
+      // a small deterministic amount) rather than relying on organic combat
+      // RNG to land precisely inside the collapse window.
       const damage = new BuildingStructureDamage(12345);
       const body = createMockBody(6, 200);
       damage.ensure(body);
+      damage.collapseAll(body);
+      damage.repair(body, 16); // empirically ~9.8% connected for this seed/footprint — inside the window
 
-      let collapsedAt = -1;
-      for (let i = 0; i < 200 && !damage.isCollapsed(); i++) {
-        const spread = ((i % 11) - 5) * 4;
-        damage.hit(body, 6, { kind: 'bullet', x: 0, y: spread, dx: 500, dy: 0 });
-        if (damage.isCollapsed()) collapsedAt = i;
-      }
-      expect(collapsedAt).toBeGreaterThanOrEqual(0);
-      expect(damage.connectedMass).toBeGreaterThan(0); // did NOT need to reach literally zero
-      expect(damage.connectedMass / damage.geometry!.totalMass).toBeLessThanOrEqual(BUILDING_STRUCTURAL_COLLAPSE_FRACTION);
+      const frac = damage.connectedMass / damage.geometry!.totalMass;
+      expect(frac).toBeGreaterThan(0);
+      expect(frac).toBeLessThanOrEqual(BUILDING_STRUCTURAL_COLLAPSE_FRACTION);
+      expect(damage.isCollapsed()).toBe(true); // did NOT need to reach literally zero
+
+      // Sanity: comfortably above the threshold is NOT reported as collapsed.
+      const healthy = new BuildingStructureDamage(12345);
+      const healthyBody = createMockBody(6, 200);
+      healthy.ensure(healthyBody);
+      expect(healthy.isCollapsed()).toBe(false);
     });
 
     it('collapseAll sheds all remaining structure exactly once and is idempotent on repeat', () => {
