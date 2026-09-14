@@ -19,6 +19,7 @@
 
 import type { VisualQuality } from './visualquality.js';
 import { renderWarmGlow, warmGlowFrameStyle } from './warmGlow.js';
+import { renderBudget } from './renderBudget.js';
 
 /** Warm bloom around the node frame is only worth it on these tiers. */
 let glowEnabled = true;
@@ -28,6 +29,16 @@ let layerCount = 3;
 export function setBuildingCoreEffectTier(tier: VisualQuality): void {
   glowEnabled = tier === 'high' || tier === 'ultraHigh';
   layerCount = tier === 'ultraLow' ? 1 : tier === 'low' ? 2 : 3;
+}
+
+/** Further trims layer count under sustained frame-time pressure — this effect
+ *  is drawn once per building AND once per ship-with-a-core, so it's one of
+ *  the highest-volume draws in a big battle; let it degrade like particles/
+ *  glow/lockward already do instead of always paying the static-tier cost. */
+function dynamicLayerCount(): number {
+  const load = renderBudget.renderLoadScale;
+  const cap = load >= 0.85 ? layerCount : load >= 0.6 ? Math.min(layerCount, 2) : 1;
+  return cap;
 }
 
 // --- Baked fire-noise tile -------------------------------------------------
@@ -261,6 +272,14 @@ export interface FieryCoreOpts {
    * cached Path2D/gradient/rect-list rather than rebuilding them every frame.
    */
   localMask?: MaskEntry;
+  /**
+   * Pre-built fire-bed gradient for absolute-space (non-`localMask`) callers
+   * whose (x, y, side) is constant across many draws — e.g. every instance of
+   * the same ship design shares one `ShipGeometry`, so the gradient never
+   * changes and can be cached by the caller instead of rebuilt every ship
+   * every frame. Ignored when `localMask` is set (that path has its own cache).
+   */
+  presetGradient?: CanvasGradient;
   x: number;
   y: number;
   side: number;
@@ -339,13 +358,17 @@ export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOp
 
   // 1) solid warm fire gradient as the colour bed.
   ctx.globalAlpha = intensity;
-  ctx.fillStyle = localMask ? getFireGradient(ctx, side) : ctx.createLinearGradient(x, y + side, x, y);
-  if (!localMask) {
-    const grad = ctx.fillStyle as CanvasGradient;
+  if (localMask) {
+    ctx.fillStyle = getFireGradient(ctx, side);
+  } else if (opts.presetGradient) {
+    ctx.fillStyle = opts.presetGradient;
+  } else {
+    const grad = ctx.createLinearGradient(x, y + side, x, y);
     grad.addColorStop(0.0, 'rgb(90, 10, 0)');
     grad.addColorStop(0.4, 'rgb(210, 66, 10)');
     grad.addColorStop(0.75, 'rgb(255, 150, 44)');
     grad.addColorStop(1.0, 'rgb(255, 224, 150)');
+    ctx.fillStyle = grad;
   }
   ctx.fillRect(ox0, oy0, side, side);
 
