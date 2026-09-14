@@ -95,6 +95,10 @@ interface BattleResult {
   aliveA: number;
   aliveB: number;
   fps: { top: number; low: number; median: number; mean: number };
+  /** Cumulative ms spent in each phase across the whole battle, for a quick "where does the time go" breakdown. */
+  phaseTotalsMs: { update: number; weaponFire: number; draw: number };
+  /** Sub-breakdown of `update`, summed from GameState.perfStats (see gamestate.ts) each tick. */
+  updateSubTotalsMs: { fighterUpdate: number; separation: number; spatialRebuild: number; collision: number };
 }
 
 function spawnTeam(state: GameState, n: number, team: Team, rally: Vec2, enemyRally: Vec2): void {
@@ -146,16 +150,28 @@ function runBattle(perSide: number): BattleResult {
   let frame = 0;
   let aliveA = perSide;
   let aliveB = perSide;
+  const phaseTotalsMs = { update: 0, weaponFire: 0, draw: 0 };
+  const updateSubTotalsMs = { fighterUpdate: 0, separation: 0, spatialRebuild: 0, collision: 0 };
   const wallClockStart = performance.now();
 
   for (;;) {
     const t0 = performance.now();
 
     state.update(DT);
+    const t1 = performance.now();
     updateFighterWeaponFire(state, spaceFluid);
+    const t2 = performance.now();
     for (const f of state.fighters) f.draw(ctx, camera);
+    const t3 = performance.now();
 
-    frameTimesMs.push(performance.now() - t0);
+    phaseTotalsMs.update += t1 - t0;
+    phaseTotalsMs.weaponFire += t2 - t1;
+    phaseTotalsMs.draw += t3 - t2;
+    updateSubTotalsMs.fighterUpdate += state.perfStats.fighterUpdateMs;
+    updateSubTotalsMs.separation += state.perfStats.fighterSeparationMs;
+    updateSubTotalsMs.spatialRebuild += state.perfStats.spatialRebuildMs;
+    updateSubTotalsMs.collision += state.perfStats.projectileCollisionMs;
+    frameTimesMs.push(t3 - t0);
     frame++;
 
     aliveA = 0;
@@ -187,10 +203,12 @@ function runBattle(perSide: number): BattleResult {
     mean: fpsValues.length ? fpsValues.reduce((a, b) => a + b, 0) / fpsValues.length : 0,
   };
 
-  return { label, perSide, frames: frame, simSecondsElapsed: frame * DT, wallClockMs, outcome, aliveA, aliveB, fps };
+  return { label, perSide, frames: frame, simSecondsElapsed: frame * DT, wallClockMs, outcome, aliveA, aliveB, fps, phaseTotalsMs, updateSubTotalsMs };
 }
 
 function formatResult(r: BattleResult): string {
+  const phaseTotal = r.phaseTotalsMs.update + r.phaseTotalsMs.weaponFire + r.phaseTotalsMs.draw;
+  const pct = (ms: number) => (phaseTotal > 0 ? ((ms / phaseTotal) * 100).toFixed(0) : '0');
   const winnerText = r.outcome === 'A' || r.outcome === 'B'
     ? `Team ${r.outcome} wins`
     : r.outcome === 'frame-cap'
@@ -201,6 +219,13 @@ function formatResult(r: BattleResult): string {
     `  Outcome: ${winnerText} (A=${r.aliveA} alive, B=${r.aliveB} alive)`,
     `  Frames simulated: ${r.frames}  (${r.simSecondsElapsed.toFixed(1)}s sim time, ${(r.wallClockMs / 1000).toFixed(1)}s wall clock)`,
     `  FPS  top: ${r.fps.top.toFixed(1)}   low: ${r.fps.low.toFixed(1)}   median: ${r.fps.median.toFixed(1)}   mean: ${r.fps.mean.toFixed(1)}`,
+    `  Phase breakdown: update ${r.phaseTotalsMs.update.toFixed(0)}ms (${pct(r.phaseTotalsMs.update)}%)   ` +
+    `weaponFire ${r.phaseTotalsMs.weaponFire.toFixed(0)}ms (${pct(r.phaseTotalsMs.weaponFire)}%)   ` +
+    `draw ${r.phaseTotalsMs.draw.toFixed(0)}ms (${pct(r.phaseTotalsMs.draw)}%)`,
+    `  Within update: fighterUpdate(AI+nav+physics) ${r.updateSubTotalsMs.fighterUpdate.toFixed(0)}ms   ` +
+    `separation ${r.updateSubTotalsMs.separation.toFixed(0)}ms   ` +
+    `spatialRebuild(x3/tick) ${r.updateSubTotalsMs.spatialRebuild.toFixed(0)}ms   ` +
+    `collision ${r.updateSubTotalsMs.collision.toFixed(0)}ms`,
   ].join('\n');
 }
 

@@ -95,6 +95,10 @@ export interface GamePerfStats {
   projectileCollisionMs: number;
   fighterCombatMs: number;
   fighterSeparationMs: number;
+  /** Per-fighter hazard-avoidance + navigation-target resolution + Entity.update() loop, summed over every live fighter this tick. */
+  fighterUpdateMs: number;
+  /** Sum of every SpatialIndex rebuild this tick (there are up to three per tick — see update()). */
+  spatialRebuildMs: number;
   activeEnemyBases: number;
   spatial: SpatialIndexStats;
 }
@@ -266,7 +270,7 @@ export class GameState {
   // by queryCircle's own distance check), which is the right trade here since
   // this index is dominated by "big battle" scenarios (lots of fighters, wide
   // weapon ranges) rather than tight single-entity lookups.
-  private spatialIndex: SpatialIndex = new SpatialIndex(GRID_CELL_SIZE * 12);
+  private spatialIndex: SpatialIndex = new SpatialIndex(GRID_CELL_SIZE * 8);
   /** Countdown to the next command-post repair pulse. */
   baseRepairAuraTimer = 0;
   private spatialQueryScratch: Entity[] = [];
@@ -290,6 +294,8 @@ export class GameState {
     projectileCollisionMs: 0,
     fighterCombatMs: 0,
     fighterSeparationMs: 0,
+    fighterUpdateMs: 0,
+    spatialRebuildMs: 0,
     activeEnemyBases: 0,
     spatial: emptySpatialStats(),
   };
@@ -623,6 +629,7 @@ export class GameState {
 
     // Update fighters. Docked fighters are capacity bookkeeping for their
     // shipyards; they do not need hazard avoidance or route refreshes.
+    const fighterUpdateStart = performance.now();
     for (const f of this.fighters) {
       if (f.docked) {
         f.setNavigationTarget(null);
@@ -639,6 +646,7 @@ export class GameState {
       this.updateFighterNavigation(f);
       f.update(dt);
     }
+    this.perfStats.fighterUpdateMs = performance.now() - fighterUpdateStart;
 
     // Update projectiles
     for (const p of this.projectiles) {
@@ -722,12 +730,15 @@ export class GameState {
       projectileCollisionMs: 0,
       fighterCombatMs: 0,
       fighterSeparationMs: 0,
+      fighterUpdateMs: 0,
+      spatialRebuildMs: 0,
       activeEnemyBases: 0,
       spatial: emptySpatialStats(),
     };
   }
 
   private rebuildSpatialIndex(): void {
+    const rebuildStart = performance.now();
     this.spatialIndex.clear(false);
     for (const ship of this.playerShips.values()) this.spatialIndex.insert(ship);
     for (const b of this.buildings) this.spatialIndex.insert(b);
@@ -736,6 +747,7 @@ export class GameState {
     }
     for (const p of this.projectiles) this.spatialIndex.insert(p);
     this.perfStats.spatial = this.spatialIndex.stats();
+    this.perfStats.spatialRebuildMs += performance.now() - rebuildStart;
   }
 
   // -----------------------------------------------------------------------
