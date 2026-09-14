@@ -855,7 +855,13 @@ export class FighterShip extends Entity {
     if (distSq <= 0.0001 || distSq > desired * desired) return;
     const dist = Math.sqrt(distSq);
     const push = (1 - dist / desired) * 210 * dt;
-    this.avoidVelocity = this.avoidVelocity.add(new Vec2(dx / dist, dy / dist).scale(push));
+    // Mutate in place instead of `avoidVelocity.add(new Vec2(...).scale(...))`
+    // — this runs once per nearby same-team pair (gamestate.ts's
+    // applyFighterSeparation), which in a large clustered battle is the
+    // hottest per-fighter call in the whole tick; avoids 2 Vec2 allocations
+    // per pair for the exact same resulting vector.
+    this.avoidVelocity.x += (dx / dist) * push;
+    this.avoidVelocity.y += (dy / dist) * push;
   }
 
   private weaveTarget(base: Vec2, amount: number): Vec2 {

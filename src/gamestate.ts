@@ -260,16 +260,22 @@ export class GameState {
     targetY: number;
     expiresAt: number;
   }> = new Map();
-  // Cell size tuned to the query radii actually run against this index: fighter
-  // weapon range (~175-250), turret range (up to 1000), separation/shield
-  // queries (72-90). GRID_CELL_SIZE*3 (~26) made even a single 250-radius
-  // weapon-range query scan ~370 mostly-empty cells, and a 1000-range turret
-  // query ~5900 — paid every tick, per fighter/turret. A larger cell cuts that
-  // hash-lookup count by roughly (newSize/oldSize)^2 with only a modest rise in
-  // per-cell candidate count (bounded by true nearby-entity density, filtered
-  // by queryCircle's own distance check), which is the right trade here since
-  // this index is dominated by "big battle" scenarios (lots of fighters, wide
-  // weapon ranges) rather than tight single-entity lookups.
+  // Cell size tuned empirically with the fighter-battle FPS benchmark (see
+  // src/fighterBattleBenchmark.bench.ts, `npm run bench:fighters`) rather than
+  // by theory alone — this index serves both wide sparse queries (fighter
+  // weapon range ~175-250, turret range up to 1000, paid once per
+  // fighter/turret/tick) AND the much higher-volume, tighter bullet-vs-target
+  // collision query in resolveCollisions() (~40-60 radius, paid once per LIVE
+  // PROJECTILE per tick — in a clustered battle this is now the single
+  // biggest cost in GameState.update(), well above weapon targeting). A first
+  // pass (GRID_CELL_SIZE*12, ~104) tuned only for the wide queries measurably
+  // *increased* collision-resolution cost in a packed fight, because bigger
+  // cells hold proportionally more candidates when entities are clustered —
+  // exactly the "everyone near everyone" scenario collision resolution runs
+  // in constantly. GRID_CELL_SIZE*8 (~69) benchmarked consistently lower
+  // collision-phase cost across repeated 300v300 runs with no measurable
+  // regression to the wide-query case. Re-tune with the benchmark if either
+  // query pattern's typical radius changes meaningfully.
   private spatialIndex: SpatialIndex = new SpatialIndex(GRID_CELL_SIZE * 8);
   /** Countdown to the next command-post repair pulse. */
   baseRepairAuraTimer = 0;
@@ -764,12 +770,17 @@ export class GameState {
       const nearby = end === proj.position
         ? this.queryEntitiesInRange(proj.position, queryRadius, this.spatialQueryScratch)
         : this.queryEntitiesNearSegment(proj.position, end, queryRadius, this.spatialQueryScratch);
+      // Computed once per projectile instead of once per candidate inside
+      // checkHit — it's the same value every time for a given proj, but a
+      // clustered battle can put dozens of candidates through checkHit for
+      // one bullet, each previously reallocating an identical Vec2.
+      const sweepStart = projectileSweepStart(proj);
 
       // Check against buildings
       for (const e of nearby) {
         if (!(e instanceof BuildingBase)) continue;
         const b = e;
-        if (this.checkHit(proj, b, isRegen)) break;
+        if (this.checkHit(proj, b, isRegen, sweepStart)) break;
       }
       if (!proj.alive) continue;
 
@@ -778,14 +789,14 @@ export class GameState {
         if (!(e instanceof FighterShip)) continue;
         const f = e;
         if (!f.alive || f.docked) continue;
-        if (this.checkHit(proj, f, isRegen)) break;
+        if (this.checkHit(proj, f, isRegen, sweepStart)) break;
       }
       if (!proj.alive) continue;
 
       // Check against all player ships (slot 0 = local, others = remote/AI)
       for (const ship of this.playerShips.values()) {
         if (!ship.alive) continue;
-        if (this.checkHit(proj, ship, isRegen)) break;
+        if (this.checkHit(proj, ship, isRegen, sweepStart)) break;
       }
     }
   }
@@ -819,15 +830,15 @@ export class GameState {
     }
   }
 
-  /** Returns true if the projectile hit and was consumed. */
-  private checkHit(proj: ProjectileBase, target: Entity, isRegen: boolean): boolean {
+  /** Returns true if the projectile hit and was consumed. `sweepStart` is `projectileSweepStart(proj)`, hoisted by the caller since it's identical for every candidate checked against one projectile. */
+  private checkHit(proj: ProjectileBase, target: Entity, isRegen: boolean, sweepStart: Vec2): boolean {
     if (proj instanceof ChargedLaserBurst) return false;
     if (proj instanceof SynonymousNovaBomb) return false;
     if (proj instanceof MassDriverBullet && proj.isBursting) return false;
     // Regen bullets heal same-team, damage other-team
     if (isRegen && proj.team === target.team) {
       if (target.health >= target.maxHealth) return false;
-      const dist = pointToSegmentDistance(target.position, projectileSweepStart(proj), proj.position);
+      const dist = pointToSegmentDistance(target.position, sweepStart, proj.position);
       if (dist < proj.radius + target.radius) {
         target.takeDamage(proj.damage); // negative damage = healing
         this.particles.emitHealing(target.position);
@@ -842,7 +853,7 @@ export class GameState {
     if (target.type === EntityType.Wall && proj.damage < 0) return false;
 
     if (proj instanceof MassDriverBullet) {
-      const dist = pointToSegmentDistance(target.position, projectileSweepStart(proj), proj.position);
+      const dist = pointToSegmentDistance(target.position, sweepStart, proj.position);
       if (dist < proj.radius + target.radius) {
         proj.triggerBurst();
         return true;
@@ -863,7 +874,7 @@ export class GameState {
       }
     }
 
-    const dist = pointToSegmentDistance(target.position, projectileSweepStart(proj), proj.position);
+    const dist = pointToSegmentDistance(target.position, sweepStart, proj.position);
     const combinedRadius = proj.radius + target.radius;
     if (dist < combinedRadius) {
       if (this.projectileBlastRadius(proj) > 0) {
