@@ -420,18 +420,16 @@ export class WorldGrid {
     const cyMin = Math.floor(tl.y / GRID_CELL_SIZE) - 1;
     const cyMax = Math.floor(br.y / GRID_CELL_SIZE) + 1;
 
-    // 1. Conduit fills first. Iterate sparse conduit maps directly; scanning
-    // every visible cell is too expensive now that cells are much smaller.
+    // 1. Conduit fills first. Iterate only the chunks overlapping the
+    // viewport (see conduitsNear) instead of every conduit on the map —
+    // cells are tiny, so a built-out base can hold thousands of them.
     const cellPx = GRID_CELL_SIZE * camera.zoom;
     const pulse = 0.5 + 0.5 * Math.sin(time * 2);
-    for (const [key, entry] of this.conduits) {
-        const comma = key.indexOf(',');
-        const cx = Number(key.slice(0, comma));
-        const cy = Number(key.slice(comma + 1));
+    for (const { cx, cy, team } of this.conduitsNear(cxMin, cxMax, cyMin, cyMax)) {
         if (cx < cxMin || cx > cxMax || cy < cyMin || cy > cyMax) continue;
         const c = camera.worldToScreen(cellCenter(cx, cy));
-        const energized = isEnergized ? isEnergized(cx, cy, entry.team) : true;
-        this.drawConduitPanel(ctx, c.x, c.y, cellPx, cx, cy, entry.team, energized, time, pulse, conduitShimmer);
+        const energized = isEnergized ? isEnergized(cx, cy, team) : true;
+        this.drawConduitPanel(ctx, c.x, c.y, cellPx, cx, cy, team, energized, time, pulse, conduitShimmer);
 
         // Inner glow square for friendly conduits — only for energized
     }
