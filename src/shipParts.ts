@@ -9,15 +9,22 @@
 
 export type ShipRole = 'hero' | 'fighter' | 'bomber' | 'swarm';
 
-/** Every escort role shares one base — only the hero starts with more hull. */
 export const HERO_BASE_PARTS = 60;
-export const ESCORT_BASE_PARTS = 30;
+/** Each escort role has its own base — bombers are tankiest, swarm fighters are glass. */
+export const FIGHTER_BASE_PARTS = 15;
+export const BOMBER_BASE_PARTS = 45;
+export const SWARM_BASE_PARTS = 5;
 
 /** One wing pair, once grown in, is worth this many extra parts. */
 export const WING_PAIR_PARTS = 20;
 
 function baseParts(role: ShipRole): number {
-  return role === 'hero' ? HERO_BASE_PARTS : ESCORT_BASE_PARTS;
+  switch (role) {
+    case 'hero': return HERO_BASE_PARTS;
+    case 'bomber': return BOMBER_BASE_PARTS;
+    case 'swarm': return SWARM_BASE_PARTS;
+    default: return FIGHTER_BASE_PARTS;
+  }
 }
 
 /**
