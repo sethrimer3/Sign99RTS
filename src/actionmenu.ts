@@ -974,6 +974,8 @@ class LeftHoldMenu {
   private openedAt = 0;
   private readonly rowRects: Array<{ index: number; x: number; y: number; w: number; h: number }> = [];
   private readonly queueRects: Array<{ index: number; item: string; x: number; y: number; w: number; h: number }> = [];
+  private backRect: { x: number; y: number; w: number; h: number } | null = null;
+  private backHovered = false;
 
   constructor(
     private readonly holdKey: string,
@@ -1006,16 +1008,16 @@ class LeftHoldMenu {
 
     if (Input.mouse2Pressed) {
       Input.consumeMouseButton(2);
-      if (this.stack.length > 1) {
-        this.stack.pop();
-        this.path.pop();
-        this.selectedIdx = 0;
-        Audio.playSound('menucursor');
-      } else {
-        this.open = false;
-        this.stack = [];
-        this.path = [];
-      }
+      this.goBackOrClose();
+      return { action: 'none' };
+    }
+
+    this.backHovered = !!this.backRect &&
+      Input.mousePos.x >= this.backRect.x && Input.mousePos.x <= this.backRect.x + this.backRect.w &&
+      Input.mousePos.y >= this.backRect.y && Input.mousePos.y <= this.backRect.y + this.backRect.h;
+    if (this.backHovered && Input.mousePressed) {
+      Input.consumeMouseButton(0);
+      this.goBackOrClose();
       return { action: 'none' };
     }
 
@@ -1065,6 +1067,19 @@ class LeftHoldMenu {
       }
     }
     return { action: 'none' };
+  }
+
+  private goBackOrClose(): void {
+    if (this.stack.length > 1) {
+      this.stack.pop();
+      this.path.pop();
+      this.selectedIdx = 0;
+      Audio.playSound('menucursor');
+    } else {
+      this.open = false;
+      this.stack = [];
+      this.path = [];
+    }
   }
 
   private confirm(item: RadialItem, state: GameState): MenuResult {
@@ -1130,9 +1145,23 @@ class LeftHoldMenu {
     ctx.fillStyle = colorToCSS(Colors.general_building, 0.95);
     drawDecodedText(ctx, this.title, x + 18, y + 34, 21, this.openedAt);
     if (this.stack.length > 1) {
-      ctx.font = '15px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
-      ctx.fillStyle = colorToCSS(Colors.radar_gridlines, 0.55);
-      ctx.fillText('RMB back', x + w - 104, y + 22);
+      const backW = 36;
+      const backH = 28;
+      const backX = x + w - 18 - backW;
+      const backY = y + 12;
+      this.backRect = { x: backX, y: backY, w: backW, h: backH };
+      drawMenuRow(ctx, backX, backY, backW, backH, this.backHovered, false);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '17px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
+      ctx.fillStyle = this.backHovered
+        ? colorToCSS(Colors.radar_friendly_status)
+        : colorToCSS(Colors.general_building, 0.9);
+      ctx.fillText('←', backX + backW / 2, backY + backH / 2 + 1);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+    } else {
+      this.backRect = null;
     }
 
     if (items.length === 0) {
