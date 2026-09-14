@@ -256,7 +256,17 @@ export class GameState {
     targetY: number;
     expiresAt: number;
   }> = new Map();
-  private spatialIndex: SpatialIndex = new SpatialIndex(GRID_CELL_SIZE * 3);
+  // Cell size tuned to the query radii actually run against this index: fighter
+  // weapon range (~175-250), turret range (up to 1000), separation/shield
+  // queries (72-90). GRID_CELL_SIZE*3 (~26) made even a single 250-radius
+  // weapon-range query scan ~370 mostly-empty cells, and a 1000-range turret
+  // query ~5900 — paid every tick, per fighter/turret. A larger cell cuts that
+  // hash-lookup count by roughly (newSize/oldSize)^2 with only a modest rise in
+  // per-cell candidate count (bounded by true nearby-entity density, filtered
+  // by queryCircle's own distance check), which is the right trade here since
+  // this index is dominated by "big battle" scenarios (lots of fighters, wide
+  // weapon ranges) rather than tight single-entity lookups.
+  private spatialIndex: SpatialIndex = new SpatialIndex(GRID_CELL_SIZE * 12);
   /** Countdown to the next command-post repair pulse. */
   baseRepairAuraTimer = 0;
   private spatialQueryScratch: Entity[] = [];
@@ -267,6 +277,8 @@ export class GameState {
   private pathBudgetRemaining = 0;
   private pathBudgetFrameToken = -1;
   private buildingCollisionVersionCounter = 0;
+  /** Cache for {@link playerBasePerimeter}, invalidated by buildingCollisionVersion — recomputing it is an O(buildings) scan and it was being called once per "protect base"-ordered fighter, every tick. */
+  private basePerimeterCache: Map<Team, { version: number; result: { center: Vec2; radius: number } | null }> = new Map();
   survivalKillRewardsEnabled = false;
   survivalEnemyRewardBank = 0;
   perfStats: GamePerfStats = {
@@ -2223,6 +2235,7 @@ export class GameState {
     if (!f.alive || f.docked) {
       f.setNavigationTarget(null);
       this.fighterNavCache.delete(f.id);
+      this.swarmCombatTargetNextCheck.delete(f.id);
       return;
     }
     this.updateSwarmShipCombatTarget(f);
@@ -2303,9 +2316,25 @@ export class GameState {
     f.setNavigationTarget(navTarget);
   }
 
+  /**
+   * Throttles how often each SwarmShip re-runs {@link findClosestEnemy}'s wide
+   * (weaponRange*2.7, often 500-700+ units) spatial query — this used to run
+   * unconditionally for every live SwarmShip every tick with no cache, unlike
+   * every other per-fighter navigation lookup nearby (see fighterNavCache /
+   * sharedFighterPathCache). Weapon fire itself (fighterCombat.ts) still
+   * re-targets every tick at full precision within actual weapon range; this
+   * only steers the broader "where is the swarm heading" navigation target,
+   * which doesn't need per-tick freshness.
+   */
+  private swarmCombatTargetNextCheck: Map<number, number> = new Map();
+
   private updateSwarmShipCombatTarget(f: FighterShip): void {
     if (!(f instanceof SwarmShip)) return;
     if (f.order === 'dock' || f.order === 'follow') return;
+    const nextCheck = this.swarmCombatTargetNextCheck.get(f.id) ?? 0;
+    if (this.gameTime < nextCheck) return;
+    // Stagger re-checks per fighter so a whole swarm doesn't re-query on the same tick.
+    this.swarmCombatTargetNextCheck.set(f.id, this.gameTime + 0.3 + (f.id % 7) * 0.03);
     const target = findClosestEnemy(this, f.position, f.team, Math.max(f.weaponRange * 2.7, GRID_CELL_SIZE * 6));
     if (!target) return;
     f.order = 'attack';
@@ -2394,6 +2423,9 @@ export class GameState {
   }
 
   private playerBasePerimeter(team: Team): { center: Vec2; radius: number } | null {
+    const cached = this.basePerimeterCache.get(team);
+    if (cached && cached.version === this.buildingCollisionVersionCounter) return cached.result;
+
     let left = Infinity;
     let right = -Infinity;
     let top = Infinity;
@@ -2410,16 +2442,16 @@ export class GameState {
       count++;
     }
 
-    if (count === 0) return null;
-
-    const center = new Vec2((left + right) * 0.5, (top + bottom) * 0.5);
-    const halfWidth = (right - left) * 0.5;
-    const halfHeight = (bottom - top) * 0.5;
-    const padding = 110 + Math.min(130, count * 5);
-    return {
-      center,
-      radius: Math.hypot(halfWidth, halfHeight) + padding,
-    };
+    let result: { center: Vec2; radius: number } | null = null;
+    if (count > 0) {
+      const center = new Vec2((left + right) * 0.5, (top + bottom) * 0.5);
+      const halfWidth = (right - left) * 0.5;
+      const halfHeight = (bottom - top) * 0.5;
+      const padding = 110 + Math.min(130, count * 5);
+      result = { center, radius: Math.hypot(halfWidth, halfHeight) + padding };
+    }
+    this.basePerimeterCache.set(team, { version: this.buildingCollisionVersionCounter, result });
+    return result;
   }
 
   /** Count docked and total fighters for a group. */

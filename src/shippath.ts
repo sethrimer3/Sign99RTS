@@ -1,9 +1,10 @@
-import { Team } from './entities.js';
+import { Team, type Entity } from './entities.js';
 import type { GameState } from './gamestate.js';
 import { GRID_CELL_SIZE, cellKey } from './grid.js';
 import { Vec2, pointToSegmentDistance } from './math.js';
 import { WORLD_HEIGHT, WORLD_WIDTH } from './constants.js';
 import { TurretBase } from './turret.js';
+import { FighterShip } from './fighter.js';
 import { buildingBlocksShips, buildingShipCollisionRect } from './buildingCollision.js';
 
 export interface ShipPathOptions {
@@ -476,6 +477,14 @@ function routeThreat(state: GameState, team: Team, from: Vec2, to: Vec2): number
   return total / (steps + 1);
 }
 
+// localThreat is called once per sampled route point, once per A* edge at
+// higher intelligence — a single findRoute resolve can invoke it thousands of
+// times. Scanning the full (potentially 100+) state.fighters array on every
+// call made this scale with total fighter count regardless of how many were
+// actually near the sampled point; route the fighter half of the scan through
+// the spatial index (already sized for ~250-1000 unit queries) instead.
+const localThreatQueryScratch: Entity[] = [];
+
 function localThreat(state: GameState, team: Team, pos: Vec2): number {
   let threat = 0;
   for (const b of state.buildings) {
@@ -484,9 +493,9 @@ function localThreat(state: GameState, team: Team, pos: Vec2): number {
     const d = b.position.distanceTo(pos);
     if (d <= b.range * 1.2) threat += 1 - d / (b.range * 1.2);
   }
-  for (const f of state.fighters) {
-    if (!f.alive || f.docked || f.team === team || f.team === Team.Neutral) continue;
-    const d = f.position.distanceTo(pos);
+  for (const e of state.queryEntitiesInRange(pos, 280, localThreatQueryScratch)) {
+    if (!(e instanceof FighterShip) || !e.alive || e.docked || e.team === team || e.team === Team.Neutral) continue;
+    const d = e.position.distanceTo(pos);
     if (d <= 280) threat += 0.35 * (1 - d / 280);
   }
   return threat;

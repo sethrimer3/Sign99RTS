@@ -101,6 +101,8 @@ interface PracticeTickCache {
   poweredEnemyShipyardsList: Shipyard[];
   stagedEnemyFighters: FighterShip[];
   attackingEnemyFighters: number;
+  /** Every live player building, for nearest-building lookups (see findNearestPlayerBuilding) — avoids each idle enemy fighter re-scanning + re-filtering the full (both-team) building list. */
+  playerBuildings: BuildingBase[];
 }
 
 export class PracticeMode {
@@ -162,6 +164,7 @@ export class PracticeMode {
     poweredEnemyShipyardsList: [],
     stagedEnemyFighters: [],
     attackingEnemyFighters: 0,
+    playerBuildings: [],
   };
 
   score: PracticeScore = { basesDestroyed: 0, timeSurvived: 0 };
@@ -537,6 +540,7 @@ export class PracticeMode {
     this.tickCache.turrets.length = 0;
     this.tickCache.poweredEnemyShipyardsList.length = 0;
     this.tickCache.stagedEnemyFighters.length = 0;
+    this.tickCache.playerBuildings.length = 0;
 
     for (const b of state.buildings) {
       if (!b.alive) continue;
@@ -550,6 +554,7 @@ export class PracticeMode {
           }
         }
       } else if (b.team === Team.Player) {
+        this.tickCache.playerBuildings.push(b);
         if (b instanceof Shipyard) this.tickCache.playerShipyards++;
         if (b instanceof TurretBase) {
           if (b.buildProgress >= 1 && b.powered) this.tickCache.turrets.push(b);
@@ -1166,8 +1171,10 @@ export class PracticeMode {
   ): { position: Vec2 } | null {
     let best: { position: Vec2 } | null = null;
     let bestDist = Infinity;
-    for (const b of state.buildings) {
-      if (!b.alive || b.team !== Team.Player) continue;
+    // Reuse the per-tick player-buildings list instead of re-scanning +
+    // re-filtering the full (both-team) state.buildings for every idle fighter.
+    for (const b of this.refreshTickCache(state).playerBuildings) {
+      if (!b.alive) continue;
       const d = b.position.distanceTo(pos);
       if (d < bestDist) {
         bestDist = d;
