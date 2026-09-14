@@ -54,6 +54,12 @@ const HEADING_CORRECTION_RATE = 1.6;
  *  Kept tight (a small fraction of the hull) so the newest, brightest geometry always sits on
  *  top of the player's actual position instead of drifting into a visible orbit around it. */
 const LEASH_MAX_RADIUS_MULT = 1.35;
+/** Number of parallel spine strands, each growing its own fractal filament while weaving
+ *  laterally around the shared anchor path so the three read as braided companions rather
+ *  than one thick trail. */
+const NUM_BRANCHES = 3;
+/** Lateral weave amplitude (ship-radii) each strand drifts side to side around the anchor path. */
+const BRANCH_WEAVE_AMP = 0.55;
 
 const WHITE: Color = { r: 255, g: 255, b: 255, intensity: 1 };
 
@@ -109,26 +115,40 @@ export class GhostShipEffect {
   private radius = 22;
   private color: Color = WHITE;
   private time = 0;
-  private headX = 0;
-  private headY = 0;
-  private headAngle = 0;
+  /** Per-branch growth heads: NUM_BRANCHES parallel strands, each an independent spine. */
+  private readonly headX = new Float64Array(NUM_BRANCHES);
+  private readonly headY = new Float64Array(NUM_BRANCHES);
+  private readonly headAngle = new Float64Array(NUM_BRANCHES);
   /** Authoritative ghost position as of the last update() — the camera target. The visual head
    *  bloom locks onto this directly so the brightest material always sits on the real anchor. */
   private anchorX = 0;
   private anchorY = 0;
   private prevAnchorX = 0;
   private prevAnchorY = 0;
-  private distanceSinceEmit = 0;
+  private readonly distanceSinceEmit = new Float64Array(NUM_BRANCHES);
   private nodeIndex = 0;
 
   // Growth-path curvature: a slowly drifting turn-rate (rad per world-unit) built from three
-  // incommensurate sinusoids, so the spine glides between straight runs and tight spirals.
-  private spineHeading = 0;
-  private curvature = 0;
+  // incommensurate sinusoids per branch, so each strand glides between straight runs and tight
+  // spirals independently while still being leashed to the same anchor.
+  private readonly spineHeading = new Float64Array(NUM_BRANCHES);
+  private readonly curvature = new Float64Array(NUM_BRANCHES);
   private curveScale = 1;
-  private curvA = 0; private curvB = 0; private curvC = 0;
-  private curvF1 = 0; private curvF2 = 0; private curvF3 = 0;
-  private curvP1 = 0; private curvP2 = 0; private curvP3 = 0;
+  private readonly curvA = new Float64Array(NUM_BRANCHES);
+  private readonly curvB = new Float64Array(NUM_BRANCHES);
+  private readonly curvC = new Float64Array(NUM_BRANCHES);
+  private readonly curvF1 = new Float64Array(NUM_BRANCHES);
+  private readonly curvF2 = new Float64Array(NUM_BRANCHES);
+  private readonly curvF3 = new Float64Array(NUM_BRANCHES);
+  private readonly curvP1 = new Float64Array(NUM_BRANCHES);
+  private readonly curvP2 = new Float64Array(NUM_BRANCHES);
+  private readonly curvP3 = new Float64Array(NUM_BRANCHES);
+  // Lateral weave: each branch drifts side to side around the shared anchor path at its own
+  // slow frequency/phase, so the strands swerve back and forth relative to one another while
+  // still visibly following the same course.
+  private readonly weaveFreq = new Float64Array(NUM_BRANCHES);
+  private readonly weavePhase = new Float64Array(NUM_BRANCHES);
+  private readonly weaveAmp = new Float64Array(NUM_BRANCHES);
 
   // Ship-flavoured fractal parameters, deterministic per seed, so the organism reads as a
   // transformed version of that ship's own proportions rather than a generic effect.
@@ -162,19 +182,29 @@ export class GhostShipEffect {
     this.radius = Math.max(6, radius);
     this.color = color;
 
-    const curveRng = seededRandom(this.seed ^ 0x27d4eb2f);
-    this.curvA = 0.5 + curveRng() * 0.5;
-    this.curvB = 0.3 + curveRng() * 0.4;
-    this.curvC = 0.15 + curveRng() * 0.3;
-    this.curvF1 = 0.05 + curveRng() * 0.05;
-    this.curvF2 = 0.083 + curveRng() * 0.05;
-    this.curvF3 = 0.131 + curveRng() * 0.05;
-    this.curvP1 = curveRng() * Math.PI * 2;
-    this.curvP2 = curveRng() * Math.PI * 2;
-    this.curvP3 = curveRng() * Math.PI * 2;
     // Amplitude tuned so the tightest sustained spiral has a radius of a few ship-lengths.
     this.curveScale = 1 / (this.radius * 16);
-    this.curvature = 0;
+    for (let b = 0; b < NUM_BRANCHES; b++) {
+      const curveRng = seededRandom((this.seed ^ 0x27d4eb2f ^ Math.imul(b + 1, 0x9e3779b1)) >>> 0);
+      this.curvA[b] = 0.5 + curveRng() * 0.5;
+      this.curvB[b] = 0.3 + curveRng() * 0.4;
+      this.curvC[b] = 0.15 + curveRng() * 0.3;
+      this.curvF1[b] = 0.05 + curveRng() * 0.05;
+      this.curvF2[b] = 0.083 + curveRng() * 0.05;
+      this.curvF3[b] = 0.131 + curveRng() * 0.05;
+      this.curvP1[b] = curveRng() * Math.PI * 2;
+      this.curvP2[b] = curveRng() * Math.PI * 2;
+      this.curvP3[b] = curveRng() * Math.PI * 2;
+      this.curvature[b] = 0;
+      // Slow, small lateral weave so branches swerve back and forth around each other rather
+      // than tracing perfectly parallel rails.
+      this.weaveFreq[b] = 0.09 + curveRng() * 0.07;
+      this.weavePhase[b] = curveRng() * Math.PI * 2;
+      this.weaveAmp[b] = this.radius * BRANCH_WEAVE_AMP * (0.7 + curveRng() * 0.6);
+    }
+    // Centre branch has no weave offset (it is the one the other two swerve around); the rest
+    // are pushed slightly to either side so all three read as distinct strands from the start.
+    this.weaveAmp[0] = 0;
 
     // Borrow a few of the procedural ship's design tendencies (via the same seed) so the
     // spirit's branching reads as a transformed version of that hull rather than a generic FX.
@@ -186,16 +216,19 @@ export class GhostShipEffect {
     this.twoSidedChance = 0.16 + flavorRng() * 0.3;
     this.twistBias = flavorRng();
 
-    this.spineHeading = facing;
-    this.headAngle = facing;
-    this.headX = x;
-    this.headY = y;
     this.anchorX = x;
     this.anchorY = y;
     this.prevAnchorX = x;
     this.prevAnchorY = y;
-    // Seed the structure immediately so death does not show an empty frame.
-    this.emitNode(x, y, facing, ghostRecursionLevels(this.densityScale), EMIT_SPACING_BASE);
+    for (let b = 0; b < NUM_BRANCHES; b++) {
+      this.spineHeading[b] = facing;
+      this.headAngle[b] = facing;
+      this.headX[b] = x;
+      this.headY[b] = y;
+      this.distanceSinceEmit[b] = 0;
+      // Seed the structure immediately so death does not show an empty frame.
+      this.emitNode(x, y, facing, ghostRecursionLevels(this.densityScale), EMIT_SPACING_BASE);
+    }
   }
 
   /** Drop all visual state. Used on respawn and runtime reset. */
@@ -206,7 +239,7 @@ export class GhostShipEffect {
     this.activeCount = 0;
     this.drawnCount = 0;
     this.time = 0;
-    this.distanceSinceEmit = 0;
+    this.distanceSinceEmit.fill(0);
     this.nodeIndex = 0;
     this.life.fill(0);
   }
@@ -222,79 +255,91 @@ export class GhostShipEffect {
     this.anchorX = anchorX;
     this.anchorY = anchorY;
 
-    // Low-frequency curvature: three incommensurate sinusoids sum to near-zero (straight runs)
-    // or to sustained same-sign curvature (broad or tight spirals), smoothed so changes of
-    // shape are gradual rather than a jump-cut.
-    const curvatureTarget = this.curveScale * (
-      this.curvA * Math.sin(t * this.curvF1 + this.curvP1) +
-      this.curvB * Math.sin(t * this.curvF2 + this.curvP2) +
-      this.curvC * Math.sin(t * this.curvF3 + this.curvP3)
-    );
-    this.curvature += (curvatureTarget - this.curvature) * Math.min(1, dt / CURVATURE_SMOOTH_TAU);
-
     const anchorDX = anchorX - this.prevAnchorX;
     const anchorDY = anchorY - this.prevAnchorY;
     this.prevAnchorX = anchorX;
     this.prevAnchorY = anchorY;
     const stepDist = Math.hypot(anchorDX, anchorDY);
+    const anchorHeading = stepDist > 1e-4 ? Math.atan2(anchorDY, anchorDX) : anchorFacing;
 
-    // heading += curvature * distanceTravelled: shape density stays stable across frame rate
-    // and ghost speed because it is driven by distance, not elapsed time.
-    this.spineHeading += this.curvature * stepDist;
-
-    // Gently bend the heading back toward the real anchor so the organism stays attached to
-    // the player's actual ghost rather than drifting into a permanent independent orbit.
-    const toAX = anchorX - this.headX;
-    const toAY = anchorY - this.headY;
-    if (Math.hypot(toAX, toAY) > 1e-3) {
-      const bearing = Math.atan2(toAY, toAX);
-      this.spineHeading += wrapAngle(bearing - this.spineHeading) * Math.min(1, dt * HEADING_CORRECTION_RATE);
-    }
-
-    const prevHeadX = this.headX;
-    const prevHeadY = this.headY;
-    this.headX += Math.cos(this.spineHeading) * stepDist;
-    this.headY += Math.sin(this.spineHeading) * stepDist;
-
-    // Hard leash so a burst of curvature can never carry the head far from the true ghost.
-    const leashMax = this.radius * LEASH_MAX_RADIUS_MULT;
-    const nowDX = anchorX - this.headX;
-    const nowDY = anchorY - this.headY;
-    const nowDist = Math.hypot(nowDX, nowDY);
-    if (nowDist > leashMax) {
-      const pull = (nowDist - leashMax) / nowDist;
-      this.headX += nowDX * pull;
-      this.headY += nowDY * pull;
-    }
-
-    const hdx = this.headX - prevHeadX;
-    const hdy = this.headY - prevHeadY;
-    const headStep = Math.hypot(hdx, hdy);
-    if (headStep > 1e-4) this.headAngle = Math.atan2(hdy, hdx);
-    else this.headAngle = anchorFacing;
-
-    // Spatial emission: fixed spacing along the head path, widened at speed so the pool is not
-    // flooded, and widened again under lower quality so density degrades gracefully. Recursion
-    // depth is driven by quality/pool pressure only — normal (and Shift) ghost speeds must not
-    // flatten the fractal texture.
     const speed = stepDist / dt;
     const density = this.densityScale;
-    let spacing = EMIT_SPACING_BASE * (this.radius / 22) / Math.max(0.35, density);
-    spacing = Math.max(spacing, speed / MAX_NODES_PER_SECOND);
     const fillNow = this.activeCount / GHOST_FRAGMENT_CAP;
     const levels = fillNow > 0.85 ? Math.max(1, ghostRecursionLevels(density) - 1) : ghostRecursionLevels(density);
+    let spacing = EMIT_SPACING_BASE * (this.radius / 22) / Math.max(0.35, density);
+    spacing = Math.max(spacing, speed / MAX_NODES_PER_SECOND);
 
-    this.distanceSinceEmit += headStep;
-    let emitted = 0;
-    while (this.distanceSinceEmit >= spacing && emitted < MAX_NODES_PER_UPDATE) {
-      this.distanceSinceEmit -= spacing;
-      // Place the node back along the step so multiple nodes per frame stay evenly spaced,
-      // interpolating emission positions when the head travels far in a single update.
-      const back = headStep > 1e-4 ? this.distanceSinceEmit / headStep : 0;
-      this.emitNode(this.headX - hdx * back, this.headY - hdy * back, this.spineHeading, levels, spacing);
-      emitted++;
+    for (let b = 0; b < NUM_BRANCHES; b++) {
+      // Low-frequency curvature: three incommensurate sinusoids sum to near-zero (straight
+      // runs) or sustained same-sign curvature (broad or tight spirals), smoothed so shape
+      // changes are gradual rather than a jump-cut. Independent per branch.
+      const curvatureTarget = this.curveScale * (
+        this.curvA[b] * Math.sin(t * this.curvF1[b] + this.curvP1[b]) +
+        this.curvB[b] * Math.sin(t * this.curvF2[b] + this.curvP2[b]) +
+        this.curvC[b] * Math.sin(t * this.curvF3[b] + this.curvP3[b])
+      );
+      this.curvature[b] += (curvatureTarget - this.curvature[b]) * Math.min(1, dt / CURVATURE_SMOOTH_TAU);
+
+      // heading += curvature * distanceTravelled: shape density stays stable across frame rate
+      // and ghost speed because it is driven by distance, not elapsed time.
+      this.spineHeading[b] += this.curvature[b] * stepDist;
+
+      // The branch's target is the anchor path offset laterally by a slow, per-branch weave so
+      // the strands swerve back and forth around one another while still following the same
+      // course. Perpendicular to the anchor's own heading, not each branch's own wandering
+      // heading, so the weave reads as organic drift rather than compounding curvature.
+      const weave = this.weaveAmp[b] * Math.sin(t * this.weaveFreq[b] + this.weavePhase[b]);
+      const perpX = -Math.sin(anchorHeading);
+      const perpY = Math.cos(anchorHeading);
+      const targetX = anchorX + perpX * weave;
+      const targetY = anchorY + perpY * weave;
+
+      // Gently bend the heading back toward that target so the organism stays attached to the
+      // player's actual ghost rather than drifting into a permanent independent orbit.
+      const toAX = targetX - this.headX[b];
+      const toAY = targetY - this.headY[b];
+      if (Math.hypot(toAX, toAY) > 1e-3) {
+        const bearing = Math.atan2(toAY, toAX);
+        this.spineHeading[b] += wrapAngle(bearing - this.spineHeading[b]) * Math.min(1, dt * HEADING_CORRECTION_RATE);
+      }
+
+      const prevHeadX = this.headX[b];
+      const prevHeadY = this.headY[b];
+      this.headX[b] += Math.cos(this.spineHeading[b]) * stepDist;
+      this.headY[b] += Math.sin(this.spineHeading[b]) * stepDist;
+
+      // Hard leash so a burst of curvature can never carry the head far from its target.
+      const leashMax = this.radius * LEASH_MAX_RADIUS_MULT + Math.abs(this.weaveAmp[b]);
+      const nowDX = targetX - this.headX[b];
+      const nowDY = targetY - this.headY[b];
+      const nowDist = Math.hypot(nowDX, nowDY);
+      if (nowDist > leashMax) {
+        const pull = (nowDist - leashMax) / nowDist;
+        this.headX[b] += nowDX * pull;
+        this.headY[b] += nowDY * pull;
+      }
+
+      const hdx = this.headX[b] - prevHeadX;
+      const hdy = this.headY[b] - prevHeadY;
+      const headStep = Math.hypot(hdx, hdy);
+      if (headStep > 1e-4) this.headAngle[b] = Math.atan2(hdy, hdx);
+      else this.headAngle[b] = anchorFacing;
+
+      // Spatial emission: fixed spacing along this branch's head path, widened at speed so the
+      // shared pool is not flooded, and widened again under lower quality so density degrades
+      // gracefully.
+      this.distanceSinceEmit[b] += headStep;
+      let emitted = 0;
+      while (this.distanceSinceEmit[b] >= spacing && emitted < MAX_NODES_PER_UPDATE) {
+        this.distanceSinceEmit[b] -= spacing;
+        // Place the node back along the step so multiple nodes per frame stay evenly spaced,
+        // interpolating emission positions when the head travels far in a single update.
+        const back = headStep > 1e-4 ? this.distanceSinceEmit[b] / headStep : 0;
+        this.emitNode(this.headX[b] - hdx * back, this.headY[b] - hdy * back, this.spineHeading[b], levels, spacing);
+        emitted++;
+      }
+      if (emitted >= MAX_NODES_PER_UPDATE) this.distanceSinceEmit[b] = 0;
     }
-    if (emitted >= MAX_NODES_PER_UPDATE) this.distanceSinceEmit = 0;
 
     this.activeCount = this.countLive();
   }
@@ -322,10 +367,13 @@ export class GhostShipEffect {
     // Small relative to the hull — many small triangles read as one fine fractal filament
     // rather than a few large shards — but wide enough that clusters overlap the next node,
     // since it's that overlap (not any single cluster) that reads as one continuous organism.
-    const rootSize = Math.max(this.radius * 0.16, spacing * 0.95) * (0.85 + rng() * 0.3);
+    const rootSize = Math.max(this.radius * 0.16, spacing * 0.95) * (0.85 + rng() * 0.3) * 0.5;
     const rootAngle = tangent + (rng() - 0.5) * 0.5;
-    let budget = fractalBudget(levels);
-    if (fill > 0.8) budget = Math.max(3, budget >> 1);
+    // Divide by branch count so three parallel strands together spend roughly the same total
+    // triangle budget per unit of travel as a single spine did — otherwise the shared pool
+    // fills NUM_BRANCHES times faster and the tail visibly shortens.
+    let budget = Math.max(2, Math.round(fractalBudget(levels) / NUM_BRANCHES));
+    if (fill > 0.8) budget = Math.max(2, budget >> 1);
     this.budgetRemaining = budget;
     this.growFractal(x, y, rootAngle, rootSize, levels, hold, rng);
   }
@@ -474,5 +522,5 @@ export class GhostShipEffect {
   get writtenCount(): number { return this.written; }
   /** Test/debug accessor: distance from the growth head to the authoritative anchor, i.e. how
    *  far the newest geometry can visually stray from runtime.ghostPos / the camera target. */
-  get headAnchorDistance(): number { return Math.hypot(this.headX - this.anchorX, this.headY - this.anchorY); }
+  get headAnchorDistance(): number { return Math.hypot(this.headX[0] - this.anchorX, this.headY[0] - this.anchorY); }
 }

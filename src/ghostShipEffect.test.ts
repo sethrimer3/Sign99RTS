@@ -62,11 +62,11 @@ describe('GhostShipEffect', () => {
 
   it('never moves a fragment after it is born', () => {
     const effect = make(777);
-    drive(effect, 1);
+    drive(effect, 0.35);
     const snapshot = Array.from({ length: effect.writtenCount }, (_, i) => effect.fragmentVertices(i));
     // Keep driving, but not so long that the ring wraps and legitimately overwrites slots.
     const before = effect.writtenCount;
-    drive(effect, 0.5, 60);
+    drive(effect, 0.15, 60);
     expect(effect.writtenCount).toBeLessThan(GHOST_FRAGMENT_CAP);
     for (let i = 0; i < before; i++) expect(effect.fragmentVertices(i)).toEqual(snapshot[i]);
   });
