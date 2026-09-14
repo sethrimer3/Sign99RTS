@@ -21,7 +21,7 @@ import { isLegacyGraphics } from './graphicsmode.js';
 import { researchCategory, researchIcon } from './research.js';
 import { renderProjectileTrail, type TrailSample, type ProjectileTrailStyle } from './projectileTrail.js';
 import { renderBuildingCoreEffect } from './buildingCoreEffect.js';
-import { renderBuildingPanelInteriors, renderBuildingSeamWaves } from './buildingPanelEffect.js';
+import { renderBuildingPanelInteriors, renderBuildingSeamLines, renderBuildingSeamTrails } from './buildingPanelEffect.js';
 
 interface BaseVisual {
   side: number;
@@ -141,7 +141,8 @@ export abstract class BuildingBase extends Entity {
         : 0.12 + 0.2 * this.buildProgress) * healthScale;
       const panelOpts = { screenX: screen.x, screenY: screen.y, zoom: camera.zoom, leaves, seams, timeSec: this.animationTime, seed: this.id, power };
       renderBuildingPanelInteriors(ctx, panelOpts);
-      renderBuildingSeamWaves(ctx, panelOpts);
+      renderBuildingSeamLines(ctx, panelOpts);
+      renderBuildingSeamTrails(ctx, panelOpts);
     }
     // Corner nodes. Legacy: small footprint-relative squares. New look: each node
     // is exactly one conduit cell regardless of building size, and doubles as the

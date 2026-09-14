@@ -16,14 +16,19 @@ import type { BSPLeaf, VisibleSeam } from './buildingStructureDamage.js';
 const PANEL_SHADE_VARIATION = 0.14;
 const PANEL_BEVEL_ALPHA = 0.32;
 
-/** Baseline seam glow alpha at full power, before the traveling pulse multiplies it. */
-const SEAM_BASE_GLOW = 0.5;
+/** Baseline seam line alpha — dim, barely-visible grey joints, always drawn regardless of power. */
+const SEAM_LINE_ALPHA = 0.22;
 /** How much brighter an exposed (torn) edge reads vs. a normal interior seam. */
-const SEAM_EXPOSED_BOOST = 1.5;
-/** Wave cycles per rootDistance hop — controls how "tight" the traveling bands look. */
-const WAVE_HOPS_PER_CYCLE = 0.85;
-/** Wave cycles per second at full power. */
-const WAVE_SPEED = 0.55;
+const SEAM_EXPOSED_BOOST = 1.8;
+
+/** Number of traveling light trails active on a fully-powered building. */
+const TRAIL_COUNT = 4;
+/** Seconds for a trail to cross from one end of its chosen seam to the other. */
+const TRAIL_PERIOD = 1.3;
+/** Fraction of the seam's length the trail's fading tail covers. */
+const TRAIL_TAIL_FRAC = 0.4;
+/** Warm trail tip color, matching the buildings' glow palette. */
+const TRAIL_TIP_COLOR = '255, 200, 120';
 
 function hash01(i: number, seed: number): number {
   let h = (i * 374761393 + seed * 668265263) | 0;
@@ -74,36 +79,81 @@ export function renderBuildingPanelInteriors(ctx: CanvasRenderingContext2D, opts
   ctx.restore();
 }
 
-/** Thin glowing seams along real BSP-leaf boundaries, with a traveling light pulse propagating outward from the structural root. */
-export function renderBuildingSeamWaves(ctx: CanvasRenderingContext2D, opts: BuildingPanelEffectOpts): void {
-  const { screenX, screenY, zoom, seams, timeSec, power } = opts;
-  if (seams.length === 0 || power <= 0.005) return;
+/** Thin, barely-visible opaque grey lines along every real BSP-leaf seam — always drawn so panel breakup reads as structure, not damage. */
+export function renderBuildingSeamLines(ctx: CanvasRenderingContext2D, opts: BuildingPanelEffectOpts): void {
+  const { screenX, screenY, zoom, seams } = opts;
+  if (seams.length === 0) return;
 
   ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
   ctx.lineCap = 'round';
-
-  const waveSpeed = WAVE_SPEED * (0.35 + 0.65 * power);
   for (const s of seams) {
-    const phase = s.rootDistance * WAVE_HOPS_PER_CYCLE - timeSec * waveSpeed;
-    const pulse = 0.5 + 0.5 * Math.sin(phase * Math.PI * 2);
-    const boost = s.exposed ? SEAM_EXPOSED_BOOST : 1;
-    const alpha = Math.min(1, SEAM_BASE_GLOW * power * boost * (0.45 + 0.55 * pulse));
-    if (alpha <= 0.01) continue;
-
     const x1 = screenX + s.x1 * zoom, y1 = screenY + s.y1 * zoom;
     const x2 = screenX + s.x2 * zoom, y2 = screenY + s.y2 * zoom;
     const len = Math.hypot(x2 - x1, y2 - y1);
     if (len < 1) continue;
 
-    ctx.strokeStyle = s.exposed
-      ? `rgba(255, 158, 66, ${alpha.toFixed(3)})`
-      : `rgba(130, 205, 255, ${alpha.toFixed(3)})`;
-    ctx.lineWidth = s.exposed ? 1.5 : 1.1;
+    const alpha = SEAM_LINE_ALPHA * (s.exposed ? SEAM_EXPOSED_BOOST : 1);
+    ctx.strokeStyle = `rgba(70, 70, 74, ${Math.min(1, alpha).toFixed(3)})`;
+    ctx.lineWidth = s.exposed ? 1.3 : 1;
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** A handful of warm light trails randomly traveling along the seam network of a powered building. */
+export function renderBuildingSeamTrails(ctx: CanvasRenderingContext2D, opts: BuildingPanelEffectOpts): void {
+  const { screenX, screenY, zoom, seams, timeSec, power, seed } = opts;
+  if (seams.length === 0 || power <= 0.5) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+
+  for (let lane = 0; lane < TRAIL_COUNT; lane++) {
+    const laneSeed = (seed ^ (lane * 2654435761)) >>> 0;
+    const laneOffset = hash01(lane, laneSeed);
+    const cycle = timeSec / TRAIL_PERIOD + laneOffset;
+    const runIndex = Math.floor(cycle);
+    const t = cycle - runIndex; // 0..1 progress along the chosen seam this run
+
+    const seamIdx = Math.floor(hash01(runIndex, laneSeed) * seams.length) % seams.length;
+    const s = seams[seamIdx];
+    const x1 = screenX + s.x1 * zoom, y1 = screenY + s.y1 * zoom;
+    const x2 = screenX + s.x2 * zoom, y2 = screenY + s.y2 * zoom;
+    const len = Math.hypot(x2 - x1, y2 - y1);
+    if (len < 4) continue;
+
+    const dx = (x2 - x1) / len, dy = (y2 - y1) / len;
+    const tipDist = t * len;
+    const tailDist = Math.max(0, tipDist - TRAIL_TAIL_FRAC * len);
+    if (tipDist - tailDist < 1) continue;
+
+    const tailX = x1 + dx * tailDist, tailY = y1 + dy * tailDist;
+    const tipX = x1 + dx * tipDist, tipY = y1 + dy * tipDist;
+    const globalAlpha = Math.min(1, power);
+
+    const grad = ctx.createLinearGradient(tailX, tailY, tipX, tipY);
+    grad.addColorStop(0, `rgba(${TRAIL_TIP_COLOR}, 0)`);
+    grad.addColorStop(1, `rgba(${TRAIL_TIP_COLOR}, ${(0.9 * globalAlpha).toFixed(3)})`);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 1.4;
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+
+    // Bright tip with a slight glow.
+    ctx.shadowBlur = 5;
+    ctx.shadowColor = `rgba(${TRAIL_TIP_COLOR}, ${globalAlpha.toFixed(3)})`;
+    ctx.fillStyle = `rgba(255, 235, 210, ${globalAlpha.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
   }
   ctx.restore();
 }

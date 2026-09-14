@@ -85,6 +85,9 @@ interface EnemyBaseRuntime {
   lodAccum: number;
   lodCheckTimer: number;
   lodCadence: number;
+  /** Fighters spawned from this base's shipyards, tracked so a final all-out
+   *  attack can be launched at the player's base the moment this base falls. */
+  fighters: Set<FighterShip>;
 }
 
 interface PracticeTickCache {
@@ -244,7 +247,7 @@ export class PracticeMode {
       this.score.basesDestroyed++;
       return;
     }
-    if (this.survivalMode) this.updateSurvivalDestroyedBaseCount();
+    if (this.survivalMode) this.updateSurvivalDestroyedBaseCount(state);
 
     // Income — apply multipliers (player baseline accumulation lives in
     // GameState; we simulate the multiplier by sprinkling extra resources).
@@ -387,7 +390,22 @@ export class PracticeMode {
       lodAccum: 0,
       lodCheckTimer: 0,
       lodCadence: 0,
+      fighters: new Set(),
     };
+  }
+
+  /** The base (primary or extra) whose command post is nearest to `pos`. */
+  private nearestBase(pos: Vec2): EnemyBaseRuntime | null {
+    let best: EnemyBaseRuntime | null = null;
+    let bestDist = Infinity;
+    for (const base of this.primaryBase ? [this.primaryBase, ...this.extraBases] : this.extraBases) {
+      const d = base.cp.position.distanceTo(pos);
+      if (d < bestDist) {
+        bestDist = d;
+        best = base;
+      }
+    }
+    return best;
   }
 
   private cachedSurvivalPlannerCadence(state: GameState, base: EnemyBaseRuntime, dt: number): number {
@@ -422,7 +440,7 @@ export class PracticeMode {
     return false;
   }
 
-  private updateSurvivalDestroyedBaseCount(): void {
+  private updateSurvivalDestroyedBaseCount(state: GameState): void {
     const bases = [
       ...(this.primaryBase ? [this.primaryBase] : []),
       ...this.extraBases,
@@ -431,7 +449,26 @@ export class PracticeMode {
       if (base.cp.alive || this.countedDestroyedBaseIds.has(base.cp.id)) continue;
       this.countedDestroyedBaseIds.add(base.cp.id);
       this.score.basesDestroyed++;
+      this.launchLastStandAttack(state, base);
     }
+  }
+
+  /**
+   * When a survival base's command post falls, throw every fighter it still
+   * has out there — staged, patrolling, mid-attack, whatever — at the
+   * player's base all at once, instead of leaving them to idle or retarget
+   * individually next tick.
+   */
+  private launchLastStandAttack(state: GameState, base: EnemyBaseRuntime): void {
+    const target = state.getPlayerCommandPost() ?? (state.player.alive ? state.player : null);
+    if (target) {
+      for (const fighter of base.fighters) {
+        if (!fighter.alive) continue;
+        fighter.order = 'attack';
+        fighter.targetPos = target.position.clone();
+      }
+    }
+    base.fighters.clear();
   }
 
   private spawnSurvivalBase(state: GameState, hud: HUD): void {
@@ -665,6 +702,7 @@ export class PracticeMode {
         fighter.launch();
         b.activeShips++;
         state.addEntity(fighter);
+        if (this.survivalMode) this.nearestBase(b.position)?.fighters.add(fighter);
 
         if (this.shouldStageEnemyWaves()) {
           fighter.order = 'waypoint';
