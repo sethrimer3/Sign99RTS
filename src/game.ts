@@ -879,7 +879,7 @@ export class Game {
     injectFluidForces(this.state, this.spaceFluid);
     // Inject crystal-nebula disturbances and advance physics.
     injectCrystalDisturbances(this.state, this.crystalNebula);
-    this.crystalNebula.update(DT);
+    this.crystalNebula.update(DT, this.camera);
 
     // HUD
     this.hud.update(DT);

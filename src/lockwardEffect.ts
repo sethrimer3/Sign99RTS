@@ -16,6 +16,7 @@
  */
 
 import { Color, colorToCSS } from './colors.js';
+import { renderBudget } from './renderBudget.js';
 
 export interface LockwardStyle {
   /** Base colour shared by every ward tooth. */
@@ -69,7 +70,11 @@ export function renderLockward(
 ): void {
   const outer = style.radiusPx;
   if (outer < 4) return;
-  const rings = style.rings ?? 5;
+  // Ring count (and therefore the ~5-13 fill() calls per ring) scales down
+  // under sustained frame-time pressure, same adaptive knob particles/glow use.
+  const loadScale = renderBudget.renderLoadScale;
+  const ringScale = loadScale >= 0.85 ? 1 : loadScale >= 0.6 ? 0.8 : 0.6;
+  const rings = Math.max(2, Math.round((style.rings ?? 5) * ringScale));
   const opacity = style.opacity ?? 1;
   const centerBias = Math.max(0, Math.min(1, style.centerOpacityBias ?? 0));
   const innerHole = outer * 0.14;

@@ -11,6 +11,7 @@
  */
 
 import type { BSPLeaf, VisibleSeam } from './buildingStructureDamage.js';
+import { isWarmGlowEnabled } from './warmGlow.js';
 
 /** Panel interior shading strength — how much brighter/darker adjacent panels can read from each other. */
 const PANEL_SHADE_VARIATION = 0.14;
@@ -269,9 +270,13 @@ export function renderBuildingSeamTrails(ctx: CanvasRenderingContext2D, opts: Bu
     }
 
     // Bright tip with a slight glow, matching the sun's warm core/highlight palette.
+    // The shadowBlur glow is a real gaussian blur per tip per frame — only worth
+    // it on High/Ultra tiers (mirrors warmGlow.ts's own gating).
     const tipX = screenX + cur.x * zoom, tipY = screenY + cur.y * zoom;
-    ctx.shadowBlur = 5;
-    ctx.shadowColor = `rgba(${TRAIL_CORE_COLOR}, ${globalAlpha.toFixed(3)})`;
+    if (isWarmGlowEnabled()) {
+      ctx.shadowBlur = 5;
+      ctx.shadowColor = `rgba(${TRAIL_CORE_COLOR}, ${globalAlpha.toFixed(3)})`;
+    }
     ctx.fillStyle = `rgba(${TRAIL_HIGHLIGHT_COLOR}, ${globalAlpha.toFixed(3)})`;
     ctx.beginPath();
     ctx.arc(tipX, tipY, 1.4, 0, Math.PI * 2);

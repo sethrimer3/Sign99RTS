@@ -142,67 +142,125 @@ const LAYERS = [
   { dx: -0.7, dy: 0.2, speed: 13, scale: 0.7, alpha: 0.3 },
 ];
 
+interface MaskRect { x: number; y: number; w: number; h: number; }
+
 /**
  * Build the mask geometry: four corner squares of `nodeSize`, plus a thin band
  * along each edge that connects them (kept flush to the outer edge so it reads
  * like the original connecting lines in the base art).
+ *
+ * Coordinates are LOCAL to the building's top-left corner (i.e. as if x=y=0) —
+ * callers translate the canvas before using these. This is what lets both the
+ * Path2D and the rect list below be cached and reused across every building
+ * that currently shares the same (side, node) size, instead of rebuilding a
+ * fresh Path2D/gradient/rect-list for every building every frame.
  */
-function maskPath(x: number, y: number, side: number, node: number, coreIndex?: number): Path2D {
-  const p = new Path2D();
+function maskRects(side: number, node: number, coreIndex?: number): MaskRect[] {
   const n = Math.min(node, side * 0.5);
   const bw = Math.max(1, n * 0.4);
   const gap = side - 2 * n;
+  const rects: MaskRect[] = [];
 
   if (coreIndex === undefined) {
-    p.rect(x, y, n, n);
-    p.rect(x + side - n, y, n, n);
-    p.rect(x, y + side - n, n, n);
-    p.rect(x + side - n, y + side - n, n, n);
+    rects.push({ x: 0, y: 0, w: n, h: n });
+    rects.push({ x: side - n, y: 0, w: n, h: n });
+    rects.push({ x: 0, y: side - n, w: n, h: n });
+    rects.push({ x: side - n, y: side - n, w: n, h: n });
     if (gap > 0) {
-      p.rect(x + n, y, gap, bw);
-      p.rect(x + n, y + side - bw, gap, bw);
-      p.rect(x, y + n, bw, gap);
-      p.rect(x + side - bw, y + n, bw, gap);
+      rects.push({ x: n, y: 0, w: gap, h: bw });
+      rects.push({ x: n, y: side - bw, w: gap, h: bw });
+      rects.push({ x: 0, y: n, w: bw, h: gap });
+      rects.push({ x: side - bw, y: n, w: bw, h: gap });
     }
-  } else {
-    // Top Left
-    if (coreIndex === 0) {
-      p.rect(x, y, n, n);
-      if (gap > 0) {
-        p.rect(x + n, y, gap / 2, bw);
-        p.rect(x, y + n, bw, gap / 2);
-      }
+  } else if (coreIndex === 0) {
+    rects.push({ x: 0, y: 0, w: n, h: n });
+    if (gap > 0) {
+      rects.push({ x: n, y: 0, w: gap / 2, h: bw });
+      rects.push({ x: 0, y: n, w: bw, h: gap / 2 });
     }
-    // Top Right
-    else if (coreIndex === 1) {
-      p.rect(x + side - n, y, n, n);
-      if (gap > 0) {
-        p.rect(x + n + gap / 2, y, gap / 2, bw);
-        p.rect(x + side - bw, y + n, bw, gap / 2);
-      }
+  } else if (coreIndex === 1) {
+    rects.push({ x: side - n, y: 0, w: n, h: n });
+    if (gap > 0) {
+      rects.push({ x: n + gap / 2, y: 0, w: gap / 2, h: bw });
+      rects.push({ x: side - bw, y: n, w: bw, h: gap / 2 });
     }
-    // Bottom Left
-    else if (coreIndex === 2) {
-      p.rect(x, y + side - n, n, n);
-      if (gap > 0) {
-        p.rect(x + n, y + side - bw, gap / 2, bw);
-        p.rect(x, y + n + gap / 2, bw, gap / 2);
-      }
+  } else if (coreIndex === 2) {
+    rects.push({ x: 0, y: side - n, w: n, h: n });
+    if (gap > 0) {
+      rects.push({ x: n, y: side - bw, w: gap / 2, h: bw });
+      rects.push({ x: 0, y: n + gap / 2, w: bw, h: gap / 2 });
     }
-    // Bottom Right
-    else if (coreIndex === 3) {
-      p.rect(x + side - n, y + side - n, n, n);
-      if (gap > 0) {
-        p.rect(x + n + gap / 2, y + side - bw, gap / 2, bw);
-        p.rect(x + side - bw, y + n + gap / 2, bw, gap / 2);
-      }
+  } else if (coreIndex === 3) {
+    rects.push({ x: side - n, y: side - n, w: n, h: n });
+    if (gap > 0) {
+      rects.push({ x: n + gap / 2, y: side - bw, w: gap / 2, h: bw });
+      rects.push({ x: side - bw, y: n + gap / 2, w: bw, h: gap / 2 });
     }
   }
-  return p;
+  return rects;
+}
+
+interface MaskEntry { path: Path2D; rects: MaskRect[]; }
+
+const MASK_CACHE_CAP = 96;
+const maskCache = new Map<string, MaskEntry>();
+
+/** Cached per (rounded side, rounded node, coreIndex) — shared across every building of that size this frame. */
+function getMask(side: number, node: number, coreIndex?: number): MaskEntry {
+  const key = `${Math.round(side)}_${Math.round(node)}_${coreIndex ?? -1}`;
+  let entry = maskCache.get(key);
+  if (!entry) {
+    const rects = maskRects(side, node, coreIndex);
+    const path = new Path2D();
+    for (const r of rects) path.rect(r.x, r.y, r.w, r.h);
+    entry = { path, rects };
+    if (maskCache.size >= MASK_CACHE_CAP) {
+      const oldest = maskCache.keys().next().value;
+      if (oldest !== undefined) maskCache.delete(oldest);
+    }
+    maskCache.set(key, entry);
+  }
+  return entry;
+}
+
+/** Fire-bed gradient only ever depends on `side` when drawn in local (0,0)-origin
+ *  space — cache it per rounded side so every same-size building this frame (and
+ *  across frames while zoom is stable) reuses the same CanvasGradient object.
+ *  Gradient coordinates are resolved against the CTM at fill time, not creation
+ *  time, so a gradient built for a translated ctx still renders correctly under
+ *  whatever translate is active when it's actually used. */
+const GRAD_CACHE_CAP = 64;
+const gradCache = new Map<number, CanvasGradient>();
+function getFireGradient(ctx: CanvasRenderingContext2D, side: number): CanvasGradient {
+  const key = Math.round(side);
+  let g = gradCache.get(key);
+  if (!g) {
+    g = ctx.createLinearGradient(0, side, 0, 0);
+    g.addColorStop(0.0, 'rgb(90, 10, 0)');
+    g.addColorStop(0.4, 'rgb(210, 66, 10)');
+    g.addColorStop(0.75, 'rgb(255, 150, 44)');
+    g.addColorStop(1.0, 'rgb(255, 224, 150)');
+    if (gradCache.size >= GRAD_CACHE_CAP) {
+      const oldest = gradCache.keys().next().value;
+      if (oldest !== undefined) gradCache.delete(oldest);
+    }
+    gradCache.set(key, g);
+  }
+  return g;
 }
 
 export interface FieryCoreOpts {
-  path: Path2D;
+  /** Absolute-space clip path. Required unless `localMask` is supplied. */
+  path?: Path2D;
+  /**
+   * Cached mask (path + the rects it's built from) in coordinates LOCAL to the
+   * building's top-left corner. When present, the canvas is translated by
+   * (x, y) once and every draw call — including the noise tiling, which is
+   * restricted to just these rects instead of the full building square — runs
+   * in that shared local space, so identical-size buildings reuse the same
+   * cached Path2D/gradient/rect-list rather than rebuilding them every frame.
+   */
+  localMask?: MaskEntry;
   x: number;
   y: number;
   side: number;
@@ -214,7 +272,7 @@ export interface FieryCoreOpts {
 }
 
 export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOpts): void {
-  const { path, x, y, side, nodeSize, timeSec, seed, glow } = opts;
+  const { x, y, side, nodeSize, timeSec, seed, glow, localMask } = opts;
   const intensity = Math.max(0, Math.min(1, opts.intensity));
   if (intensity <= 0.001 || side < 6) return;
 
@@ -222,12 +280,41 @@ export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOp
   if (!noiseTile) noiseTile = buildNoiseTile();
   const tile = noiseTile;
 
+  const clipPath = localMask ? localMask.path : opts.path!;
+  const rects = localMask ? localMask.rects : null;
+  // Local mode draws at a (0,0) origin under a canvas translate; absolute mode
+  // (external callers, e.g. ship cores) keeps drawing at (x, y) as before.
+  const ox0 = localMask ? 0 : x;
+  const oy0 = localMask ? 0 : y;
+
   const n = Math.min(nodeSize, side * 0.5);
   const layers = LAYERS.slice(0, layerCount);
   const tileRun = (drawn: number, ox: number, oy: number) => {
-    for (let ty = -1; ty <= Math.ceil(side / drawn) + 1; ty++) {
-      for (let tx = -1; tx <= Math.ceil(side / drawn) + 1; tx++) {
-        ctx.drawImage(tile, x + tx * drawn - ox, y + ty * drawn - oy, drawn, drawn);
+    if (rects) {
+      // Only tile the corner-node + connecting-band regions the mask actually
+      // shows, instead of the whole building square — most of that square gets
+      // clipped away anyway, so this can cut drawImage calls by 5-10x on a
+      // building with a small node size relative to its footprint.
+      const seen = new Set<string>();
+      for (const r of rects) {
+        const tx0 = Math.floor((r.x - ox0 + ox) / drawn) - 1;
+        const tx1 = Math.ceil((r.x + r.w - ox0 + ox) / drawn) + 1;
+        const ty0 = Math.floor((r.y - oy0 + oy) / drawn) - 1;
+        const ty1 = Math.ceil((r.y + r.h - oy0 + oy) / drawn) + 1;
+        for (let ty = ty0; ty <= ty1; ty++) {
+          for (let tx = tx0; tx <= tx1; tx++) {
+            const key = tx + '_' + ty;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            ctx.drawImage(tile, ox0 + tx * drawn - ox, oy0 + ty * drawn - oy, drawn, drawn);
+          }
+        }
+      }
+    } else {
+      for (let ty = -1; ty <= Math.ceil(side / drawn) + 1; ty++) {
+        for (let tx = -1; tx <= Math.ceil(side / drawn) + 1; tx++) {
+          ctx.drawImage(tile, ox0 + tx * drawn - ox, oy0 + ty * drawn - oy, drawn, drawn);
+        }
       }
     }
   };
@@ -244,18 +331,23 @@ export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOp
   };
 
   ctx.save();
+  if (localMask) ctx.translate(x, y);
+
+  ctx.save();
   ctx.beginPath();
-  ctx.clip(path);
+  ctx.clip(clipPath);
 
   // 1) solid warm fire gradient as the colour bed.
   ctx.globalAlpha = intensity;
-  const grad = ctx.createLinearGradient(x, y + side, x, y);
-  grad.addColorStop(0.0, 'rgb(90, 10, 0)');
-  grad.addColorStop(0.4, 'rgb(210, 66, 10)');
-  grad.addColorStop(0.75, 'rgb(255, 150, 44)');
-  grad.addColorStop(1.0, 'rgb(255, 224, 150)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(x, y, side, side);
+  ctx.fillStyle = localMask ? getFireGradient(ctx, side) : ctx.createLinearGradient(x, y + side, x, y);
+  if (!localMask) {
+    const grad = ctx.fillStyle as CanvasGradient;
+    grad.addColorStop(0.0, 'rgb(90, 10, 0)');
+    grad.addColorStop(0.4, 'rgb(210, 66, 10)');
+    grad.addColorStop(0.75, 'rgb(255, 150, 44)');
+    grad.addColorStop(1.0, 'rgb(255, 224, 150)');
+  }
+  ctx.fillRect(ox0, oy0, side, side);
 
   // 2) carve the flame shapes out of the bed
   ctx.globalCompositeOperation = 'multiply';
@@ -276,8 +368,10 @@ export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOp
   ctx.restore();
 
   if (glow && glowEnabled) {
-    renderWarmGlow(ctx, path, { intensity, ...warmGlowFrameStyle(n) });
+    renderWarmGlow(ctx, clipPath, { intensity, ...warmGlowFrameStyle(n) });
   }
+
+  ctx.restore();
 }
 
 export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: CoreEffectOpts): void {
@@ -285,12 +379,12 @@ export function renderBuildingCoreEffect(ctx: CanvasRenderingContext2D, opts: Co
     for (let i = 0; i < 4; i++) {
       const v = opts.intensity[i];
       if (v > 0.001) {
-        const path = maskPath(opts.x, opts.y, opts.side, opts.nodeSize, i);
-        renderFieryCore(ctx, { ...opts, intensity: v, path, glow: opts.glow ?? true });
+        const localMask = getMask(opts.side, opts.nodeSize, i);
+        renderFieryCore(ctx, { ...opts, intensity: v, localMask, glow: opts.glow ?? true });
       }
     }
   } else {
-    const path = maskPath(opts.x, opts.y, opts.side, opts.nodeSize);
-    renderFieryCore(ctx, { ...opts, intensity: opts.intensity as number, path, glow: opts.glow ?? true });
+    const localMask = getMask(opts.side, opts.nodeSize);
+    renderFieryCore(ctx, { ...opts, intensity: opts.intensity as number, localMask, glow: opts.glow ?? true });
   }
 }

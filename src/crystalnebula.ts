@@ -292,8 +292,11 @@ export class CrystalNebula {
   /**
    * Advance particle physics by one tick.
    * Call from the fixed-rate update loop (60 Hz) after disturbances are injected.
+   * `camera`, when supplied, culls entire off-screen clouds from the (otherwise
+   * O(n) or O(n^2) for separation) physics pass — mirrors the cull already done
+   * in draw(). Off-screen clouds simply freeze until back in view.
    */
-  update(dt: number): void {
+  update(dt: number, camera?: Camera): void {
     if (!this.enabled) {
       this.pendingDistCount = 0;
       return;
@@ -308,10 +311,30 @@ export class CrystalNebula {
     const dc         = this.pendingDistCount;
     const dists      = this.pendingDist;
 
+    // Same margin as draw()'s viewport cull.
+    const margin = 150;
+    let vpMinX = -Infinity, vpMaxX = Infinity, vpMinY = -Infinity, vpMaxY = Infinity;
+    if (camera) {
+      const hw = this.screenW * 0.5;
+      const hh = this.screenH * 0.5;
+      vpMinX = camera.position.x - hw / camera.zoom - margin;
+      vpMaxX = camera.position.x + hw / camera.zoom + margin;
+      vpMinY = camera.position.y - hh / camera.zoom - margin;
+      vpMaxY = camera.position.y + hh / camera.zoom + margin;
+    }
+
     for (const cloud of this.clouds) {
       if (cloud.particles.length === 0) continue;
       // Dormant clumps: no physics until the cinematic tier turns them on.
       if (cloud.isClump && !clumpsActive) continue;
+      // Off-screen clouds cost nothing until the camera brings them back into view.
+      if (camera) {
+        const cd = cloud.def;
+        if (
+          cd.cx + cd.radius < vpMinX || cd.cx - cd.radius > vpMaxX ||
+          cd.cy + cd.radius < vpMinY || cd.cy - cd.radius > vpMaxY
+        ) continue;
+      }
 
       const springK = cloud.isClump ? CLUMP_SPRING_K : SPRING_K;
 
