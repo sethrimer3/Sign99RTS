@@ -2641,7 +2641,13 @@ export class Game {
         : undefined,
     );
     if (!synonymousPlayer) {
-      this.hud.drawBrightMatter(ctx, this.state.brightMatter, uiW, uiH);
+      this.hud.drawBrightMatter(
+        ctx,
+        this.state.brightMatter,
+        this.state.getPlayerBrightIncomePerSecond(),
+        uiW,
+        uiH,
+      );
     }
     if (this.state.player.alive) {
       this.hud.drawPlayerEnergy(

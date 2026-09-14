@@ -122,13 +122,13 @@ export const BUILD_DEFS: Record<string, BuildDef> = {
   },
   particleaccelerator: {
     key: 'particleaccelerator',
-    label: 'Particle Accelerator',
+    label: 'Bright Accelerator',
     description: 'Generates Bright Matter, an exotic secondary resource. Must connect directly to the Command Post by conduit — a Power Generator link alone will not do. Longer conduit runs yield more Bright.',
     cost: BUILDING_COST.particleaccelerator,
     footprintCells: 3,
     buildTime: BUILD_TIME.particleaccelerator,
     tier: 'structure',
-    radialLabel: 'Particle\nAccelerator',
+    radialLabel: 'Bright\nAccelerator',
     factory: (pos, team) => new ParticleAccelerator(pos, team),
   },
   wall: {

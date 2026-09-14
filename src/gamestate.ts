@@ -1033,6 +1033,11 @@ export class GameState {
     return income;
   }
 
+  /** Current player Bright Matter income rate (Bright per second). */
+  getPlayerBrightIncomePerSecond(): number {
+    return BRIGHT_GAIN_PER_PATH_CELL * this.bright.totalPathLength(Team.Player);
+  }
+
   private accumulateSynonymousDrones(dt: number): void {
     for (const [team, faction] of this.factionByTeam) {
       if (faction !== 'synonymous') continue;

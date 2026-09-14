@@ -210,28 +210,99 @@ export class HUD {
     ctx.shadowBlur = 0;
   }
 
-  /** Draw the Bright Matter count above the resource panel, when the player has any. */
+  /** Draw a minimalistic sun glyph at (cx, cy) with the given radius. */
+  private drawSunIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, alpha: number): void {
+    ctx.save();
+    ctx.strokeStyle = colorToCSS(Colors.bright_matter, alpha);
+    ctx.fillStyle = colorToCSS(Colors.bright_matter, alpha);
+    ctx.lineWidth = Math.max(1, r * 0.22);
+    ctx.lineCap = 'round';
+    // Core disc.
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    // Rays.
+    const rayInner = r * 0.72;
+    const rayOuter = r;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * rayInner, cy + Math.sin(a) * rayInner);
+      ctx.lineTo(cx + Math.cos(a) * rayOuter, cy + Math.sin(a) * rayOuter);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Draw text right-aligned at (x, y), shrinking the font size until it fits maxWidth. */
+  private fillTextFit(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    maxWidth: number,
+    fontSize: number,
+    fontFn: (size: number) => string,
+    minFontSize: number = 10,
+  ): void {
+    let size = fontSize;
+    ctx.font = fontFn(size);
+    while (size > minFontSize && ctx.measureText(text).width > maxWidth) {
+      size -= 1;
+      ctx.font = fontFn(size);
+    }
+    ctx.fillText(text, x, y);
+  }
+
+  /** Draw the Bright Matter total and income rate above the resource panel, when the player has any. */
   drawBrightMatter(
     ctx: CanvasRenderingContext2D,
     brightMatter: number,
+    brightIncomePerSecond: number,
     screenW: number,
     screenH: number,
   ): void {
-    if (brightMatter < 0.5) return;
+    if (brightMatter < 0.5 && brightIncomePerSecond < 0.005) return;
     const panelW = 220;
-    const panelH = 34;
+    const panelH = 56;
     const panelX = screenW - panelW - 8;
     const panelY = screenH - 70 - 8 - panelH - 6;
     this.drawGlassPanel(ctx, panelX, panelY, panelW, panelH, 0.66);
 
-    ctx.font = gameFont(HUD_FONT_SIZE);
+    const iconR = 11;
+    const iconCx = panelX + 20;
+    const iconCy = panelY + panelH / 2;
+    const glow = 0.75 + 0.25 * Math.sin(this.animTime * 2.4);
+    this.drawSunIcon(ctx, iconCx, iconCy, iconR, 0.85 * glow);
+
+    const textRight = screenW - 10;
+    const textMaxWidth = panelW - (iconCx - panelX) - iconR - 18;
+
     ctx.textAlign = 'right';
     ctx.textBaseline = 'bottom';
-    const glow = 0.75 + 0.25 * Math.sin(this.animTime * 2.4);
+    ctx.fillStyle = colorToCSS(Colors.bright_matter, 0.65);
+    this.fillTextFit(
+      ctx,
+      `+${brightIncomePerSecond.toFixed(2)}/s`,
+      textRight,
+      panelY + panelH - 8 - 22,
+      textMaxWidth,
+      16,
+      (s) => gameFont(s),
+    );
+
     ctx.shadowColor = colorToCSS(Colors.bright_matter, 0.6 * glow);
     ctx.shadowBlur = 12;
     ctx.fillStyle = colorToCSS(Colors.bright_matter, 0.92);
-    ctx.fillText(`${Math.floor(brightMatter)} Bright`, screenW - 10, panelY + panelH - 8);
+    this.fillTextFit(
+      ctx,
+      `${Math.floor(brightMatter)} Bright`,
+      textRight,
+      panelY + panelH - 8,
+      textMaxWidth,
+      HUD_FONT_SIZE,
+      (s) => gameFont(s),
+    );
     ctx.shadowBlur = 0;
   }
 

@@ -204,3 +204,77 @@ export class BrightGraph {
     this.snapshot = { linksByTeam, totalPathLengthByTeam };
   }
 }
+
+/**
+ * BFS distance a hypothetical Bright Accelerator footprint would get if built
+ * at (originCx, originCy) for `team`, using that team's current conduit
+ * graph. Returns null if no conduit cell bordering the footprint is reached
+ * from the Command Post (i.e. it would not link). Used to preview the Bright
+ * income a placement would add before the player commits to it.
+ */
+export function previewBrightPathLength(
+  state: GameState,
+  team: Team,
+  originCx: number,
+  originCy: number,
+  footprintCells: number,
+): number | null {
+  const conduitMap = new Map<string, true>();
+  for (const c of state.grid.eachConduit()) {
+    if (c.team !== team) continue;
+    conduitMap.set(cellKey(c.cx, c.cy), true);
+  }
+
+  const sources: Array<{ cx: number; cy: number }> = [];
+  for (const b of state.buildings) {
+    if (!b.alive) continue;
+    if (isSynonymousFaction(state.factionByTeam, b.team)) continue;
+    if (b.team !== team || b.type !== EntityType.CommandPost) continue;
+    const size = footprintForBuilding(b);
+    const origin = buildingFootprintOrigin(b);
+    for (let y = origin.cy; y < origin.cy + size; y++) {
+      for (let x = origin.cx; x < origin.cx + size; x++) {
+        sources.push({ cx: x, cy: y });
+      }
+    }
+  }
+  if (sources.length === 0) return null;
+
+  const dist = new Map<string, number>();
+  const queue: Array<{ cx: number; cy: number }> = [];
+  const seed = (cx: number, cy: number) => {
+    const k = cellKey(cx, cy);
+    if (!dist.has(k)) {
+      dist.set(k, 0);
+      queue.push({ cx, cy });
+    }
+  };
+  for (const s of sources) seed(s.cx, s.cy);
+
+  for (let head = 0; head < queue.length; head++) {
+    const cur = queue[head];
+    const curKey = cellKey(cur.cx, cur.cy);
+    const curDist = dist.get(curKey)!;
+    const neighbours: Array<[number, number]> = [
+      [cur.cx + 1, cur.cy], [cur.cx - 1, cur.cy],
+      [cur.cx, cur.cy + 1], [cur.cx, cur.cy - 1],
+    ];
+    for (const [nx, ny] of neighbours) {
+      const nk = cellKey(nx, ny);
+      if (dist.has(nk)) continue;
+      if (!conduitMap.has(nk)) continue;
+      dist.set(nk, curDist + 1);
+      queue.push({ cx: nx, cy: ny });
+    }
+  }
+
+  let bestDist = Infinity;
+  for (let y = originCy - 1; y <= originCy + footprintCells; y++) {
+    for (let x = originCx - 1; x <= originCx + footprintCells; x++) {
+      const d = dist.get(cellKey(x, y));
+      if (d !== undefined && d < bestDist) bestDist = d;
+    }
+  }
+  if (bestDist === Infinity) return null;
+  return bestDist + 1;
+}
