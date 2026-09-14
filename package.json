@@ -19,6 +19,7 @@
     "pretest": "npm run build:server",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench:fighters": "vitest run -c vitest.bench.config.ts --reporter=verbose",
     "music:scan": "node scripts/scan-music.mjs",
     "prebuild": "npm run music:scan",
     "predev": "npm run music:scan",
