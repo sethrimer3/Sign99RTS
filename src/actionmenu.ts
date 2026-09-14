@@ -17,7 +17,7 @@ import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { GameState } from './gamestate.js';
 import { ShipGroup, TacticalOrder, Team } from './entities.js';
-import { RESEARCH_COST, RESEARCH_MODE, CONDUIT_COST, ACTIVE_RESEARCH_ITEMS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS, BRIGHT_GAIN_PER_PATH_CELL } from './constants.js';
+import { RESEARCH_COST, RESEARCH_MODE, CONDUIT_COST, ACTIVE_RESEARCH_ITEMS, COMMANDPOST_BUILD_RADIUS, POWERGENERATOR_COVERAGE_RADIUS } from './constants.js';
 import { SHIP_WEAPON_OPTIONS, type ShipWeaponId, SHIP_HP_MAX_LEVEL, SHIP_SPEED_ENERGY_MAX_LEVEL, SHIP_SHIELD_MAX_LEVEL, SHIP_REPAIR_MAX_LEVEL } from './ship.js';
 import { worldToCell, cellKey, cellCenter, footprintCenter, footprintOrigin, GRID_CELL_SIZE } from './grid.js';
 import { defsByTier, BuildDef, getBuildDef } from './builddefs.js';
@@ -26,7 +26,7 @@ import { isConfluenceFaction, isSynonymousFaction, CONFLUENCE_PLACEMENT_DISTANCE
 import { MENU_CANVAS_FONT } from './fonts.js';
 import { SYNONYMOUS_BUILD_COST, SYNONYMOUS_CURRENCY_SYMBOL } from './synonymous.js';
 import { footprintForBuilding } from './buildingfootprint.js';
-import { previewBrightPathLength } from './bright.js';
+import { previewBrightIncomeDelta } from './bright.js';
 
 /** Radius (px) from the menu centre at which items are placed. */
 const ITEM_RADIUS = 110;
@@ -2102,10 +2102,8 @@ class QuickBuildMenu {
     const buildLabel = isPlayerSynonymous(state) && def.key === 'bomberyard' ? 'Nova Bombers' : def.label;
     ctx.fillText(`${buildLabel} ${def.footprintCells}x${def.footprintCells}`, screen.x, screen.y - sizePx / 2 - 4);
     if (def.key === 'particleaccelerator') {
-      const origin = footprintOrigin(cell.cx, cell.cy, def.footprintCells);
-      const pathLength = previewBrightPathLength(state, Team.Player, origin.cx, origin.cy, def.footprintCells);
-      if (pathLength !== null) {
-        const addedIncome = BRIGHT_GAIN_PER_PATH_CELL * pathLength;
+      const addedIncome = previewBrightIncomeDelta(state, Team.Player, center);
+      if (addedIncome > 0) {
         ctx.fillStyle = colorToCSS(Colors.bright_matter, 0.95);
         ctx.fillText(`(+${addedIncome.toFixed(2)}/s Bright)`, screen.x, screen.y - sizePx / 2 - 18);
       }

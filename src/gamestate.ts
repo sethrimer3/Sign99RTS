@@ -17,8 +17,8 @@ import { Camera } from './camera.js';
 import { Audio } from './audio.js';
 import { WorldGrid, GRID_CELL_SIZE, cellKey, footprintOrigin, footprintCenter } from './grid.js';
 import { PowerGraph } from './power.js';
-import { BrightGraph } from './bright.js';
-import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, BRIGHT_GAIN_PER_PATH_CELL, CONDUIT_COST, DT } from './constants.js';
+import { BrightGraph, brightAcceleratorPositions, brightIncomeForPositions } from './bright.js';
+import { RESOURCE_GAIN_RATE, BASELINE_RESOURCE_GAIN, CONDUIT_COST, DT } from './constants.js';
 import { findClosestEnemy, ringSplashDamage } from './combatUtils.js';
 import { WORLD_WIDTH, WORLD_HEIGHT, ENTITY_RADIUS, RESEARCH_MODE, RESEARCH_TIME, TICK_RATE } from './constants.js';
 import { buildCostForBuildingType, type BuildDef } from './builddefs.js';
@@ -992,13 +992,10 @@ export class GameState {
       }
     }
 
-    // Bright Matter: scales with total conduit path length from the Command
-    // Post to every directly-linked Particle Accelerator.
+    // Bright Matter: scales with the spline-loop racetrack connecting every
+    // Bright Accelerator the player owns (see getPlayerBrightIncomePerSecond).
     if (this.player.alive) {
-      const pathLength = this.bright.totalPathLength(Team.Player);
-      if (pathLength > 0) {
-        this.brightMatter += BRIGHT_GAIN_PER_PATH_CELL * pathLength * dt;
-      }
+      this.brightMatter += this.getPlayerBrightIncomePerSecond() * dt;
     }
   }
 
@@ -1035,7 +1032,7 @@ export class GameState {
 
   /** Current player Bright Matter income rate (Bright per second). */
   getPlayerBrightIncomePerSecond(): number {
-    return BRIGHT_GAIN_PER_PATH_CELL * this.bright.totalPathLength(Team.Player);
+    return brightIncomeForPositions(brightAcceleratorPositions(this, Team.Player));
   }
 
   private accumulateSynonymousDrones(dt: number): void {

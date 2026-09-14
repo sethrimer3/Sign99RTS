@@ -17,6 +17,7 @@ import { Camera } from './camera.js';
 import { Colors, colorToCSS } from './colors.js';
 import { Team, EntityType } from './entities.js';
 import type { GameState } from './gamestate.js';
+import { computeBrightLoop } from './bright.js';
 
 /** Catmull-Rom spline through `points`, `segmentsPerSpan` subdivisions between each pair. */
 function smoothPath(points: Vec2[], segmentsPerSpan: number = 10): Vec2[] {
@@ -42,34 +43,6 @@ function smoothPath(points: Vec2[], segmentsPerSpan: number = 10): Vec2[] {
     }
   }
   out.push(points[points.length - 1].clone());
-  return out;
-}
-
-/** Catmull-Rom spline through a closed loop of `points` (wraps around), `segmentsPerSpan` subdivisions between each pair. */
-function smoothLoopPath(points: Vec2[], segmentsPerSpan: number = 14): Vec2[] {
-  const n = points.length;
-  if (n < 3) return points.slice();
-  const out: Vec2[] = [];
-  const get = (i: number): Vec2 => points[((i % n) + n) % n];
-  for (let i = 0; i < n; i++) {
-    const p0 = get(i - 1), p1 = get(i), p2 = get(i + 1), p3 = get(i + 2);
-    for (let s = 0; s < segmentsPerSpan; s++) {
-      const t = s / segmentsPerSpan;
-      const t2 = t * t, t3 = t2 * t;
-      const x = 0.5 * (
-        2 * p1.x + (-p0.x + p2.x) * t +
-        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
-      );
-      const y = 0.5 * (
-        2 * p1.y + (-p0.y + p2.y) * t +
-        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
-      );
-      out.push(new Vec2(x, y));
-    }
-  }
-  out.push(out[0].clone());
   return out;
 }
 
@@ -167,24 +140,12 @@ const LOOP_TRAIL_SAMPLES = 8;
 const LOOP_TRAIL_SPACING_FRAC = 0.0035;
 
 /**
- * Order accelerator positions around their centroid, ascending by angle.
- * Canvas/world Y increases downward, so ascending atan2(dy, dx) sweeps
- * clockwise as drawn on screen — this gives the racetrack loop its
- * consistent clockwise direction.
- */
-function orderClockwise(points: Vec2[]): Vec2[] {
-  const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
-  const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
-  return points
-    .slice()
-    .sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
-}
-
-/**
  * Draws the invisible spline-loop racetrack connecting every Bright
- * Accelerator a team owns, with ~100 fast glowing particles (long trails)
- * streaming clockwise around it. The loop itself is never stroked — only
- * the particles racing along it are visible.
+ * Accelerator a team owns (see computeBrightLoop in bright.ts — the same
+ * loop that determines Bright income), with ~100 fast glowing particles
+ * (long trails) streaming clockwise around it. The loop itself is never
+ * stroked — only the particles racing along it are visible. Requires at
+ * least 2 accelerators, matching the income requirement.
  */
 export function drawBrightAcceleratorLoop(
   ctx: CanvasRenderingContext2D,
@@ -204,11 +165,12 @@ export function drawBrightAcceleratorLoop(
   }
 
   for (const [team, positions] of acceleratorsByTeam) {
-    if (positions.length < 3) continue;
+    if (positions.length < 2) continue;
     const color = team === Team.Player ? Colors.bright_matter : { r: 255, g: 150, b: 220, intensity: 1.0 };
 
-    const loop = orderClockwise(positions);
-    const smooth = smoothLoopPath(loop);
+    const loop = computeBrightLoop(positions);
+    if (loop === null) continue;
+    const smooth = loop.points;
     const cum: number[] = [0];
     for (let i = 1; i < smooth.length; i++) cum.push(cum[i - 1] + smooth[i].distanceTo(smooth[i - 1]));
     const totalLen = cum[cum.length - 1];
