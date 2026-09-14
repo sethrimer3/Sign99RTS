@@ -8,8 +8,9 @@
  *
  * Also draws the "spline loop": an invisible closed racetrack looping
  * clockwise through every Bright Accelerator a team owns (independent of
- * whether they're conduit-linked), with ~100 fast glowing particles
- * streaming around it — the Bright particles racing between accelerators.
+ * whether they're conduit-linked), with a river of glowing particles
+ * flowing around it — see the "River flow" section below for how that
+ * current is simulated.
  */
 
 import { Vec2 } from './math.js';
@@ -134,18 +135,85 @@ export function drawBrightPaths(
   }
 }
 
-const LOOP_PARTICLE_COUNT = 100;
-const LOOP_PARTICLE_SPEED_WORLD_PER_SEC = 260;
-const LOOP_TRAIL_SAMPLES = 8;
-const LOOP_TRAIL_SPACING_FRAC = 0.0035;
+// ---------------------------------------------------------------------------
+// River flow: the spline loop is only the *channel* — a corridor of some
+// width around it. Bright particles inside that channel don't all share one
+// lane at one speed; they're advected like an incompressible, inviscid 2D
+// fluid (the Euler equations: dv/dt = -(v.grad)v - grad(p)/rho, div(v) = 0).
+//
+// Rather than solving pressure on a grid, we use the standard stream-function
+// trick that satisfies incompressibility for free: any velocity field
+// v = (d(psi)/dy, -d(psi)/dx) has div(v) == 0 exactly, for any scalar
+// potential psi. `curlFlow` below is the curl of a small sum of moving
+// sinusoidal potentials, giving swirling, divergence-free eddies. That eddy
+// field is added to a mean downstream current (the loop's tangent), and
+// particle position is stepped forward with plain forward (explicit) Euler
+// integration each frame — pos += v * dt — so the whole thing is a small
+// hand-rolled 2D Euler-fluid particle advection.
+// ---------------------------------------------------------------------------
+
+const RIVER_PARTICLE_COUNT = 160;
+const RIVER_BASE_SPEED_WORLD_PER_SEC = 150;
+const RIVER_HALF_WIDTH = 30;
+const RIVER_SPRING_K = 1.4;
+const RIVER_TURBULENCE_ALONG = 1.0;
+const RIVER_TURBULENCE_ACROSS = 1.0;
+const RIVER_TRAIL_LENGTH = 5;
+const RIVER_MAX_DT = 0.1;
+
+interface RiverParticle {
+  /** Arc-length position along the loop centerline, wraps at totalLen. */
+  s: number;
+  /** Signed lateral offset from the centerline, in world units. */
+  n: number;
+  speedMul: number;
+  seed: number;
+  trail: Vec2[];
+}
+
+interface RiverState {
+  particles: RiverParticle[];
+  lastTime: number;
+}
+
+const riverStateByTeam = new Map<Team, RiverState>();
+
+/** Curl of a small sum of moving sinusoidal potentials — divergence-free by construction. */
+function curlFlow(x: number, y: number, t: number, seed: number): Vec2 {
+  const f1 = 0.018, w1 = 0.7, a1 = 1;
+  const f2 = 0.041, w2 = -1.1, a2 = 0.6;
+  const p1 = seed * 13.1, p2 = seed * 7.7 + 2.3;
+
+  // psi = a1*sin(x*f1 + t*w1 + p1)*cos(y*f1 + p1) + a2*cos(x*f2 + p2)*sin(y*f2 - t*w2 + p2)
+  const dPsiDy =
+    a1 * Math.sin(x * f1 + t * w1 + p1) * (-f1 * Math.sin(y * f1 + p1)) +
+    a2 * Math.cos(x * f2 + p2) * (f2 * Math.cos(y * f2 - t * w2 + p2));
+  const dPsiDx =
+    a1 * (f1 * Math.cos(x * f1 + t * w1 + p1)) * Math.cos(y * f1 + p1) +
+    a2 * (-f2 * Math.sin(x * f2 + p2)) * Math.sin(y * f2 - t * w2 + p2);
+
+  return new Vec2(dPsiDy, -dPsiDx);
+}
+
+function makeRiverParticle(totalLen: number, index: number, count: number): RiverParticle {
+  const seed = Math.random() * 1000;
+  return {
+    s: (index / count) * totalLen,
+    n: (Math.random() * 2 - 1) * RIVER_HALF_WIDTH,
+    speedMul: 0.55 + Math.random() * 1.0,
+    seed,
+    trail: [],
+  };
+}
 
 /**
  * Draws the invisible spline-loop racetrack connecting every Bright
  * Accelerator a team owns (see computeBrightLoop in bright.ts — the same
- * loop that determines Bright income), with ~100 fast glowing particles
- * (long trails) streaming clockwise around it. The loop itself is never
- * stroked — only the particles racing along it are visible. Requires at
- * least 2 accelerators, matching the income requirement.
+ * loop that determines Bright income) as an organic river of glowing
+ * particles of varying width, speed, and lateral drift flowing clockwise
+ * around it. The channel itself is never stroked — only the current inside
+ * it is visible. Requires at least 2 accelerators, matching the income
+ * requirement.
  */
 export function drawBrightAcceleratorLoop(
   ctx: CanvasRenderingContext2D,
@@ -164,6 +232,12 @@ export function drawBrightAcceleratorLoop(
     arr.push(b.position);
   }
 
+  for (const [team, riverState] of riverStateByTeam) {
+    if (!acceleratorsByTeam.has(team) || (acceleratorsByTeam.get(team)?.length ?? 0) < 2) {
+      riverStateByTeam.delete(team);
+    }
+  }
+
   for (const [team, positions] of acceleratorsByTeam) {
     if (positions.length < 2) continue;
     const color = team === Team.Player ? Colors.bright_matter : { r: 255, g: 150, b: 220, intensity: 1.0 };
@@ -176,21 +250,56 @@ export function drawBrightAcceleratorLoop(
     const totalLen = cum[cum.length - 1];
     if (totalLen <= 0) continue;
 
-    const speedFrac = LOOP_PARTICLE_SPEED_WORLD_PER_SEC / totalLen;
+    let riverState = riverStateByTeam.get(team);
+    if (riverState === undefined) {
+      const particles: RiverParticle[] = [];
+      for (let p = 0; p < RIVER_PARTICLE_COUNT; p++) particles.push(makeRiverParticle(totalLen, p, RIVER_PARTICLE_COUNT));
+      riverState = { particles, lastTime: time };
+      riverStateByTeam.set(team, riverState);
+    }
+    const dt = Math.max(0, Math.min(RIVER_MAX_DT, time - riverState.lastTime));
+    riverState.lastTime = time;
+
+    const tangentEps = Math.max(1e-4, 4 / totalLen);
+
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    for (let p = 0; p < LOOP_PARTICLE_COUNT; p++) {
-      const headFrac = time * speedFrac + p / LOOP_PARTICLE_COUNT;
-      for (let tIdx = 0; tIdx < LOOP_TRAIL_SAMPLES; tIdx++) {
-        const frac = headFrac - tIdx * LOOP_TRAIL_SPACING_FRAC;
-        const worldPos = pointAtFrac(smooth, cum, totalLen, frac);
-        const screenPos = camera.worldToScreen(worldPos);
-        const trailT = 1 - tIdx / LOOP_TRAIL_SAMPLES;
-        const alpha = 0.55 * trailT * trailT;
-        const r = (tIdx === 0 ? 2.4 : 1.3 * trailT + 0.3) * camera.zoom;
+    for (const particle of riverState.particles) {
+      const frac = particle.s / totalLen;
+      const center = pointAtFrac(smooth, cum, totalLen, frac);
+      const ahead = pointAtFrac(smooth, cum, totalLen, frac + tangentEps);
+      let tx = ahead.x - center.x, ty = ahead.y - center.y;
+      const tLen = Math.hypot(tx, ty) || 1;
+      tx /= tLen; ty /= tLen;
+      const nx = -ty, ny = tx;
+
+      const worldX = center.x + nx * particle.n;
+      const worldY = center.y + ny * particle.n;
+
+      const eddy = curlFlow(worldX, worldY, time, particle.seed);
+      const widthFrac = particle.n / RIVER_HALF_WIDTH;
+      const channelProfile = 1 - 0.35 * widthFrac * widthFrac;
+      const meanSpeed = RIVER_BASE_SPEED_WORLD_PER_SEC * particle.speedMul * channelProfile;
+
+      const dsdt = meanSpeed + (eddy.x * tx + eddy.y * ty) * RIVER_TURBULENCE_ALONG;
+      const dndt = (eddy.x * nx + eddy.y * ny) * RIVER_TURBULENCE_ACROSS - RIVER_SPRING_K * particle.n;
+
+      // Forward (explicit) Euler step: pos += v * dt.
+      particle.s = ((particle.s + dsdt * dt) % totalLen + totalLen) % totalLen;
+      particle.n = Math.max(-RIVER_HALF_WIDTH * 1.6, Math.min(RIVER_HALF_WIDTH * 1.6, particle.n + dndt * dt));
+
+      const screenPos = camera.worldToScreen(new Vec2(worldX, worldY));
+      particle.trail.push(new Vec2(screenPos.x, screenPos.y));
+      if (particle.trail.length > RIVER_TRAIL_LENGTH) particle.trail.shift();
+
+      for (let i = 0; i < particle.trail.length; i++) {
+        const trailT = (i + 1) / particle.trail.length;
+        const pos = particle.trail[i];
+        const alpha = 0.5 * trailT * trailT;
+        const r = (trailT * 1.6 + 0.3) * camera.zoom;
         ctx.fillStyle = colorToCSS(color, alpha);
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, Math.max(0.5, r), 0, Math.PI * 2);
+        ctx.arc(pos.x, pos.y, Math.max(0.5, r), 0, Math.PI * 2);
         ctx.fill();
       }
     }

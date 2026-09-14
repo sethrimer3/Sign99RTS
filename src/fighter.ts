@@ -822,14 +822,6 @@ export class FighterShip extends Entity {
     ctx.beginPath();
     ctx.arc(screen.x, screen.y, r * (0.62 + pulse * 0.08), coreTime, coreTime + Math.PI * 1.35);
     ctx.stroke();
-    // Engine exhaust glow at rear
-    const exhaustX = screen.x - Math.cos(this.angle) * r * 0.7;
-    const exhaustY = screen.y - Math.sin(this.angle) * r * 0.7;
-    const exhaustColor = this.team === Team.Player ? Colors.particles_friendly_exhaust : Colors.particles_enemy_exhaust;
-    ctx.fillStyle = colorToCSS(exhaustColor, 0.18 + pulse * 0.10);
-    ctx.beginPath();
-    ctx.arc(exhaustX, exhaustY, r * 0.7, 0, Math.PI * 2);
-    ctx.fill();
     ctx.restore();
 
     ctx.fillStyle = colorToCSS(coreColor, 0.72 + 0.28 * this.healthFraction);
@@ -1150,16 +1142,6 @@ export class BomberShip extends FighterShip {
     ctx.beginPath();
     ctx.arc(screen.x, screen.y, r * (0.65 + pulse * 0.08), -coreTime, -coreTime + Math.PI * 1.35);
     ctx.stroke();
-    // Bomber engine glows (two rear exhausts)
-    const exhaustColor = this.team === Team.Player ? Colors.particles_friendly_exhaust : Colors.particles_enemy_exhaust;
-    for (const dy of [-0.45, 0.45]) {
-      const ex = screen.x - Math.cos(this.angle) * r * 0.55 + Math.sin(this.angle) * r * dy;
-      const ey = screen.y - Math.sin(this.angle) * r * 0.55 - Math.cos(this.angle) * r * dy;
-      ctx.fillStyle = colorToCSS(exhaustColor, 0.22 + pulse * 0.12);
-      ctx.beginPath();
-      ctx.arc(ex, ey, r * 0.55, 0, Math.PI * 2);
-      ctx.fill();
-    }
     ctx.restore();
 
     ctx.fillStyle = colorToCSS(coreColor, 0.72 + 0.28 * this.healthFraction);
