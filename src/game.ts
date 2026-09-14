@@ -61,7 +61,7 @@ import {
   drawCombatTargetingDebug, drawConfluenceTerritory, drawDebugOverlay, drawWaypointMarkers, drawBaseTerritoryGlow, drawBaseLockwardEffect, type ShipCommandGroup, type WaypointMarker,
 } from './gameRender.js';
 import { renderBudget } from './renderBudget.js';
-import { drawBrightPaths } from './brightPathRender.js';
+import { drawBrightPaths, drawBrightAcceleratorLoop } from './brightPathRender.js';
 import type { NetInputSnapshot, NetGameSnapshot } from './net/protocol.js';
 import type { MultiplayerTransport } from './net/transport.js';
 import { findClosestEnemy } from './combatUtils.js';
@@ -2588,6 +2588,7 @@ export class Game {
       );
     }
     drawBrightPaths(ctx, this.camera, this.state, this.state.gameTime);
+    drawBrightAcceleratorLoop(ctx, this.camera, this.state, this.state.gameTime);
     this.state.drawEntities(ctx, this.camera);
     drawBaseLockwardEffect(ctx, this.camera, this.state);
     drawGhostSpectator(ctx, this.camera, this.state, this.playerRespawn);
