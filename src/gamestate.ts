@@ -99,6 +99,18 @@ export interface GamePerfStats {
   spatial: SpatialIndexStats;
 }
 
+/** Lifetime tallies for the post-defeat stats screen. See {@link LossStatsPanel}. */
+export interface MatchStats {
+  kills: number;
+  buildingsBuilt: number;
+  resourcesEarned: number;
+  /** Periodic (resources, time) samples used to draw the loss-screen resource graph. */
+  resourceHistory: Array<{ time: number; resources: number }>;
+}
+
+const RESOURCE_HISTORY_SAMPLE_INTERVAL = 2;
+const RESOURCE_HISTORY_MAX_SAMPLES = 300;
+
 function emptySpatialStats(): SpatialIndexStats {
   return { queryCount: 0, rawCandidateCount: 0, returnedCount: 0, insertedCount: 0, cellCount: 0 };
 }
@@ -281,6 +293,15 @@ export class GameState {
   resources: number = 500;
   /** Bright Matter: secondary exotic-matter resource from Particle Accelerators. */
   brightMatter: number = 0;
+
+  /** Lifetime tallies shown on the post-defeat stats screen. See {@link LossStatsPanel}. */
+  matchStats: MatchStats = {
+    kills: 0,
+    buildingsBuilt: 0,
+    resourcesEarned: 0,
+    resourceHistory: [],
+  };
+  private nextResourceHistorySampleAt = 0;
   researchProgress: ResearchProgress = { item: null, progress: 0, timeNeeded: 0 };
   researchQueue: string[] = [];
   completedResearchNotifications: string[] = [];
@@ -561,6 +582,7 @@ export class GameState {
       b.update(dt);
       if (b.completionEffectPending) {
         this.markBuildingCollisionDirty();
+        if (b.team === Team.Player) this.matchStats.buildingsBuilt++;
       }
       if (
         b.completionEffectPending &&
@@ -976,7 +998,9 @@ export class GameState {
 
     // Baseline resource gain — player automatically gains resources over time
     if (this.player.alive) {
-      this.resources += BASELINE_RESOURCE_GAIN * dt;
+      const gained = BASELINE_RESOURCE_GAIN * dt;
+      this.resources += gained;
+      this.matchStats.resourcesEarned += gained;
     }
 
     // Bonus from factories
@@ -989,7 +1013,15 @@ export class GameState {
         b.buildProgress >= 1
       ) {
         this.resources += RESOURCE_GAIN_RATE * dt;
+        this.matchStats.resourcesEarned += RESOURCE_GAIN_RATE * dt;
       }
+    }
+
+    if (this.gameTime >= this.nextResourceHistorySampleAt) {
+      this.nextResourceHistorySampleAt = this.gameTime + RESOURCE_HISTORY_SAMPLE_INTERVAL;
+      const history = this.matchStats.resourceHistory;
+      history.push({ time: this.gameTime, resources: this.matchStats.resourcesEarned });
+      if (history.length > RESOURCE_HISTORY_MAX_SAMPLES) history.shift();
     }
 
     // Bright Matter: scales with the spline-loop racetrack connecting every

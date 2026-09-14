@@ -258,6 +258,8 @@ function awardSurvivalHeroShipReward(
   if (killerTeam === Team.Neutral || killerTeam === destroyedTeam || amount <= 0) return;
   if (killerTeam === Team.Player) {
     state.resources += amount;
+    state.matchStats.resourcesEarned += amount;
+    state.matchStats.kills++;
   } else if (destroyedTeam === Team.Player) {
     state.survivalEnemyRewardBank += amount;
   } else {

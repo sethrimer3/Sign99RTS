@@ -90,6 +90,15 @@ const en: Dict = {
   'menu.pause.surrenderWarning': 'You will leave the current match and return to the main menu.',
   'pause.heading': 'MENU',
 
+  'loss.heading': 'DEFEATED',
+  'loss.timeSurvived': 'Time Survived: {value}',
+  'loss.kills': 'Enemy Ships Destroyed: {value}',
+  'loss.buildingsBuilt': 'Buildings Built: {value}',
+  'loss.resourcesEarned': 'Resources Earned: {value}',
+  'loss.resourceGraphTitle': 'Resources Over Time',
+  'loss.backToGame': 'Back to Game',
+  'loss.backToMenu': 'Back to Menu',
+
   'settings.heading': 'SETTINGS',
   'settings.graphicsQuality': 'Graphics Quality',
   'settings.legacyGraphics': 'Legacy Graphics',

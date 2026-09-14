@@ -106,6 +106,7 @@ import {
   updateGhostSpectator,
 } from './respawnRuntime.js';
 import { FighterGroupStatusUI } from './fighterGroupStatus.js';
+import { LossStatsPanel } from './lossStatsPanel.js';
 
 type GamePhase = 'menu' | 'playing' | 'paused';
 type PersistentGroupOrder = 'waypoint' | 'follow' | 'protect';
@@ -202,6 +203,7 @@ export class Game {
   private bgGradientKey = '';
 
   private playerRespawn: PlayerRespawnRuntime = createPlayerRespawnRuntime();
+  private lossStatsPanel: LossStatsPanel = new LossStatsPanel();
   /** Delay (seconds) before the player ship respawns. */
   private static readonly RESPAWN_DELAY = 3;
   private aiRespawn: AIRespawnRuntime = createAIRespawnRuntime();
@@ -728,6 +730,17 @@ export class Game {
     // Player respawn logic — trigger on death and revive after a short delay.
     this.updatePlayerRespawn();
     this.updateGhostSpectator(DT);
+
+    // Post-defeat stats screen — the match keeps simulating/rendering behind it so the
+    // ghost spectator camera can keep flying. Legacy Graphics keeps the old top banner only.
+    if (!this.legacyGraphics) {
+      this.lossStatsPanel.notify(this.playerRespawn.loss);
+      const lossAction = this.lossStatsPanel.update(this.screenW, this.screenH);
+      if (lossAction === 'menu') {
+        this.handleMenuAction('quit_to_menu');
+        return;
+      }
+    }
 
     // Advance starfield animations (twinkling, shooting stars)
     this.starfield.update(DT);
@@ -2616,7 +2629,9 @@ export class Game {
     }
 
     drawScreenOverlays(ctx, w, h, this.camera, this.visualPreset, this.damageFlashTimer, this.overlayCache);
-    drawLossOverlay(ctx, w, this.playerRespawn.loss);
+    if (this.legacyGraphics) {
+      drawLossOverlay(ctx, w, this.playerRespawn.loss);
+    }
 
     const uiW = w / this.uiZoom;
     const uiH = h / this.uiZoom;
@@ -2713,6 +2728,10 @@ export class Game {
     // Pause overlay
     if (this.phase === 'paused') {
       this.drawScaledUi(() => this.mainMenu.draw(ctx, w / this.uiZoom, h / this.uiZoom));
+    }
+
+    if (!this.legacyGraphics && this.phase === 'playing') {
+      this.lossStatsPanel.draw(ctx, this.state, w, h);
     }
   }
 
