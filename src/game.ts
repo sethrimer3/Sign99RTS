@@ -35,6 +35,7 @@ import { worldToCell, footprintCenter, GRID_CELL_SIZE } from './grid.js';
 import { footprintForBuildingType } from './buildingfootprint.js';
 import { gameFont } from './fonts.js';
 import { createSpaceFluid, SpaceFluid } from './spacefluid.js';
+import { setCombatAimDebugCapture } from './targeting.js';
 import type { LanClient } from './lan/lanClient.js';
 import type { MsgMatchStart, MsgRelayedInput, SerializedShip, SerializedBuilding, SerializedFighter, SerializedProjectile, SerializedTerritoryCircle } from './lan/protocol.js';
 import { createBuildingFromDef, getBuildDef, buildDefForEntityType } from './builddefs.js';
@@ -634,6 +635,7 @@ export class Game {
 
     if (Input.wasPressed('F3')) {
       this.debugOverlay = !this.debugOverlay;
+      setCombatAimDebugCapture(this.debugOverlay);
     }
 
     const commandMode = Input.isDown('c');

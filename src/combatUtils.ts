@@ -17,6 +17,28 @@ const targetQueryScratch: Entity[] = [];
 const laserQueryScratch: Entity[] = [];
 const limitedLaserQueryScratch: Entity[] = [];
 
+// damageLaserLineLimited runs once per fighter/drone laser shot (SwarmFighter,
+// SynonymousFighterShip's per-drone volley) — at combat scale that's several
+// calls per fighter per second. Reuse a fixed pool of hit records + sort them
+// in place instead of allocating a fresh `{target,t}[]` and calling `.sort()`
+// (with a fresh comparator closure) on every call.
+interface LaserHitRecord { target: Entity | null; t: number; }
+const LASER_HIT_SCRATCH_CAP = 32;
+const laserHitScratch: LaserHitRecord[] = Array.from({ length: LASER_HIT_SCRATCH_CAP }, () => ({ target: null, t: 0 }));
+
+/** Insertion sort by `.t` ascending, in place, on `arr[0, count)` — no allocation, fast for the small hit counts a laser pierce ever produces. */
+function sortHitsByT(arr: LaserHitRecord[], count: number): void {
+  for (let i = 1; i < count; i++) {
+    const cur = arr[i];
+    let j = i - 1;
+    while (j >= 0 && arr[j].t > cur.t) {
+      arr[j + 1] = arr[j];
+      j--;
+    }
+    arr[j + 1] = cur;
+  }
+}
+
 function buildingImpactFromPoint(building: BuildingBase, from: Vec2): { pos: Vec2; outwardAngle: number } {
   let outward = building.position.sub(from);
   if (outward.length() <= 0.001) outward = new Vec2(1, 0);
@@ -64,14 +86,14 @@ function emitShipLaserCrossSpray(state: GameState, target: Entity, start: Vec2, 
   let emitted = 0;
   if (disc >= 0) {
     disc = Math.sqrt(disc);
-    for (const t of [(-b - disc) / (2 * a), (-b + disc) / (2 * a)]) {
-      if (t < 0 || t > 1) continue;
-      state.particles.emitShipDamageSpray(
-        target.position,
-        r,
-        new Vec2(start.x + dx * t, start.y + dy * t),
-        0.8,
-      );
+    const t0 = (-b - disc) / (2 * a);
+    const t1 = (-b + disc) / (2 * a);
+    if (t0 >= 0 && t0 <= 1) {
+      state.particles.emitShipDamageSpray(target.position, r, new Vec2(start.x + dx * t0, start.y + dy * t0), 0.8);
+      emitted++;
+    }
+    if (t1 >= 0 && t1 <= 1) {
+      state.particles.emitShipDamageSpray(target.position, r, new Vec2(start.x + dx * t1, start.y + dy * t1), 0.8);
       emitted++;
     }
   }
@@ -244,7 +266,7 @@ export function damageLaserLineLimited(
   const lenSq = dx * dx + dy * dy;
   if (lenSq <= 0) return;
 
-  const hits: Array<{ target: Entity; t: number }> = [];
+  let hitCount = 0;
   const queryRadius = hitRadius + 120;
   for (const target of state.queryEntitiesNearSegment(start, end, queryRadius, limitedLaserQueryScratch)) {
     if (!target.alive || target.team === source.team || target.team === Team.Neutral) continue;
@@ -254,20 +276,24 @@ export function damageLaserLineLimited(
     const px = start.x + dx * t;
     const py = start.y + dy * t;
     const dist = Math.hypot(target.position.x - px, target.position.y - py);
-    if (dist <= target.radius + hitRadius) hits.push({ target, t });
+    if (dist <= target.radius + hitRadius && hitCount < LASER_HIT_SCRATCH_CAP) {
+      const rec = laserHitScratch[hitCount++];
+      rec.target = target;
+      rec.t = t;
+    }
   }
 
-  hits.sort((a, b) => a.t - b.t);
-  const count = Math.min(pierceCount, hits.length);
+  sortHitsByT(laserHitScratch, hitCount);
+  const count = Math.min(pierceCount, hitCount);
   for (let i = 0; i < count; i++) {
-    const target = hits[i].target;
+    const hit = laserHitScratch[i];
+    const target = hit.target!;
     target.takeDamage(damage, source, { kind: 'laser', x: start.x, y: start.y, dx, dy, radius: hitRadius });
     state.recentlyDamaged.add(target.id);
     if (!target.alive) {
       state.particles.emitExplosion(target.position, target.radius);
       spaceFluid?.addExplosion(target.position.x, target.position.y, 0.75, 42, 190, 120);
     } else {
-      const hit = hits[i];
       const px = start.x + dx * hit.t;
       const py = start.y + dy * hit.t;
       emitBuildingDamageSparks(state, target, new Vec2(px, py));

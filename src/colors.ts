@@ -7,12 +7,33 @@ export interface Color {
   intensity: number;
 }
 
+// colorToCSS is one of the hottest functions in the render loop — every
+// entity draw (fighters especially: 6-9+ calls per ship per frame for core
+// pulse/glint/health-tint/shield-ring colors) builds one of these strings.
+// Alpha is rounded to 1/100 (visually indistinguishable) so animated alphas
+// (pulses, fades) still hit the cache almost every frame instead of missing
+// on every call, and the result is cached/reused instead of allocating a
+// fresh template-literal string each time.
+const CSS_CACHE_CAP = 4000;
+const cssCache = new Map<string, string>();
+
 /** Convert a Color to a CSS rgba string, applying intensity as a multiplier and clamping to 255. */
 export function colorToCSS(color: Color, alpha: number = 1.0): string {
   const r = Math.min(255, Math.round(color.r * color.intensity));
   const g = Math.min(255, Math.round(color.g * color.intensity));
   const b = Math.min(255, Math.round(color.b * color.intensity));
-  return `rgba(${r},${g},${b},${alpha})`;
+  const a = Math.round(Math.max(0, Math.min(1, alpha)) * 100) / 100;
+  const key = `${r},${g},${b},${a}`;
+  let css = cssCache.get(key);
+  if (css === undefined) {
+    css = `rgba(${r},${g},${b},${a})`;
+    if (cssCache.size >= CSS_CACHE_CAP) {
+      const oldest = cssCache.keys().next().value;
+      if (oldest !== undefined) cssCache.delete(oldest);
+    }
+    cssCache.set(key, css);
+  }
+  return css;
 }
 
 function c(r: number, g: number, b: number, intensity: number): Color {

@@ -307,7 +307,7 @@ export function renderFieryCore(ctx: CanvasRenderingContext2D, opts: FieryCoreOp
   const oy0 = localMask ? 0 : y;
 
   const n = Math.min(nodeSize, side * 0.5);
-  const layers = LAYERS.slice(0, layerCount);
+  const layers = LAYERS.slice(0, dynamicLayerCount());
   const tileRun = (drawn: number, ox: number, oy: number) => {
     if (rects) {
       // Only tile the corner-node + connecting-band regions the mask actually

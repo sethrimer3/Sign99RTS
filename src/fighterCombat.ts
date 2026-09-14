@@ -27,7 +27,7 @@ import {
 import { SpaceFluid } from './spacefluid.js';
 import { WEAPON_STATS } from './constants.js';
 import { damageLaserLineLimited } from './combatUtils.js';
-import { aimAngle, aimAtEntity, isCombatTargetValid, recordCombatAimSample } from './targeting.js';
+import { aimAngle, aimAtEntity, isCombatTargetValid, isCombatAimDebugCaptureEnabled, recordCombatAimSample } from './targeting.js';
 import type { Entity } from './entities.js';
 
 const fighterTargetScratch: Entity[] = [];
@@ -72,18 +72,20 @@ export function updateFighterWeaponFire(state: GameState, spaceFluid: SpaceFluid
       state.addEntity(new SwarmFighterLaser(f.team, f.position.clone(), end, f));
       damageLaserLineLimited(state, spaceFluid, f.position.clone(), end, f.weaponDamage, 1, 1, f);
       Audio.playSoundAt('laser', f.position, 1400, 1 / 3);
-      recordCombatAimSample({
-        shooterId: f.id,
-        targetId: target.id,
-        shooter: f.position.clone(),
-        target: target.position.clone(),
-        targetVelocity: target.velocity.clone(),
-        aimPoint: end,
-        spawn: f.position.clone(),
-        range: f.weaponRange,
-        interceptValid: true,
-        createdAt: state.gameTime,
-      });
+      if (isCombatAimDebugCaptureEnabled()) {
+        recordCombatAimSample({
+          shooterId: f.id,
+          targetId: target.id,
+          shooter: f.position.clone(),
+          target: target.position.clone(),
+          targetVelocity: target.velocity.clone(),
+          aimPoint: end,
+          spawn: f.position.clone(),
+          range: f.weaponRange,
+          interceptValid: true,
+          createdAt: state.gameTime,
+        });
+      }
       continue;
     }
     const projectileSpeed = f instanceof BomberShip ? WEAPON_STATS.bigmissile.speed : isSwarmFighter ? WEAPON_STATS.laser.speed : WEAPON_STATS.fire.speed;
@@ -93,7 +95,8 @@ export function updateFighterWeaponFire(state: GameState, spaceFluid: SpaceFluid
     });
     const angle = aimAngle(aim);
     if (angle === null) continue;
-    let firedAimPoint = aim.aimPoint.clone();
+    const captureDebug = isCombatAimDebugCaptureEnabled();
+    const firedAimPoint = captureDebug ? aim.aimPoint.clone() : aim.aimPoint;
 
     if (f instanceof SynonymousNovaBomberShip) {
       const charged = f.consumeChargedNova();
@@ -128,18 +131,20 @@ export function updateFighterWeaponFire(state: GameState, spaceFluid: SpaceFluid
       bullet.damage = f.weaponDamage;
       state.addEntity(bullet);
     }
-    recordCombatAimSample({
-      shooterId: f.id,
-      targetId: target.id,
-      shooter: f.position.clone(),
-      target: target.position.clone(),
-      targetVelocity: target.velocity.clone(),
-      aimPoint: firedAimPoint,
-      spawn: f.position.clone(),
-      range: f.weaponRange,
-      interceptValid: aim.valid && !aim.usedFallback,
-      createdAt: state.gameTime,
-    });
+    if (captureDebug) {
+      recordCombatAimSample({
+        shooterId: f.id,
+        targetId: target.id,
+        shooter: f.position.clone(),
+        target: target.position.clone(),
+        targetVelocity: target.velocity.clone(),
+        aimPoint: firedAimPoint,
+        spawn: f.position.clone(),
+        range: f.weaponRange,
+        interceptValid: aim.valid && !aim.usedFallback,
+        createdAt: state.gameTime,
+      });
+    }
   }
 }
 

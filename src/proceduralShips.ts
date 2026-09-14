@@ -1258,6 +1258,28 @@ export let lastFillCalls = 0;
 
 interface CoreGlowSprite { canvas: HTMLCanvasElement; x: number; y: number; w: number; h: number; }
 const coreGlowCache = new WeakMap<ShipGeometry, CoreGlowSprite | null>();
+
+// The fiery core's fill gradient (see renderFieryCore) only depends on
+// (x, y, side), and those are constant for a given ShipGeometry — every
+// fighter/bomber instance of the same design shares one `geo` object, so
+// cache the gradient once per geometry instead of allocating a fresh
+// CanvasGradient for every ship, every frame.
+const coreFireGradientCache = new WeakMap<ShipGeometry, CanvasGradient>();
+function getShipCoreFireGradient(ctx: CanvasRenderingContext2D, geo: ShipGeometry, x: number, y: number, side: number): CanvasGradient {
+  let g = coreFireGradientCache.get(geo);
+  if (!g) {
+    g = ctx.createLinearGradient(x, y + side, x, y);
+    g.addColorStop(0.0, 'rgb(90, 10, 0)');
+    g.addColorStop(0.4, 'rgb(210, 66, 10)');
+    g.addColorStop(0.75, 'rgb(255, 150, 44)');
+    g.addColorStop(1.0, 'rgb(255, 224, 150)');
+    coreFireGradientCache.set(geo, g);
+  }
+  return g;
+}
+
+/** Below this on-screen pixel size the fire-noise detail is imperceptible — skip the tiled noise fill entirely (the cheap glow-bloom sprite still draws). */
+const MIN_CORE_FIRE_PX = 7;
 /** Supersample resolution (px per ship-local unit) so the baked blur stays smooth at any zoom. */
 const CORE_GLOW_RES = 3;
 
@@ -1353,17 +1375,24 @@ export function drawProceduralShip(
     const intensity = transform.coreIntegrityFrac ?? 1;
     if (intensity > 0) {
       const side = Math.max(geo.boundingBox.maxX - geo.boundingBox.minX, geo.boundingBox.maxY - geo.boundingBox.minY);
-      renderFieryCore(ctx, {
-        path: geo.corePath,
-        x: geo.boundingBox.minX,
-        y: geo.boundingBox.minY,
-        side,
-        nodeSize: side * 0.15,
-        intensity,
-        timeSec: performance.now() * 0.001,
-        seed: def.seed,
-        glow: false,
-      });
+      // The tiled noise fill is the expensive part (several drawImage calls);
+      // skip it when the core is too small on screen to show any detail, or
+      // when the frame budget is already under pressure — the cheap glow
+      // sprite below still gives small/distant ships a warm core glint.
+      if (side * scale >= MIN_CORE_FIRE_PX) {
+        renderFieryCore(ctx, {
+          path: geo.corePath,
+          x: geo.boundingBox.minX,
+          y: geo.boundingBox.minY,
+          side,
+          nodeSize: side * 0.15,
+          intensity,
+          timeSec: performance.now() * 0.001,
+          seed: def.seed,
+          glow: false,
+          presetGradient: getShipCoreFireGradient(ctx, geo, geo.boundingBox.minX, geo.boundingBox.minY, side),
+        });
+      }
       if (!isLegacyGraphics() && isWarmGlowEnabled()) {
         const sprite = getCoreGlowSprite(geo);
         if (sprite) {

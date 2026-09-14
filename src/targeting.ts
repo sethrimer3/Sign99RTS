@@ -35,6 +35,24 @@ export interface CombatAimDebugSample {
 
 const debugSamples: CombatAimDebugSample[] = [];
 
+// Recording a sample means cloning 5 Vec2s + allocating a sample object per
+// fighter shot — real GC pressure at combat scale (dozens of fighters firing
+// several times a second) for data almost nobody reads: only the debug
+// overlay (toggled off by default) ever consumes `debugSamples`. Callers on
+// the hot fire path should check this before building the sample argument at
+// all, not just before calling recordCombatAimSample.
+let debugCaptureEnabled = false;
+
+/** Toggle whether recordCombatAimSample actually records anything. Call this from the debug-overlay toggle. */
+export function setCombatAimDebugCapture(enabled: boolean): void {
+  debugCaptureEnabled = enabled;
+}
+
+/** Cheap check for hot-path callers to skip building a CombatAimDebugSample entirely when nobody's watching. */
+export function isCombatAimDebugCaptureEnabled(): boolean {
+  return debugCaptureEnabled;
+}
+
 export function isFiniteVec(v: Vec2 | null | undefined): v is Vec2 {
   return !!v && Number.isFinite(v.x) && Number.isFinite(v.y);
 }
@@ -94,8 +112,11 @@ export function predictiveAim2D(
       const sqrtD = Math.sqrt(discriminant);
       const t1 = (-b - sqrtD) / (2 * a);
       const t2 = (-b + sqrtD) / (2 * a);
-      const candidates = [t1, t2].filter((t) => Number.isFinite(t) && t >= 0);
-      if (candidates.length > 0) interceptTime = Math.min(...candidates);
+      const t1Valid = Number.isFinite(t1) && t1 >= 0;
+      const t2Valid = Number.isFinite(t2) && t2 >= 0;
+      if (t1Valid && t2Valid) interceptTime = Math.min(t1, t2);
+      else if (t1Valid) interceptTime = t1;
+      else if (t2Valid) interceptTime = t2;
     }
   }
 
@@ -137,6 +158,7 @@ export function isFacingAim(currentAngle: number, aim: PredictiveAimResult, maxA
 }
 
 export function recordCombatAimSample(sample: CombatAimDebugSample): void {
+  if (!debugCaptureEnabled) return;
   debugSamples.push(sample);
   if (debugSamples.length > MAX_DEBUG_SAMPLES) debugSamples.splice(0, debugSamples.length - MAX_DEBUG_SAMPLES);
 }
