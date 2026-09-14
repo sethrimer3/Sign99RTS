@@ -23,12 +23,18 @@ const SEAM_EXPOSED_BOOST = 1.8;
 
 /** Number of traveling light trails active on a fully-powered building. */
 const TRAIL_COUNT = 4;
-/** Seconds for a trail to cross from one end of its chosen seam to the other. */
-const TRAIL_PERIOD = 1.3;
-/** Fraction of the seam's length the trail's fading tail covers. */
-const TRAIL_TAIL_FRAC = 0.4;
-/** Warm trail tip color, matching the buildings' glow palette. */
-const TRAIL_TIP_COLOR = '255, 200, 120';
+/** World units/sec a trail travels along the seam network — twice the original per-seam crossing speed. */
+const TRAIL_SPEED = 100;
+/** World-unit length of the fading tail — three times the original fraction-of-seam tail. */
+const TRAIL_TAIL_LENGTH = 42;
+/** Max seconds of inactivity before a building's trail state is discarded (avoids leaking entries for despawned buildings). */
+const TRAIL_STATE_TTL = 5;
+/** Warm trail tip color, matching the game's sun glare palette. */
+const TRAIL_TIP_COLOR = '255, 178, 54';
+const TRAIL_CORE_COLOR = '255, 151, 40';
+const TRAIL_HIGHLIGHT_COLOR = '255, 249, 190';
+/** Endpoints within this world-unit distance are treated as the same structural junction. */
+const JUNCTION_EPS = 0.5;
 
 function hash01(i: number, seed: number): number {
   let h = (i * 374761393 + seed * 668265263) | 0;
@@ -103,53 +109,170 @@ export function renderBuildingSeamLines(ctx: CanvasRenderingContext2D, opts: Bui
   ctx.restore();
 }
 
-/** A handful of warm light trails randomly traveling along the seam network of a powered building. */
+interface TrailParticle {
+  seamIdx: number;
+  /** Progress 0..1 from (x1,y1) to (x2,y2) of the current seam. */
+  t: number;
+  dir: 1 | -1;
+  rngState: number;
+  /** Recent world-local positions, oldest first, used to draw the fading tail. */
+  history: { x: number; y: number }[];
+}
+
+interface BuildingTrailState {
+  lastTime: number;
+  particles: TrailParticle[];
+}
+
+const trailStates = new Map<number, BuildingTrailState>();
+
+function nextRand(state: TrailParticle): number {
+  state.rngState = (state.rngState + 0x6D2B79F5) | 0;
+  let t = state.rngState;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+function seamPoint(s: VisibleSeam, t: number): { x: number; y: number } {
+  return { x: s.x1 + (s.x2 - s.x1) * t, y: s.y1 + (s.y2 - s.y1) * t };
+}
+
+function seamLen(s: VisibleSeam): number {
+  return Math.hypot(s.x2 - s.x1, s.y2 - s.y1);
+}
+
+/** Every other seam touching the given endpoint (within JUNCTION_EPS), as {seamIdx, dir the particle would head off in}. */
+function junctionCandidates(seams: VisibleSeam[], px: number, py: number): { seamIdx: number; dir: 1 | -1 }[] {
+  const out: { seamIdx: number; dir: 1 | -1 }[] = [];
+  for (let i = 0; i < seams.length; i++) {
+    const s = seams[i];
+    if (Math.hypot(s.x1 - px, s.y1 - py) < JUNCTION_EPS) out.push({ seamIdx: i, dir: 1 });
+    else if (Math.hypot(s.x2 - px, s.y2 - py) < JUNCTION_EPS) out.push({ seamIdx: i, dir: -1 });
+  }
+  return out;
+}
+
+function pickRandomSeam(seams: VisibleSeam[], rngState: TrailParticle): number {
+  return Math.floor(nextRand(rngState) * seams.length) % seams.length;
+}
+
+function spawnParticle(seams: VisibleSeam[], seed: number): TrailParticle {
+  const p: TrailParticle = { seamIdx: 0, t: 0, dir: 1, rngState: seed | 0, history: [] };
+  p.seamIdx = pickRandomSeam(seams, p);
+  p.t = nextRand(p);
+  p.dir = nextRand(p) < 0.5 ? 1 : -1;
+  return p;
+}
+
+/** Advances one particle by distSec seconds worth of travel, hopping to a random connected seam at every junction it reaches. */
+function advanceParticle(p: TrailParticle, seams: VisibleSeam[], dt: number): void {
+  let remaining = TRAIL_SPEED * dt;
+  let guard = 0;
+  while (remaining > 0 && guard++ < 8) {
+    const s = seams[p.seamIdx];
+    if (!s) { p.seamIdx = pickRandomSeam(seams, p); p.t = 0.5; continue; }
+    const len = Math.max(0.001, seamLen(s));
+    const tStep = (remaining / len) * p.dir;
+    let newT = p.t + tStep;
+
+    if (newT >= 0 && newT <= 1) {
+      p.t = newT;
+      remaining = 0;
+      break;
+    }
+
+    // Reached a junction: consume the distance to the endpoint, then hop.
+    const edgeT = p.dir > 0 ? 1 : 0;
+    const distToEdge = Math.abs(edgeT - p.t) * len;
+    remaining -= distToEdge;
+    const junction = seamPoint(s, edgeT);
+
+    const candidates = junctionCandidates(seams, junction.x, junction.y);
+    if (candidates.length === 0) {
+      p.dir = p.dir > 0 ? -1 : 1; // dead end: bounce back along the same seam
+      p.t = edgeT;
+      continue;
+    }
+    const pick = candidates[Math.floor(nextRand(p) * candidates.length) % candidates.length];
+    p.seamIdx = pick.seamIdx;
+    p.dir = pick.dir;
+    p.t = pick.dir > 0 ? 0 : 1;
+  }
+}
+
+function getTrailState(seed: number, timeSec: number, seams: VisibleSeam[]): BuildingTrailState {
+  let state = trailStates.get(seed);
+  if (!state) {
+    state = { lastTime: timeSec, particles: [] };
+    for (let lane = 0; lane < TRAIL_COUNT; lane++) {
+      state.particles.push(spawnParticle(seams, (seed ^ (lane * 2654435761)) >>> 0));
+    }
+    trailStates.set(seed, state);
+  }
+  return state;
+}
+
+/** Drops stale per-building trail state (e.g. despawned buildings) so the map doesn't grow unbounded. */
+function pruneTrailStates(timeSec: number): void {
+  for (const [key, state] of trailStates) {
+    if (timeSec - state.lastTime > TRAIL_STATE_TTL) trailStates.delete(key);
+  }
+}
+
+/** A handful of persistent warm light trails that random-walk the seam network of a powered building, hopping to a new random seam at every junction instead of disappearing. */
 export function renderBuildingSeamTrails(ctx: CanvasRenderingContext2D, opts: BuildingPanelEffectOpts): void {
   const { screenX, screenY, zoom, seams, timeSec, power, seed } = opts;
   if (seams.length === 0 || power <= 0.5) return;
 
+  const state = getTrailState(seed, timeSec, seams);
+  const dt = Math.max(0, Math.min(0.25, timeSec - state.lastTime));
+  state.lastTime = timeSec;
+  if (Math.random() < 0.02) pruneTrailStates(timeSec);
+
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   ctx.lineCap = 'round';
+  const globalAlpha = Math.min(1, power);
 
-  for (let lane = 0; lane < TRAIL_COUNT; lane++) {
-    const laneSeed = (seed ^ (lane * 2654435761)) >>> 0;
-    const laneOffset = hash01(lane, laneSeed);
-    const cycle = timeSec / TRAIL_PERIOD + laneOffset;
-    const runIndex = Math.floor(cycle);
-    const t = cycle - runIndex; // 0..1 progress along the chosen seam this run
+  for (const p of state.particles) {
+    if (p.seamIdx >= seams.length) { const fresh = spawnParticle(seams, (nextRand(p) * 0xffffffff) | 0); p.seamIdx = fresh.seamIdx; p.t = fresh.t; p.dir = fresh.dir; p.history = []; }
+    if (dt > 0) advanceParticle(p, seams, dt);
 
-    const seamIdx = Math.floor(hash01(runIndex, laneSeed) * seams.length) % seams.length;
-    const s = seams[seamIdx];
-    const x1 = screenX + s.x1 * zoom, y1 = screenY + s.y1 * zoom;
-    const x2 = screenX + s.x2 * zoom, y2 = screenY + s.y2 * zoom;
-    const len = Math.hypot(x2 - x1, y2 - y1);
-    if (len < 4) continue;
+    const s = seams[p.seamIdx];
+    if (!s) continue;
+    const cur = seamPoint(s, Math.max(0, Math.min(1, p.t)));
+    const hist = p.history;
+    hist.push(cur);
+    let total = 0;
+    for (let i = hist.length - 1; i > 0; i--) {
+      total += Math.hypot(hist[i].x - hist[i - 1].x, hist[i].y - hist[i - 1].y);
+      if (total > TRAIL_TAIL_LENGTH) { hist.splice(0, i); break; }
+    }
+    if (hist.length < 2) continue;
 
-    const dx = (x2 - x1) / len, dy = (y2 - y1) / len;
-    const tipDist = t * len;
-    const tailDist = Math.max(0, tipDist - TRAIL_TAIL_FRAC * len);
-    if (tipDist - tailDist < 1) continue;
+    // Fading tail: walk backward from the tip, giving each segment an alpha
+    // that ramps linearly from full at the tip to 0 at TRAIL_TAIL_LENGTH back.
+    let distFromTip = 0;
+    for (let i = hist.length - 1; i > 0; i--) {
+      const a = hist[i - 1], b = hist[i];
+      const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+      const alpha = Math.max(0, 1 - distFromTip / TRAIL_TAIL_LENGTH) * globalAlpha;
+      distFromTip += segLen;
+      if (alpha <= 0.01) continue;
+      ctx.strokeStyle = `rgba(${TRAIL_TIP_COLOR}, ${(alpha * 0.9).toFixed(3)})`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(screenX + a.x * zoom, screenY + a.y * zoom);
+      ctx.lineTo(screenX + b.x * zoom, screenY + b.y * zoom);
+      ctx.stroke();
+    }
 
-    const tailX = x1 + dx * tailDist, tailY = y1 + dy * tailDist;
-    const tipX = x1 + dx * tipDist, tipY = y1 + dy * tipDist;
-    const globalAlpha = Math.min(1, power);
-
-    const grad = ctx.createLinearGradient(tailX, tailY, tipX, tipY);
-    grad.addColorStop(0, `rgba(${TRAIL_TIP_COLOR}, 0)`);
-    grad.addColorStop(1, `rgba(${TRAIL_TIP_COLOR}, ${(0.9 * globalAlpha).toFixed(3)})`);
-    ctx.strokeStyle = grad;
-    ctx.lineWidth = 1.4;
-    ctx.shadowBlur = 0;
-    ctx.beginPath();
-    ctx.moveTo(tailX, tailY);
-    ctx.lineTo(tipX, tipY);
-    ctx.stroke();
-
-    // Bright tip with a slight glow.
+    // Bright tip with a slight glow, matching the sun's warm core/highlight palette.
+    const tipX = screenX + cur.x * zoom, tipY = screenY + cur.y * zoom;
     ctx.shadowBlur = 5;
-    ctx.shadowColor = `rgba(${TRAIL_TIP_COLOR}, ${globalAlpha.toFixed(3)})`;
-    ctx.fillStyle = `rgba(255, 235, 210, ${globalAlpha.toFixed(3)})`;
+    ctx.shadowColor = `rgba(${TRAIL_CORE_COLOR}, ${globalAlpha.toFixed(3)})`;
+    ctx.fillStyle = `rgba(${TRAIL_HIGHLIGHT_COLOR}, ${globalAlpha.toFixed(3)})`;
     ctx.beginPath();
     ctx.arc(tipX, tipY, 1.4, 0, Math.PI * 2);
     ctx.fill();

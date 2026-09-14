@@ -1078,6 +1078,9 @@ class LeftHoldMenu {
       }
       return { action: 'none' };
     }
+    // Purchasing a research item stays on the current submenu instead of
+    // closing back to the root — only building/order leaves close the menu.
+    if (item.researchItem) return { action: 'research', item: item.researchItem };
     this.open = false;
     this.stack = [];
     this.path = [];
@@ -1085,7 +1088,6 @@ class LeftHoldMenu {
     if (item.orderGroup !== undefined && item.tacticalOrder !== undefined) {
       return { action: 'order', group: item.orderGroup, order: item.tacticalOrder };
     }
-    if (item.researchItem) return { action: 'research', item: item.researchItem };
     return { action: 'none' };
   }
 
