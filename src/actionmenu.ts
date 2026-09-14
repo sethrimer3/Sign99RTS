@@ -26,6 +26,7 @@ import { isConfluenceFaction, isSynonymousFaction, CONFLUENCE_PLACEMENT_DISTANCE
 import { MENU_CANVAS_FONT } from './fonts.js';
 import { SYNONYMOUS_BUILD_COST, SYNONYMOUS_CURRENCY_SYMBOL } from './synonymous.js';
 import { footprintForBuilding } from './buildingfootprint.js';
+import { previewBrightIncomeDelta } from './bright.js';
 
 /** Radius (px) from the menu centre at which items are placed. */
 const ITEM_RADIUS = 110;
@@ -2100,6 +2101,13 @@ class QuickBuildMenu {
     ctx.fillStyle = color;
     const buildLabel = isPlayerSynonymous(state) && def.key === 'bomberyard' ? 'Nova Bombers' : def.label;
     ctx.fillText(`${buildLabel} ${def.footprintCells}x${def.footprintCells}`, screen.x, screen.y - sizePx / 2 - 4);
+    if (def.key === 'particleaccelerator') {
+      const addedIncome = previewBrightIncomeDelta(state, Team.Player, center);
+      if (addedIncome > 0) {
+        ctx.fillStyle = colorToCSS(Colors.bright_matter, 0.95);
+        ctx.fillText(`(+${addedIncome.toFixed(2)}/s Bright)`, screen.x, screen.y - sizePx / 2 - 18);
+      }
+    }
     if (!status.valid) {
       ctx.font = '20px "Poiret One", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Microsoft YaHei", "PingFang SC", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Segoe UI", sans-serif';
       ctx.textBaseline = 'top';

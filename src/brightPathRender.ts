@@ -5,13 +5,19 @@
  * that is directly linked to the Command Post, plus fast glowing particles
  * with long trails traveling along that line — a visible, literal read of
  * "exotic matter flowing in from the accelerators."
+ *
+ * Also draws the "spline loop": an invisible closed racetrack looping
+ * clockwise through every Bright Accelerator a team owns (independent of
+ * whether they're conduit-linked), with ~100 fast glowing particles
+ * streaming around it — the Bright particles racing between accelerators.
  */
 
 import { Vec2 } from './math.js';
 import { Camera } from './camera.js';
 import { Colors, colorToCSS } from './colors.js';
-import { Team } from './entities.js';
+import { Team, EntityType } from './entities.js';
 import type { GameState } from './gamestate.js';
+import { computeBrightLoop } from './bright.js';
 
 /** Catmull-Rom spline through `points`, `segmentsPerSpan` subdivisions between each pair. */
 function smoothPath(points: Vec2[], segmentsPerSpan: number = 10): Vec2[] {
@@ -125,5 +131,69 @@ export function drawBrightPaths(
       }
       ctx.restore();
     }
+  }
+}
+
+const LOOP_PARTICLE_COUNT = 100;
+const LOOP_PARTICLE_SPEED_WORLD_PER_SEC = 260;
+const LOOP_TRAIL_SAMPLES = 8;
+const LOOP_TRAIL_SPACING_FRAC = 0.0035;
+
+/**
+ * Draws the invisible spline-loop racetrack connecting every Bright
+ * Accelerator a team owns (see computeBrightLoop in bright.ts — the same
+ * loop that determines Bright income), with ~100 fast glowing particles
+ * (long trails) streaming clockwise around it. The loop itself is never
+ * stroked — only the particles racing along it are visible. Requires at
+ * least 2 accelerators, matching the income requirement.
+ */
+export function drawBrightAcceleratorLoop(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  state: GameState,
+  time: number,
+): void {
+  const acceleratorsByTeam = new Map<Team, Vec2[]>();
+  for (const b of state.buildings) {
+    if (!b.alive || b.type !== EntityType.ParticleAccelerator) continue;
+    let arr = acceleratorsByTeam.get(b.team);
+    if (arr === undefined) {
+      arr = [];
+      acceleratorsByTeam.set(b.team, arr);
+    }
+    arr.push(b.position);
+  }
+
+  for (const [team, positions] of acceleratorsByTeam) {
+    if (positions.length < 2) continue;
+    const color = team === Team.Player ? Colors.bright_matter : { r: 255, g: 150, b: 220, intensity: 1.0 };
+
+    const loop = computeBrightLoop(positions);
+    if (loop === null) continue;
+    const smooth = loop.points;
+    const cum: number[] = [0];
+    for (let i = 1; i < smooth.length; i++) cum.push(cum[i - 1] + smooth[i].distanceTo(smooth[i - 1]));
+    const totalLen = cum[cum.length - 1];
+    if (totalLen <= 0) continue;
+
+    const speedFrac = LOOP_PARTICLE_SPEED_WORLD_PER_SEC / totalLen;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let p = 0; p < LOOP_PARTICLE_COUNT; p++) {
+      const headFrac = time * speedFrac + p / LOOP_PARTICLE_COUNT;
+      for (let tIdx = 0; tIdx < LOOP_TRAIL_SAMPLES; tIdx++) {
+        const frac = headFrac - tIdx * LOOP_TRAIL_SPACING_FRAC;
+        const worldPos = pointAtFrac(smooth, cum, totalLen, frac);
+        const screenPos = camera.worldToScreen(worldPos);
+        const trailT = 1 - tIdx / LOOP_TRAIL_SAMPLES;
+        const alpha = 0.55 * trailT * trailT;
+        const r = (tIdx === 0 ? 2.4 : 1.3 * trailT + 0.3) * camera.zoom;
+        ctx.fillStyle = colorToCSS(color, alpha);
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, Math.max(0.5, r), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
   }
 }

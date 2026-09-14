@@ -384,12 +384,13 @@ export const RESOURCE_GAIN_RATE = 1.0;
 export const BASELINE_RESOURCE_GAIN = 5.0;
 
 /**
- * Bright Matter gain rate: per second, per conduit cell of path length
- * between the Command Post and a connected Particle Accelerator. Longer
- * conduit runs to accelerators yield more Bright; disconnected or
- * generator-only-linked accelerators produce none.
+ * Bright Matter gain rate: per second, per world unit of the spline-loop
+ * racetrack connecting every Bright Accelerator a team owns, multiplied by
+ * (accelerator count - 1). At least 2 accelerators are required to form a
+ * loop and start earning; each additional accelerator both lengthens the
+ * loop and raises the multiplier, rewarding placing more of them.
  */
-export const BRIGHT_GAIN_PER_PATH_CELL = 0.06;
+export const BRIGHT_GAIN_PER_LOOP_LENGTH = 0.001;
 
 // Build zone radii
 /**

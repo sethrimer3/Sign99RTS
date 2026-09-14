@@ -30,6 +30,7 @@ import type { BuildingBase } from './building.js';
 import { footprintForBuilding } from './buildingfootprint.js';
 import { isSynonymousFaction } from './confluence.js';
 import { buildingFootprintOrigin } from './buildingCollision.js';
+import { BRIGHT_GAIN_PER_LOOP_LENGTH } from './constants.js';
 
 export interface BrightAcceleratorLink {
   building: BuildingBase;
@@ -203,4 +204,140 @@ export class BrightGraph {
 
     this.snapshot = { linksByTeam, totalPathLengthByTeam };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Spline-loop racetrack: income model.
+//
+// Bright income no longer depends on the conduit BFS above — it depends on
+// the "spline loop" racetrack that visually connects every Bright
+// Accelerator a team owns (see brightPathRender.ts for the particle
+// animation). At least 2 accelerators are required to form a loop and start
+// earning; income scales with the loop's total length times
+// (accelerator count - 1), rewarding placing more of them.
+// ---------------------------------------------------------------------------
+
+export interface BrightLoop {
+  /** Smoothed closed polyline through every accelerator position (first point repeated at the end). */
+  points: Vec2[];
+  /** Total length of the loop, in world units. */
+  length: number;
+}
+
+/**
+ * Order points clockwise around their centroid, ascending by angle. World Y
+ * increases downward, so ascending atan2(dy, dx) sweeps clockwise as drawn
+ * on screen.
+ */
+function orderClockwise(points: Vec2[]): Vec2[] {
+  const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
+  const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
+  return points
+    .slice()
+    .sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+}
+
+/** Catmull-Rom spline through a closed loop of `points` (wraps around), `segmentsPerSpan` subdivisions between each pair. Requires at least 3 points. */
+function smoothLoopPath(points: Vec2[], segmentsPerSpan: number = 14): Vec2[] {
+  const n = points.length;
+  const out: Vec2[] = [];
+  const get = (i: number): Vec2 => points[((i % n) + n) % n];
+  for (let i = 0; i < n; i++) {
+    const p0 = get(i - 1), p1 = get(i), p2 = get(i + 1), p3 = get(i + 2);
+    for (let s = 0; s < segmentsPerSpan; s++) {
+      const t = s / segmentsPerSpan;
+      const t2 = t * t, t3 = t2 * t;
+      const x = 0.5 * (
+        2 * p1.x + (-p0.x + p2.x) * t +
+        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+      );
+      const y = 0.5 * (
+        2 * p1.y + (-p0.y + p2.y) * t +
+        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+      );
+      out.push(new Vec2(x, y));
+    }
+  }
+  out.push(out[0].clone());
+  return out;
+}
+
+/**
+ * A rounded "stadium" racetrack around the segment between two accelerators
+ * — two semicircular caps joined by straight sides — so exactly 2
+ * accelerators already form a real, non-degenerate loop rather than a
+ * back-and-forth line.
+ */
+function stadiumLoop(a: Vec2, b: Vec2, segments: number = 24): Vec2[] {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const ux = dx / dist, uy = dy / dist;
+  const px = -uy, py = ux; // perpendicular to a->b
+  const r = Math.max(24, Math.min(70, dist * 0.28));
+  const thetaPerp = Math.atan2(py, px);
+
+  const points: Vec2[] = [];
+  points.push(new Vec2(a.x + px * r, a.y + py * r));
+  points.push(new Vec2(b.x + px * r, b.y + py * r));
+  for (let i = 1; i <= segments; i++) {
+    const t = thetaPerp - (Math.PI * i) / segments;
+    points.push(new Vec2(b.x + Math.cos(t) * r, b.y + Math.sin(t) * r));
+  }
+  points.push(new Vec2(a.x - px * r, a.y - py * r));
+  for (let i = 1; i <= segments; i++) {
+    const t = thetaPerp - Math.PI - (Math.PI * i) / segments;
+    points.push(new Vec2(a.x + Math.cos(t) * r, a.y + Math.sin(t) * r));
+  }
+  return points;
+}
+
+/**
+ * Compute the spline-loop racetrack through `positions`. Returns null with
+ * fewer than 2 positions (no loop possible). Exactly 2 positions produce a
+ * rounded stadium loop; 3 or more produce a Catmull-Rom loop through the
+ * positions ordered clockwise around their centroid.
+ */
+export function computeBrightLoop(positions: Vec2[]): BrightLoop | null {
+  if (positions.length < 2) return null;
+  const points = positions.length === 2
+    ? stadiumLoop(positions[0], positions[1])
+    : smoothLoopPath(orderClockwise(positions));
+  let length = 0;
+  for (let i = 1; i < points.length; i++) length += points[i].distanceTo(points[i - 1]);
+  if (length <= 0) return null;
+  return { points, length };
+}
+
+/** Every alive, non-synonymous Bright Accelerator position owned by `team`. */
+export function brightAcceleratorPositions(state: GameState, team: Team): Vec2[] {
+  const positions: Vec2[] = [];
+  for (const b of state.buildings) {
+    if (!b.alive || b.type !== EntityType.ParticleAccelerator) continue;
+    if (b.team !== team) continue;
+    if (isSynonymousFaction(state.factionByTeam, b.team)) continue;
+    positions.push(b.position);
+  }
+  return positions;
+}
+
+/** Bright income per second for a set of accelerator positions: loop length x (count - 1). */
+export function brightIncomeForPositions(positions: Vec2[]): number {
+  if (positions.length < 2) return 0;
+  const loop = computeBrightLoop(positions);
+  if (loop === null) return 0;
+  return BRIGHT_GAIN_PER_LOOP_LENGTH * loop.length * (positions.length - 1);
+}
+
+/**
+ * Bright income delta if a new accelerator were placed at `candidatePos` for
+ * `team`, compared to its current income. Used to preview the addition to
+ * income per second before the player commits to a placement.
+ */
+export function previewBrightIncomeDelta(state: GameState, team: Team, candidatePos: Vec2): number {
+  const positions = brightAcceleratorPositions(state, team);
+  const currentIncome = brightIncomeForPositions(positions);
+  const newIncome = brightIncomeForPositions([...positions, candidatePos]);
+  return newIncome - currentIncome;
 }
