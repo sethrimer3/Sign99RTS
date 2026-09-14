@@ -23,6 +23,35 @@ import { isLegacyGraphics } from './graphicsmode.js';
 /** Side length of one grid cell in world units. */
 export const GRID_CELL_SIZE = 26 / 3;
 
+// --- Cached conduit solar-glare gradients ----------------------------------
+//
+// Cells are tiny (GRID_CELL_SIZE ~= 8.67 world units), so a mid-size base can
+// have hundreds of conduit tiles on screen at once. drawConduitPanel used to
+// call ctx.createLinearGradient() for every energized, sun-aligned tile every
+// frame. The gradient's shape only depends on panelSize (same for every tile
+// at a given zoom) and glareAlpha (bucketed below), so it's cached in LOCAL
+// (0,0)-origin coordinates and reused via a canvas translate — gradient
+// coordinates resolve against the CTM at fill time, not creation time.
+const GLARE_GRAD_CACHE_CAP = 96;
+const glareGradCache = new Map<string, CanvasGradient>();
+
+function getGlareGradient(ctx: CanvasRenderingContext2D, panelSize: number, glareAlpha: number): CanvasGradient {
+  const key = `${Math.round(panelSize)}_${Math.round(glareAlpha * 1000)}`;
+  let g = glareGradCache.get(key);
+  if (!g) {
+    g = ctx.createLinearGradient(0, panelSize, panelSize, 0);
+    g.addColorStop(0, `rgba(168, 236, 255, ${glareAlpha * 0.14})`);
+    g.addColorStop(0.42, `rgba(230, 252, 255, ${glareAlpha})`);
+    g.addColorStop(1, `rgba(255, 255, 255, ${glareAlpha * 0.08})`);
+    if (glareGradCache.size >= GLARE_GRAD_CACHE_CAP) {
+      const oldest = glareGradCache.keys().next().value;
+      if (oldest !== undefined) glareGradCache.delete(oldest);
+    }
+    glareGradCache.set(key, g);
+  }
+  return g;
+}
+
 /** Stable string key for a (cx, cy) cell coordinate. */
 export function cellKey(cx: number, cy: number): string {
   return `${cx},${cy}`;
@@ -97,6 +126,58 @@ export class WorldGrid {
    */
   private pendingConduits = new Map<string, { cx: number; cy: number; team: Team }>();
 
+  /**
+   * Coarse spatial index over `conduits`, bucketed into CHUNK_SIZE x CHUNK_SIZE
+   * cell chunks, so the render path can iterate only the conduits near the
+   * camera instead of every conduit on the map (`conduits` itself has no
+   * cheap way to answer "which of these are near (x,y)" — cells are tiny, so
+   * a built-out base can hold thousands of entries). Kept in sync by every
+   * mutator below; `eachConduit()` / gameplay logic still walks the flat map.
+   */
+  private static readonly CHUNK_SIZE = 12;
+  private conduitChunks = new Map<string, Map<string, CellCoord>>();
+
+  private static chunkKeyFor(cx: number, cy: number): string {
+    return `${Math.floor(cx / WorldGrid.CHUNK_SIZE)},${Math.floor(cy / WorldGrid.CHUNK_SIZE)}`;
+  }
+
+  private indexAddConduit(cx: number, cy: number): void {
+    const ck = WorldGrid.chunkKeyFor(cx, cy);
+    let bucket = this.conduitChunks.get(ck);
+    if (!bucket) { bucket = new Map(); this.conduitChunks.set(ck, bucket); }
+    bucket.set(cellKey(cx, cy), { cx, cy });
+  }
+
+  private indexRemoveConduit(cx: number, cy: number): void {
+    const ck = WorldGrid.chunkKeyFor(cx, cy);
+    const bucket = this.conduitChunks.get(ck);
+    if (!bucket) return;
+    bucket.delete(cellKey(cx, cy));
+    if (bucket.size === 0) this.conduitChunks.delete(ck);
+  }
+
+  /**
+   * Iterate conduits whose chunk overlaps the given cell-space rect. Coarser
+   * than the rect itself (whole chunks), so callers still bounds-check each
+   * yielded cell. Order is not guaranteed.
+   */
+  *conduitsNear(cxMin: number, cxMax: number, cyMin: number, cyMax: number): IterableIterator<{ cx: number; cy: number; team: Team }> {
+    const chunkMinX = Math.floor(cxMin / WorldGrid.CHUNK_SIZE);
+    const chunkMaxX = Math.floor(cxMax / WorldGrid.CHUNK_SIZE);
+    const chunkMinY = Math.floor(cyMin / WorldGrid.CHUNK_SIZE);
+    const chunkMaxY = Math.floor(cyMax / WorldGrid.CHUNK_SIZE);
+    for (let chy = chunkMinY; chy <= chunkMaxY; chy++) {
+      for (let chx = chunkMinX; chx <= chunkMaxX; chx++) {
+        const bucket = this.conduitChunks.get(`${chx},${chy}`);
+        if (!bucket) continue;
+        for (const { cx, cy } of bucket.values()) {
+          const entry = this.conduits.get(cellKey(cx, cy));
+          if (entry) yield { cx, cy, team: entry.team };
+        }
+      }
+    }
+  }
+
   // -- Conduit accessors ----------------------------------------------------
 
   hasConduit(cx: number, cy: number): boolean {
@@ -109,6 +190,7 @@ export class WorldGrid {
 
   addConduit(cx: number, cy: number, team: Team): void {
     this.conduits.set(cellKey(cx, cy), { team, hp: 2 });
+    this.indexAddConduit(cx, cy);
   }
 
   damageConduit(cx: number, cy: number, amount: number = 1): boolean {
@@ -118,6 +200,7 @@ export class WorldGrid {
     entry.hp -= amount;
     if (entry.hp <= 0) {
       this.conduits.delete(key);
+      this.indexRemoveConduit(cx, cy);
       return true;
     }
     return false;
@@ -125,6 +208,7 @@ export class WorldGrid {
 
   removeConduit(cx: number, cy: number): void {
     this.conduits.delete(cellKey(cx, cy));
+    this.indexRemoveConduit(cx, cy);
     // Also cancel any pending cell at the same location.
     this.pendingConduits.delete(cellKey(cx, cy));
   }
@@ -174,19 +258,16 @@ export class WorldGrid {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
 
-    for (const [key, entry] of this.conduits) {
+    for (const { cx, cy, team } of this.conduitsNear(cxMin, cxMax, cyMin, cyMax)) {
       if (dotsDrawn >= MAX_DOTS) break;
-      const comma = key.indexOf(',');
-      const cx = Number(key.slice(0, comma));
-      const cy = Number(key.slice(comma + 1));
       if (cx < cxMin || cx > cxMax || cy < cyMin || cy > cyMax) continue;
-      const energized = isEnergized ? isEnergized(cx, cy, entry.team) : true;
+      const energized = isEnergized ? isEnergized(cx, cy, team) : true;
       if (!energized) continue;
 
       // Each conduit cell gets a unique offset so pulses don't all align.
       const cellOffset = hash01(cx, cy, 0xf5c4d8);
 
-      const flowDir = getFlowDir ? getFlowDir(cx, cy, entry.team) : null;
+      const flowDir = getFlowDir ? getFlowDir(cx, cy, team) : null;
       if (flowDir) {
         // Directional animation: dot travels FROM the upstream edge of the
         // cell TOWARD the downstream edge (in the energy flow direction).
@@ -201,7 +282,7 @@ export class WorldGrid {
         const FLOW_TRAVEL_SCALE = 0.90;
         const offset = (tAcross - 0.5) * cellPx * FLOW_TRAVEL_SCALE;
         const c = camera.worldToScreen(cellCenter(cx, cy));
-        const color = entry.team === Team.Player
+        const color = team === Team.Player
           ? `rgba(140,240,255,${dotAlpha})`
           : `rgba(255,160,80,${dotAlpha})`;
         ctx.fillStyle = color;
@@ -215,7 +296,7 @@ export class WorldGrid {
         const dotAlpha = Math.max(0, 0.55 - phase * 3.5) * (0.7 + cellOffset * 0.3);
         if (dotAlpha < 0.02) continue;
         const c = camera.worldToScreen(cellCenter(cx, cy));
-        const color = entry.team === Team.Player
+        const color = team === Team.Player
           ? `rgba(140,240,255,${dotAlpha})`
           : `rgba(255,160,80,${dotAlpha})`;
         ctx.fillStyle = color;
@@ -264,6 +345,7 @@ export class WorldGrid {
     if (!entry) return false;
     this.pendingConduits.delete(key);
     this.conduits.set(key, { team: entry.team, hp: 2 });
+    this.indexAddConduit(cx, cy);
     return true;
   }
 
@@ -561,12 +643,11 @@ export class WorldGrid {
 
       if (energized && solarGlare > 0.002) {
         const glareAlpha = 0.012 + solarGlare * 0.095;
-        const glare = ctx.createLinearGradient(panelX, panelY + panelSize, panelX + panelSize, panelY);
-        glare.addColorStop(0, `rgba(168, 236, 255, ${glareAlpha * 0.14})`);
-        glare.addColorStop(0.42, `rgba(230, 252, 255, ${glareAlpha})`);
-        glare.addColorStop(1, `rgba(255, 255, 255, ${glareAlpha * 0.08})`);
-        ctx.fillStyle = glare;
-        ctx.fillRect(panelX, panelY, panelSize, panelSize);
+        ctx.save();
+        ctx.translate(panelX, panelY);
+        ctx.fillStyle = getGlareGradient(ctx, panelSize, glareAlpha);
+        ctx.fillRect(0, 0, panelSize, panelSize);
+        ctx.restore();
 
         const ghostAlpha = Math.min(0.07, solarGlare * 0.06);
         const ghostR1 = Math.max(0.8, panelSize * (0.085 + tilt * 0.04));

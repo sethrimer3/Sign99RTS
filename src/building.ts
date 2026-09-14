@@ -30,6 +30,38 @@ interface BaseVisual {
   powerAlpha: number;
 }
 
+// --- Cached cinematic-fill gradients ---------------------------------------
+//
+// drawCinematicBuildingFill ran ctx.createLinearGradient() twice per building
+// every frame. The sun direction relative to a building barely changes frame
+// to frame, and nearby buildings share almost the same direction, so bucket
+// the direction to 7.5-degree steps and cache gradients (built in LOCAL
+// (0,0)-origin coordinates, positioned via a canvas translate) keyed on
+// (rounded side, direction bucket, [fill only] shade bucket). Gradient
+// coordinates resolve against the CTM at fill time, not creation time, so a
+// gradient cached from one building's translate renders correctly for any
+// other building sharing the same local key.
+const DIR_BUCKETS = 48;
+const GRAD_CACHE_CAP = 160;
+const fillGradCache = new Map<string, CanvasGradient>();
+const shadowGradCache = new Map<string, CanvasGradient>();
+
+function cacheSet<T>(cache: Map<string, T>, key: string, value: T): void {
+  if (cache.size >= GRAD_CACHE_CAP) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
+/** Buckets a unit direction to the nearest of DIR_BUCKETS angles; returns the bucket index and its snapped (x, y). */
+function bucketDirection(lx: number, ly: number): { idx: number; bx: number; by: number } {
+  const angle = Math.atan2(ly, lx);
+  const idx = Math.round((angle / (Math.PI * 2)) * DIR_BUCKETS);
+  const a = (idx * Math.PI * 2) / DIR_BUCKETS;
+  return { idx, bx: Math.cos(a), by: Math.sin(a) };
+}
+
 const SHIP_GROUP_LABEL_COLORS: Record<ShipGroup, Color> = {
   [ShipGroup.Red]: { r: 233, g: 51, b: 77, intensity: 1 },
   [ShipGroup.Green]: { r: 51, g: 192, b: 104, intensity: 1 },
@@ -221,31 +253,48 @@ export abstract class BuildingBase extends Entity {
     const lx = toSunX / dist;
     const ly = toSunY / dist;
     const shade = Math.max(0.55, 1 - damage * 0.24);
-    const grad = ctx.createLinearGradient(
-      cx + lx * s * 0.72,
-      cy + ly * s * 0.72,
-      cx - lx * s * 0.78,
-      cy - ly * s * 0.78,
-    );
-    grad.addColorStop(0, `rgba(126, 78, 37, ${(0.98 * shade).toFixed(3)})`);
-    grad.addColorStop(0.22, `rgba(83, 91, 70, ${(0.96 * shade).toFixed(3)})`);
-    grad.addColorStop(0.62, `rgba(34, 48, 45, ${(0.96 * shade).toFixed(3)})`);
-    grad.addColorStop(1, `rgba(12, 18, 22, ${(0.98 * shade).toFixed(3)})`);
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, s, s);
+    const { idx: dirIdx, bx, by } = bucketDirection(lx, ly);
+    const sKey = Math.round(s);
 
     ctx.save();
+    ctx.translate(cx, cy);
+    const lcx = 0, lcy = 0;
+
+    const shadeKey = Math.round(shade * 20); // 0.05 buckets
+    const fillKey = `${sKey}_${dirIdx}_${shadeKey}`;
+    let grad = fillGradCache.get(fillKey);
+    if (!grad) {
+      grad = ctx.createLinearGradient(
+        lcx + bx * s * 0.72,
+        lcy + by * s * 0.72,
+        lcx - bx * s * 0.78,
+        lcy - by * s * 0.78,
+      );
+      grad.addColorStop(0, `rgba(126, 78, 37, ${(0.98 * shade).toFixed(3)})`);
+      grad.addColorStop(0.22, `rgba(83, 91, 70, ${(0.96 * shade).toFixed(3)})`);
+      grad.addColorStop(0.62, `rgba(34, 48, 45, ${(0.96 * shade).toFixed(3)})`);
+      grad.addColorStop(1, `rgba(12, 18, 22, ${(0.98 * shade).toFixed(3)})`);
+      cacheSet(fillGradCache, fillKey, grad);
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(lcx - s * 0.5, lcy - s * 0.5, s, s);
+
     ctx.globalCompositeOperation = 'multiply';
-    const shadow = ctx.createLinearGradient(
-      cx - lx * s * 0.34,
-      cy - ly * s * 0.34,
-      cx + lx * s * 0.62,
-      cy + ly * s * 0.62,
-    );
-    shadow.addColorStop(0, 'rgba(0, 2, 5, 0.38)');
-    shadow.addColorStop(0.72, 'rgba(0, 0, 0, 0)');
+    const shadowKey = `${sKey}_${dirIdx}`;
+    let shadow = shadowGradCache.get(shadowKey);
+    if (!shadow) {
+      shadow = ctx.createLinearGradient(
+        lcx - bx * s * 0.34,
+        lcy - by * s * 0.34,
+        lcx + bx * s * 0.62,
+        lcy + by * s * 0.62,
+      );
+      shadow.addColorStop(0, 'rgba(0, 2, 5, 0.38)');
+      shadow.addColorStop(0.72, 'rgba(0, 0, 0, 0)');
+      cacheSet(shadowGradCache, shadowKey, shadow);
+    }
     ctx.fillStyle = shadow;
-    ctx.fillRect(x, y, s, s);
+    ctx.fillRect(lcx - s * 0.5, lcy - s * 0.5, s, s);
     ctx.restore();
   }
 
