@@ -8,7 +8,8 @@ import { Shipyard } from './building.js';
 import { Colors, colorToCSS, Color } from './colors.js';
 import { ENTITY_RADIUS, HP_VALUES, PLAYER_SHIP_SCALE, SHIP_ENGINE_LOSS_FLOOR, SHIP_STATS, WEAPON_STATS } from './constants.js';
 import { ShipHullDamage, type HullImpact } from './shipHullDamage.js';
-import { gameplayFleetDesign } from './shipFamilies.js';
+import { gameplayFleetDesign, fleetCoreShape } from './shipFamilies.js';
+import { WING_PAIR_PARTS } from './shipParts.js';
 import { drawProceduralShip, shipDesignRadius, withWingTier, type ProceduralShipDefinition } from './proceduralShips.js';
 import { teamColor } from './teamutils.js';
 import { isLegacyGraphics } from './graphicsmode.js';
@@ -87,6 +88,9 @@ const ORDER_DASH_SPEED_MULT = 1.6;
 const DASH_TRAIL_LIFETIME = 0.5;
 const DASH_TRAIL_MIN_DISTANCE = 5;
 const DASH_TRAIL_MAX_POINTS = 18;
+/** Seconds for a newly-unlocked wing pair to grow in from the core, like a hull self-repairing. */
+const WING_GROWTH_SECONDS = 1.1;
+function easeOutCubic(t: number): number { return 1 - Math.pow(1 - t, 3); }
 
 interface TrailPoint {
   pos: Vec2;
@@ -123,6 +127,9 @@ export class FighterShip extends Entity {
   /** Set only by LAN mirroring: the host's already wing-tiered design for a remote fighter, rendered as-is. */
   fleetDesignOverride: ProceduralShipDefinition | null = null;
   private wingDesignCache: { base: ProceduralShipDefinition; tier: number; design: ProceduralShipDefinition } | null = null;
+  /** Self-repair-style grow-in animation for the most recently unlocked wing pair. */
+  private wingGrowth = { t: 1, fromRadius: 0, toRadius: 0 };
+  protected fleetRole(): 'fighter' | 'bomber' | 'swarm' { return this.type === EntityType.Bomber ? 'bomber' : 'fighter'; }
   /**
    * Fighters start wingless; the first speed upgrade grows one wing pair, the dash
    * upgrade (the fighter's second speed tier) grows the second. Caches on
@@ -132,11 +139,14 @@ export class FighterShip extends Entity {
    */
   get design() {
     if (this.fleetDesignOverride) return this.fleetDesignOverride;
-    const base = gameplayFleetDesign(this.team, this.type === EntityType.Bomber ? 'bomber' : 'fighter');
+    const base = gameplayFleetDesign(this.team, this.fleetRole());
     const tier = this.speedUpgraded ? (this.dashUnlocked ? 2 : 1) : 0;
     const cached = this.wingDesignCache;
     if (cached && cached.base === base && cached.tier === tier) return cached.design;
     const design = withWingTier(base, tier);
+    if (cached) {
+      this.wingGrowth = { t: 0, fromRadius: shipDesignRadius(cached.design), toRadius: shipDesignRadius(design) };
+    }
     this.wingDesignCache = { base, tier, design };
     return design;
   }
@@ -226,6 +236,7 @@ export class FighterShip extends Entity {
     this.updateTrail(dt);
     this.updateShield(dt);
     this.updatePassiveHealthRegen(dt);
+    if (this.wingGrowth.t < 1) this.wingGrowth.t = Math.min(1, this.wingGrowth.t + dt / WING_GROWTH_SECONDS);
 
     if (this.fireTimer > 0) this.fireTimer -= dt;
   }
@@ -411,13 +422,16 @@ export class FighterShip extends Entity {
     this.shield = this.maxShield;
   }
 
-  /** +50% thrust/speed, +20% turn rate. */
+  /** +50% thrust/speed, +20% turn rate; also grows the ship's first wing pair (+parts, see shipParts.ts). */
   upgradeSpeed(): void {
     if (this.speedUpgraded) return;
     this.speedUpgraded = true;
     this.thrustPower *= 1.5;
     this.maxSpeed *= 1.5;
     this.turnRate *= 1.2;
+    this.maxHealth += WING_PAIR_PARTS;
+    this.health += WING_PAIR_PARTS;
+    if (this.shieldUnlocked) this.maxShield = this.maxHealth * 0.5;
   }
 
   /** Second speed tier: an instant dash burst whenever the fighter is given a new order. */
@@ -502,6 +516,9 @@ export class FighterShip extends Entity {
     this.thrustPower /= 1.5;
     this.maxSpeed /= 1.5;
     this.turnRate /= 1.2;
+    this.maxHealth = Math.max(1, this.maxHealth - WING_PAIR_PARTS);
+    this.health = Math.min(this.health, this.maxHealth);
+    if (this.shieldUnlocked) this.maxShield = this.maxHealth * 0.5;
   }
 
   /** Reverses upgradeDash(). */
@@ -768,10 +785,14 @@ export class FighterShip extends Entity {
   }
 
   protected drawFleetHull(ctx: CanvasRenderingContext2D, camera: Camera): void {
-    drawProceduralShip(ctx, camera, this.design, {
+    const design = this.design;
+    const growth = this.wingGrowth;
+    drawProceduralShip(ctx, camera, design, {
       position: this.position, rotation: this.angle,
-      scale: this.radius * 1.05 / shipDesignRadius(this.design), color: teamColor(this.team),
+      scale: this.radius * 1.05 / shipDesignRadius(design), color: teamColor(this.team),
       damageMesh: this.hullDamage?.renderMesh(),
+      growthRadius: growth.t < 1 ? growth.fromRadius + (growth.toRadius - growth.fromRadius) * easeOutCubic(growth.t) : undefined,
+      coreShape: fleetCoreShape(this.team),
     });
   }
 
@@ -1169,6 +1190,8 @@ export class BomberShip extends FighterShip {
 // ---------------------------------------------------------------------------
 
 export class SwarmShip extends FighterShip {
+  protected override fleetRole(): 'fighter' | 'bomber' | 'swarm' { return 'swarm'; }
+
   constructor(
     position: Vec2,
     team: Team,
